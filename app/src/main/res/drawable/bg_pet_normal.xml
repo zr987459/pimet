@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 角色卡片未选中态：透明填充 + 浅描边（保持与选中态相同尺寸，避免选中时布局跳动） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <corners android:radius="14dp" />
+    <stroke
+        android:width="2dp"
+        android:color="?attr/colorOutline" />
+</shape>

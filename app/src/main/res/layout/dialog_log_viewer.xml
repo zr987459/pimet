@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#161B22"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- 顶部标题与关闭 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📜 系统运行与部署日志"
+            android:textColor="#F0F6FC"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/logViewerClose"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:gravity="center"
+            android:text="✕"
+            android:textColor="#8B949E"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <!-- 日志源切换按钮行 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnLogTerminal"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_tab_selected"
+            android:text="🖥️ 控制台"
+            android:textColor="@color/brand_on_primary_container"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnLogClawBench"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_tab_normal"
+            android:text="🦞 ClawBench"
+            android:textColor="#C9D1D9"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnLogPiWeb"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_tab_normal"
+            android:text="🌐 Pi-Web"
+            android:textColor="#C9D1D9"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- 日志内容滚动查看区 -->
+    <ScrollView
+        android:id="@+id/logViewerScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="340dp"
+        android:layout_marginTop="10dp"
+        android:background="#0D1117"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/logViewerContentTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:lineSpacingMultiplier="1.15"
+            android:text="正在加载日志..."
+            android:textColor="#C9D1D9"
+            android:textSize="11sp"
+            android:typeface="monospace" />
+    </ScrollView>
+
+    <!-- 底部操作按钮 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="end"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnLogRefresh"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_marginEnd="6dp"
+            android:background="?attr/selectableItemBackground"
+            android:text="🔄 刷新"
+            android:textColor="#58A6FF"
+            android:textSize="11.5sp" />
+
+        <Button
+            android:id="@+id/btnLogClear"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_marginEnd="6dp"
+            android:background="?attr/selectableItemBackground"
+            android:text="🗑️ 清空"
+            android:textColor="#F85149"
+            android:textSize="11.5sp" />
+
+        <Button
+            android:id="@+id/btnLogCopy"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:background="@drawable/bg_tab_selected"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="📋 复制全部"
+            android:textColor="@color/brand_on_primary_container"
+            android:textSize="11.5sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</LinearLayout>

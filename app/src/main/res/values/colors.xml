@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  语义色 token（浅色模式）。
+  规则：组件里不写裸 hex，全部引用这里的语义名；深色模式在 values-night/colors.xml 覆盖。
+  所有文字/背景配对均满足 WCAG AA（正文 4.5:1，大字 3:1）。
+-->
+<resources>
+
+    <!-- ===== 默认品牌色兼容别名 ===== -->
+    <color name="brand_primary">@color/theme_purple_primary</color>
+    <color name="brand_on_primary">#FFFFFF</color>
+    <color name="brand_primary_container">@color/theme_purple_container</color>
+    <color name="brand_on_primary_container">@color/theme_purple_on_container</color>
+    <color name="theme_purple_primary">#5B4BE0</color>
+    <color name="theme_purple_container">#E4E0FF</color>
+    <color name="theme_purple_on_container">#1B0A70</color>
+
+    <color name="theme_blue_primary">#0284C7</color>
+    <color name="theme_blue_container">#E0F2FE</color>
+    <color name="theme_blue_on_container">#0369A1</color>
+
+    <color name="theme_green_primary">#059669</color>
+    <color name="theme_green_container">#D1FAE5</color>
+    <color name="theme_green_on_container">#065F46</color>
+
+    <color name="theme_orange_primary">#EA580C</color>
+    <color name="theme_orange_container">#FFEDD5</color>
+    <color name="theme_orange_on_container">#9A3412</color>
+
+    <color name="theme_pink_primary">#DB2777</color>
+    <color name="theme_pink_container">#FCE7F3</color>
+    <color name="theme_pink_on_container">#9D174D</color>
+
+    <!-- ===== 辅助色（青绿：运行中/健康） ===== -->
+    <color name="brand_secondary">#00796B</color>
+    <color name="brand_on_secondary">#FFFFFF</color>
+    <color name="brand_secondary_container">#C8F3EC</color>
+    <color name="brand_on_secondary_container">#00201B</color>
+
+    <!-- ===== 表面层级 ===== -->
+    <color name="surface_page">#FBF9FF</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="surface_sunken">#F1EEF9</color>
+    <color name="surface_outline">#DCD7E8</color>
+
+    <!-- ===== 文字层级 ===== -->
+    <color name="text_primary">#1A1626</color>
+    <color name="text_secondary">#4C4761</color>
+    <color name="text_tertiary">#6F6A85</color>
+
+    <!-- ===== 语义反馈色 ===== -->
+    <color name="feedback_success">#00695C</color>
+    <color name="feedback_warning">#8A5000</color>
+    <color name="feedback_error">#B3261E</color>
+
+    <!-- ===== 桌宠状态色（与 OperitState 一一对应） ===== -->
+    <color name="state_unknown">#6F6A85</color>
+    <color name="state_idle">#6F6A85</color>
+    <color name="state_working">#8A5000</color>
+    <color name="state_thinking">#1565C0</color>
+    <color name="state_responding">#2E7D32</color>
+    <color name="state_tool">#C74A16</color>
+    <color name="state_waiting">#C74A16</color>
+    <color name="state_error">#B3261E</color>
+
+    <!-- ===== 悬浮窗状态卡（始终深色，独立于系统主题） ===== -->
+    <color name="overlay_card_bg">#F21C1B22</color>
+    <color name="overlay_text_primary">#FFFFFF</color>
+    <color name="overlay_text_secondary">#B5B0C4</color>
+
+    <!--
+      悬浮窗专用状态色：卡片永远是深色，所以这组值在浅色/深色模式下完全相同，
+      全部使用亮色系变体，保证在深色卡上对比度 ≥ 4.5:1。
+      （不要复用 state_*：那组在浅色模式是深色系，叠在深色卡上只有 2.6:1）
+    -->
+    <color name="overlay_state_unknown">#9A93AC</color>
+    <color name="overlay_state_idle">#9A93AC</color>
+    <color name="overlay_state_working">#F5B860</color>
+    <color name="overlay_state_thinking">#8AC0FF</color>
+    <color name="overlay_state_responding">#84DC94</color>
+    <color name="overlay_state_tool">#FFB68F</color>
+    <color name="overlay_state_waiting">#FFB68F</color>
+    <color name="overlay_state_error">#F2B8B5</color>
+
+</resources>

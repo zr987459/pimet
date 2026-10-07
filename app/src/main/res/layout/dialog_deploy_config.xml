@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#161B22"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <!-- 标题栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="🌐 Pi-Web 从零一键部署"
+            android:textColor="#F0F6FC"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/deployDialogClose"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:gravity="center"
+            android:text="✕"
+            android:textColor="#8B949E"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="全自动完成：端口探活 ➔ 网络测速优选 ➔ Node.js (≥22.19) 环境准备 ➔ pi-web 安装 ➔ 端口 30141 守护拉起。"
+        android:textColor="#8B949E"
+        android:textSize="11.5sp" />
+
+    <!-- ⚠️ 必要环境与状态检测卡片 -->
+    <LinearLayout
+        android:id="@+id/deployEnvCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="#21262D"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🔍 实时状态与环境检测"
+                android:textColor="#E3B341"
+                android:textSize="12.5sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/deployCheckEnvBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="28dp"
+                android:background="?attr/selectableItemBackground"
+                android:text="🔄 刷新检测"
+                android:textColor="#58A6FF"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/deployEnvStatusTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="正在检测端口 30141 与系统依赖..."
+            android:textColor="#C9D1D9"
+            android:textSize="11.5sp"
+            android:typeface="monospace" />
+
+        <TextView
+            android:id="@+id/deployEnvTipsTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="• Pi-Web (Next.js) 强要求 Node.js ≥ 22.19.0。\n• 部署脚本将自动尝试识别/安装最新 Node.js 与 npm。\n• 若需手动为 Termux 补齐依赖，点击下方按钮复制命令。"
+            android:textColor="#8B949E"
+            android:textSize="10.5sp"
+            android:lineSpacingMultiplier="1.25" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/deployCopyCmdBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:background="@drawable/bg_tab_normal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="📋 复制 Termux 安装命令"
+                android:textColor="#7EE787"
+                android:textSize="11sp" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/deployOpenWebBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:background="@drawable/bg_tab_selected"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:text="🌐 直达 Web 控制台"
+                android:textColor="@color/brand_on_primary_container"
+                android:textSize="11sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 部署流程说明卡片 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="#21262D"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📋 从零部署步骤规划 (一键全自动执行)："
+            android:textColor="#58A6FF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="1. 【端口探活】检测 127.0.0.1:30141，若已运行则秒级就绪\n2. 【路线优选】并发测速锁定最低延迟 npm 国内源 (淘宝/阿里)\n3. 【环境准备】自检 Node.js 是否 ≥ 22.19.0，缺失时自动补齐\n4. 【组件安装】全局安装 @agegr/pi-web 并自检可用性\n5. 【后台启动】拉起后台守护并循环自检 30141 健康应答"
+            android:textColor="#C9D1D9"
+            android:textSize="10.8sp"
+            android:lineSpacingMultiplier="1.25" />
+    </LinearLayout>
+
+    <!-- 断点续传卡片 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="#21262D"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <CheckBox
+            android:id="@+id/cbResumable"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="🔄 启用幂等跳过 (已就绪步骤秒级跳过)"
+            android:textColor="#7EE787"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 底部按钮 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:gravity="end"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/deployCancelBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:layout_marginEnd="10dp"
+            android:background="?attr/selectableItemBackground"
+            android:text="取消"
+            android:textColor="#8B949E"
+            android:textSize="12.5sp" />
+
+        <Button
+            android:id="@+id/deployStartBtn"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:background="@drawable/bg_tab_selected"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:text="🚀 开始从零一键部署"
+            android:textColor="@color/brand_on_primary_container"
+            android:textSize="12.5sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</LinearLayout>

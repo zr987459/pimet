@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D1117"
+    android:orientation="vertical">
+
+    <!-- 主内容区域 (ViewFlipper / FrameLayout 切换) -->
+    <FrameLayout
+        android:id="@+id/mainContentContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- ================= 页面 1: Pi-Web 核心工作台 ================= -->
+        <LinearLayout
+            android:id="@+id/viewPiWeb"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <!-- 超薄极简顶栏 -->
+            <LinearLayout
+                android:id="@+id/piWebTopBar"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
+
+                <View
+                    android:id="@+id/piWebStatusDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:background="#8B949E" />
+
+                <TextView
+                    android:id="@+id/piWebTitleTv"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:text="Pi-Web (127.0.0.1:30141)"
+                    android:textColor="#F0F6FC"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <!-- 快捷功能图标 -->
+                <TextView
+                    android:id="@+id/piWebReloadBtn"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:gravity="center"
+                    android:text="🔄"
+                    android:textColor="#C9D1D9"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/piWebBrowserBtn"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:gravity="center"
+                    android:text="↗"
+                    android:textColor="#C9D1D9"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/piWebTerminalBtn"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:gravity="center"
+                    android:text="💻"
+                    android:textColor="#C9D1D9"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- 网页容器 -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <WebView
+                    android:id="@+id/piWebWebView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#0D1117" />
+
+                <!-- 离线未就绪引导卡片 -->
+                <LinearLayout
+                    android:id="@+id/piWebOfflineCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#0D1117"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="28dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🌐"
+                        android:textSize="54sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="Pi-Web 本地服务未运行"
+                        android:textColor="#F0F6FC"
+                        android:textSize="18sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/piWebOfflineDesc"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center"
+                        android:lineSpacingMultiplier="1.2"
+                        android:text="Pi-Web 服务 (127.0.0.1:30141) 尚未启动。\n点击下方按钮，即可完全在手机本地一键从零拉起。"
+                        android:textColor="#8B949E"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/piWebLaunchBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="20dp"
+                        android:background="@drawable/bg_tab_selected"
+                        android:paddingStart="24dp"
+                        android:paddingEnd="24dp"
+                        android:text="🚀 本地一键拉起 / 部署"
+                        android:textColor="@color/brand_on_primary_container"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/piWebToTerminalBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginTop="10dp"
+                        android:background="?attr/selectableItemBackground"
+                        android:text="💻 打开终端控制台查看日志"
+                        android:textColor="#58A6FF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+            </FrameLayout>
+        </LinearLayout>
+
+        <!-- ================= 页面 2: 原生终端控制台 ================= -->
+        <LinearLayout
+            android:id="@+id/viewTerminal"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 终端顶部控制栏 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
+
+                <TextView
+                    android:id="@+id/termStatusTv"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🟢 空闲"
+                    android:textColor="#7EE787"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/termDeployBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:background="@drawable/bg_tab_selected"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="🚀 部署"
+                    android:textColor="@color/brand_on_primary_container"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/termLogBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_tab_normal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="📜 日志"
+                    android:textColor="#C9D1D9"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/termClearBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_tab_normal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="清屏"
+                    android:textColor="#C9D1D9"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/termKillBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_tab_normal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="Ctrl+C"
+                    android:textColor="#F85149"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- 多窗口标签栏 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="6dp"
+                android:paddingEnd="6dp">
+
+                <HorizontalScrollView
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/termWindowTabsContainer"
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <Button
+                    android:id="@+id/termNewWindowBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="4dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:text="+ 新增窗口"
+                    android:textColor="#58A6FF"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+
+            <!-- 终端文本输出区 -->
+            <ScrollView
+                android:id="@+id/termScrollView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="#0D1117"
+                android:padding="8dp">
+
+                <TextView
+                    android:id="@+id/termConsoleTv"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="2dp"
+                    android:textColor="#C9D1D9"
+                    android:textSize="11sp" />
+            </ScrollView>
+
+            <!-- 快捷虚拟按键栏 -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="34dp"
+                android:background="#161B22"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/termExtraKeysContainer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp" />
+            </HorizontalScrollView>
+
+            <!-- 命令输入栏 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp">
+
+                <EditText
+                    android:id="@+id/termCommandInput"
+                    android:layout_width="0dp"
+                    android:layout_height="34dp"
+                    android:layout_weight="1"
+                    android:background="#21262D"
+                    android:fontFamily="monospace"
+                    android:hint="输入命令..."
+                    android:imeOptions="actionSend"
+                    android:inputType="text"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:textColor="#F0F6FC"
+                    android:textColorHint="#484F58"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/termSendBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_tab_selected"
+                    android:text="发送"
+                    android:textColor="@color/brand_on_primary_container"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+    </FrameLayout>
+
+    <!-- ================= 底部双核心导航栏 ================= -->
+    <LinearLayout
+        android:id="@+id/bottomNavBar"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:background="#161B22"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:id="@+id/tabPiWeb"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tabPiWebIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🌐"
+                android:textSize="17sp" />
+
+            <TextView
+                android:id="@+id/tabPiWebText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pi-Web"
+                android:textColor="#58A6FF"
+                android:textSize="10.5sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="24dp"
+            android:background="#21262D" />
+
+        <LinearLayout
+            android:id="@+id/tabTerminal"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tabTerminalIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💻"
+                android:textSize="17sp" />
+
+            <TextView
+                android:id="@+id/tabTerminalText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="终端控制台"
+                android:textColor="#8B949E"
+                android:textSize="10.5sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>
