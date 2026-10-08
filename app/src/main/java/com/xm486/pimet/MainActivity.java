@@ -77,6 +77,8 @@ public class MainActivity extends AppCompatActivity {
     private View btnActionCopyUrl;
     private TextView launchCopyUrlDescTv;
     private View btnActionOpenBrowser;
+    private View btnActionModelConfig;
+    private TextView launchModelDescTv;
     private View btnLaunchLogRefresh;
     private View btnLaunchLogClear;
     private TextView launchLogTv;
@@ -102,6 +104,19 @@ public class MainActivity extends AppCompatActivity {
     private View btnViewLog;
 
     // 设置视图组件
+    private TextView chipProviderDeepSeek;
+    private TextView chipProviderOpenAI;
+    private TextView chipProviderClaude;
+    private TextView chipProviderOpenRouter;
+    private TextView chipProviderCustom;
+    private EditText inputAiApiKey;
+    private View btnToggleKeyVisibility;
+    private EditText inputAiBaseUrl;
+    private EditText inputAiModel;
+    private View btnSaveAiConfig;
+    private String selectedProvider = PiMetConfig.PROVIDER_DEEPSEEK;
+    private boolean isApiKeyVisible = false;
+
     private EditText settingsPortInput;
     private View btnSavePort;
     private TextView btnRegistryMirror;
@@ -180,6 +195,8 @@ public class MainActivity extends AppCompatActivity {
         btnActionCopyUrl = findViewById(R.id.btnActionCopyUrl);
         launchCopyUrlDescTv = findViewById(R.id.launchCopyUrlDescTv);
         btnActionOpenBrowser = findViewById(R.id.btnActionOpenBrowser);
+        btnActionModelConfig = findViewById(R.id.btnActionModelConfig);
+        launchModelDescTv = findViewById(R.id.launchModelDescTv);
         btnLaunchLogRefresh = findViewById(R.id.btnLaunchLogRefresh);
         btnLaunchLogClear = findViewById(R.id.btnLaunchLogClear);
         launchLogTv = findViewById(R.id.launchLogTv);
@@ -205,6 +222,17 @@ public class MainActivity extends AppCompatActivity {
         btnViewLog = findViewById(R.id.btnViewLog);
 
         // Settings 组件
+        chipProviderDeepSeek = findViewById(R.id.chipProviderDeepSeek);
+        chipProviderOpenAI = findViewById(R.id.chipProviderOpenAI);
+        chipProviderClaude = findViewById(R.id.chipProviderClaude);
+        chipProviderOpenRouter = findViewById(R.id.chipProviderOpenRouter);
+        chipProviderCustom = findViewById(R.id.chipProviderCustom);
+        inputAiApiKey = findViewById(R.id.inputAiApiKey);
+        btnToggleKeyVisibility = findViewById(R.id.btnToggleKeyVisibility);
+        inputAiBaseUrl = findViewById(R.id.inputAiBaseUrl);
+        inputAiModel = findViewById(R.id.inputAiModel);
+        btnSaveAiConfig = findViewById(R.id.btnSaveAiConfig);
+
         settingsPortInput = findViewById(R.id.settingsPortInput);
         btnSavePort = findViewById(R.id.btnSavePort);
         btnRegistryMirror = findViewById(R.id.btnRegistryMirror);
@@ -268,6 +296,9 @@ public class MainActivity extends AppCompatActivity {
 
         btnActionCopyUrl.setOnClickListener(v -> copyTextToClipboard(getPiWebUrl(), "访问地址已复制到剪切板"));
         btnActionOpenBrowser.setOnClickListener(v -> openExternalBrowser());
+        btnActionModelConfig.setOnClickListener(v -> switchTab(3));
+
+        updateLaunchModelDesc();
 
         btnLaunchLogRefresh.setOnClickListener(v -> refreshLaunchLog());
         btnLaunchLogClear.setOnClickListener(v -> {
@@ -277,6 +308,12 @@ public class MainActivity extends AppCompatActivity {
         });
 
         refreshLaunchLog();
+    }
+
+    private void updateLaunchModelDesc() {
+        String provider = PiMetConfig.getAiProvider(this);
+        String model = PiMetConfig.getAiModel(this);
+        launchModelDescTv.setText(provider + " · " + model);
     }
 
     private void refreshLaunchLog() {
@@ -579,6 +616,44 @@ public class MainActivity extends AppCompatActivity {
 
     // ================= 设置面板 =================
     private void initSettingsPanel() {
+        // AI 模型与 API Key 配置初始化
+        selectedProvider = PiMetConfig.getAiProvider(this);
+        inputAiApiKey.setText(PiMetConfig.getAiApiKey(this));
+        inputAiBaseUrl.setText(PiMetConfig.getAiBaseUrl(this));
+        inputAiModel.setText(PiMetConfig.getAiModel(this));
+        updateProviderChips();
+
+        chipProviderDeepSeek.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_DEEPSEEK, "https://api.deepseek.com", "deepseek-chat"));
+        chipProviderOpenAI.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_OPENAI, "https://api.openai.com/v1", "gpt-4o"));
+        chipProviderClaude.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_CLAUDE, "https://api.anthropic.com", "claude-3-7-sonnet"));
+        chipProviderOpenRouter.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_OPENROUTER, "https://openrouter.ai/api/v1", "anthropic/claude-3.7-sonnet"));
+        chipProviderCustom.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_CUSTOM, "", ""));
+
+        btnToggleKeyVisibility.setOnClickListener(v -> {
+            isApiKeyVisible = !isApiKeyVisible;
+            if (isApiKeyVisible) {
+                inputAiApiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            } else {
+                inputAiApiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            }
+            inputAiApiKey.setSelection(inputAiApiKey.getText().length());
+        });
+
+        btnSaveAiConfig.setOnClickListener(v -> {
+            String apiKey = inputAiApiKey.getText().toString().trim();
+            String baseUrl = inputAiBaseUrl.getText().toString().trim();
+            String model = inputAiModel.getText().toString().trim();
+
+            PiMetConfig.setAiProvider(this, selectedProvider);
+            PiMetConfig.setAiApiKey(this, apiKey);
+            PiMetConfig.setAiBaseUrl(this, baseUrl);
+            PiMetConfig.setAiModel(this, model);
+
+            PiMetConfig.syncToContainer(this);
+            updateLaunchModelDesc();
+            Toast.makeText(this, "✔ AI 凭据已保存并同步至 PRoot 容器！", Toast.LENGTH_SHORT).show();
+        });
+
         int currentPort = PiMetConfig.getWebPort(this);
         settingsPortInput.setText(String.valueOf(currentPort));
 
@@ -640,6 +715,37 @@ public class MainActivity extends AppCompatActivity {
         });
 
         refreshStorageSize();
+    }
+
+    private void selectProvider(String provider, String defaultBaseUrl, String defaultModel) {
+        selectedProvider = provider;
+        if (!TextUtils.isEmpty(defaultBaseUrl)) {
+            inputAiBaseUrl.setText(defaultBaseUrl);
+        }
+        if (!TextUtils.isEmpty(defaultModel)) {
+            inputAiModel.setText(defaultModel);
+        }
+        updateProviderChips();
+    }
+
+    private void updateProviderChips() {
+        int primaryBg = R.drawable.bg_btn_primary;
+        int secBg = R.drawable.bg_btn_secondary;
+
+        chipProviderDeepSeek.setBackgroundResource(PiMetConfig.PROVIDER_DEEPSEEK.equals(selectedProvider) ? primaryBg : secBg);
+        chipProviderDeepSeek.setTextColor(PiMetConfig.PROVIDER_DEEPSEEK.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
+
+        chipProviderOpenAI.setBackgroundResource(PiMetConfig.PROVIDER_OPENAI.equals(selectedProvider) ? primaryBg : secBg);
+        chipProviderOpenAI.setTextColor(PiMetConfig.PROVIDER_OPENAI.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
+
+        chipProviderClaude.setBackgroundResource(PiMetConfig.PROVIDER_CLAUDE.equals(selectedProvider) ? primaryBg : secBg);
+        chipProviderClaude.setTextColor(PiMetConfig.PROVIDER_CLAUDE.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
+
+        chipProviderOpenRouter.setBackgroundResource(PiMetConfig.PROVIDER_OPENROUTER.equals(selectedProvider) ? primaryBg : secBg);
+        chipProviderOpenRouter.setTextColor(PiMetConfig.PROVIDER_OPENROUTER.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
+
+        chipProviderCustom.setBackgroundResource(PiMetConfig.PROVIDER_CUSTOM.equals(selectedProvider) ? primaryBg : secBg);
+        chipProviderCustom.setTextColor(PiMetConfig.PROVIDER_CUSTOM.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
     }
 
     private void updateRegistryButtons() {

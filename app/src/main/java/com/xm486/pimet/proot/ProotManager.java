@@ -420,7 +420,8 @@ public final class ProotManager {
         env.put("LANG", "C.UTF-8");
         env.put("TMPDIR", "/tmp");
         env.put("DEBIAN_FRONTEND", "noninteractive");
-        env.put("PORT", String.valueOf(PI_WEB_PORT));
+        env.put("PORT", String.valueOf(com.xm486.pimet.PiMetConfig.getWebPort(context)));
+        com.xm486.pimet.PiMetConfig.injectEnvironment(context, env);
 
         return pb;
     }
