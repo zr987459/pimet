@@ -290,7 +290,6 @@ public class MainActivity extends AppCompatActivity {
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
         // Terminal 组件
-        termTitleTv = findViewById(R.id.termTitleTv);
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
         btnTermReconnect = findViewById(R.id.btnTermReconnect);
