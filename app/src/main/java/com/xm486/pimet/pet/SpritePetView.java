@@ -12,43 +12,41 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.View;
 
-import java.io.File;
+import com.xm486.pimet.monitor.OperitState;
+
 import java.io.IOException;
 import java.io.InputStream;
-
 /**
- * 精灵图帧动画桌宠视图（参考 DevPetM / CodexPet 设计）。
+ * 精灵图帧动画桌宠（移植自 oc-claw 的 SpritePet.tsx / codexPet.ts）。
  *
  * 角色素材：assets/pets/<角色目录>/spritesheet(.webp|.png)，
  * 1536x1872，8 列 x 9 行，每格 192x208。
- * 动画行布局：
- *   idle       row0 6帧 2fps   （慢速呼吸待机）
- *   run-right  row1 8帧 8fps   （向右跑：向右拖拽时）
- *   run-left   row2 8帧 8fps   （向左跑：向左拖拽时）
- *   waving     row3 4帧 12fps  （挥手：点击互动）
- *   jumping    row4 5帧 6fps   （跳跃：点击互动）
+ * 动画行布局（与 oc-claw codexPet.ts ANIMATION_ROWS 一致）：
+ *   idle       row0 6帧 2fps   （慢速呼吸）
+ *   run-right  row1 8帧 8fps   （向右跑：拖动/甩动时）
+ *   run-left   row2 8帧 8fps   （向左跑）
+ *   waving     row3 4帧 12fps  （挥手：点击一次性）
+ *   jumping    row4 5帧 6fps   （跳跃：点击一次性）
  *   failed     row5 8帧 12fps  （出错）
- *   waiting    row6 6帧 6fps   （等待）
- *   running    row7 6帧 6fps   （工作/思考中）
- *   review     row8 6帧 6fps   （特殊状态）
+ *   waiting    row6 6帧 6fps   （工具/等待，循环后停 600ms）
+ *   running    row7 6帧 6fps   （工作/思考）
+ *   review     row8 6帧 6fps   （审查/特殊状态）
+ *
+ * 支持 setPetDir() 动态切换角色；setMoveDirection() 拖动方向；
+ * playOneShot() 一次性动作（waving/jumping）。
  */
 public class SpritePetView extends View {
 
-    private static final String TAG = "PiMet.SpritePet";
+    private static final String TAG = "DevPetM.SpritePet";
+    private static final String PETS_BASE = "pets";
 
-    public enum PetState {
-        IDLE,
-        RUNNING,
-        WAITING,
-        FAILED,
-        UNKNOWN
-    }
-
+    // ---- atlas 元信息（与 oc-claw codexPet.ts 一致） ----
     private static final int CELL_W = 192;
     private static final int CELL_H = 208;
     private static final int COLS = 8;
     private static final int ROWS = 9;
 
+    // ---- 状态 → 动画行 ----
     private static class AnimRow {
         final int row;
         final int frames;
@@ -75,12 +73,13 @@ public class SpritePetView extends View {
 
     private Bitmap atlas;
     private AnimRow currentRow = ROW_IDLE;
-    private AnimRow baseRow = ROW_IDLE;
-    private AnimRow oneShotRow = null;
+    private AnimRow baseRow = ROW_IDLE;     // 状态映射的基础行（一次性动作结束后恢复）
+    private AnimRow oneShotRow = null;      // 非 null = 正在播放一次性动作
     private int frameIndex = 0;
     private long restUntil = 0;
-    private PetState currentState = PetState.UNKNOWN;
+    private OperitState currentState = OperitState.UNKNOWN;
 
+    // 渲染复用对象，消除 onDraw 每一帧的对象分配与 GC 抖动
     private final Rect srcRect = new Rect();
     private final Rect dstRect = new Rect();
     private final Paint drawPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
@@ -100,6 +99,7 @@ public class SpritePetView extends View {
                 restUntil = 0;
                 frameIndex = 0;
             } else if (oneShotRow != null) {
+                // 一次性动作：播完最后一帧后恢复基础行
                 frameIndex++;
                 if (frameIndex >= oneShotRow.frames) {
                     oneShotRow = null;
@@ -134,7 +134,7 @@ public class SpritePetView extends View {
         startTicker();
     }
 
-    /** 动态切换角色 */
+    /** 动态切换角色（悬浮窗不重建） */
     public void setPetDir(String petDir) {
         if (atlas != null) {
             atlas.recycle();
@@ -144,6 +144,7 @@ public class SpritePetView extends View {
         invalidate();
     }
 
+    /** 停止动画并释放贴图（弹窗等临时视图关闭时调用，避免 ticker 持有大 bitmap） */
     public void stopAnimation() {
         stopTicker();
         if (atlas != null) {
@@ -153,10 +154,10 @@ public class SpritePetView extends View {
     }
 
     private void loadAtlas(Context context, String petDir) {
-        // 优先外部导入目录
-        File extDir = PetRegistry.getExternalPetsDir(context);
-        File extWebp = new File(new File(extDir, petDir), "spritesheet.webp");
-        File extPng = new File(new File(extDir, petDir), "spritesheet.png");
+        // 优先外部导入目录（用户从 petdex 下载导入的）
+        java.io.File extDir = PetRegistry.getExternalPetsDir(context);
+        java.io.File extWebp = new java.io.File(new java.io.File(extDir, petDir), "spritesheet.webp");
+        java.io.File extPng = new java.io.File(new java.io.File(extDir, petDir), "spritesheet.png");
         try {
             if (extWebp.exists()) {
                 atlas = BitmapFactory.decodeFile(extWebp.getAbsolutePath());
@@ -164,31 +165,33 @@ public class SpritePetView extends View {
                 atlas = BitmapFactory.decodeFile(extPng.getAbsolutePath());
             }
             if (atlas != null) {
-                Log.i(TAG, "Pet loaded from external: " + petDir);
+                Log.i(TAG, "pet loaded (external): " + petDir);
                 return;
             }
         } catch (Throwable t) {
-            Log.w(TAG, "External pet load failed: " + petDir, t);
+            Log.w(TAG, "external load failed: " + petDir, t);
         }
-
         // 回退内置 assets
-        String webp = PetRegistry.PETS_DIR + "/" + petDir + "/spritesheet.webp";
-        String png = PetRegistry.PETS_DIR + "/" + petDir + "/spritesheet.png";
+        String webp = PETS_BASE + "/" + petDir + "/spritesheet.webp";
+        String png = PETS_BASE + "/" + petDir + "/spritesheet.png";
         try (InputStream in = tryOpen(context, webp, png)) {
             if (in == null) {
-                Log.e(TAG, "No spritesheet found for pet: " + petDir);
+                Log.e(TAG, "no spritesheet found for pet: " + petDir);
                 return;
             }
             Bitmap bmp = BitmapFactory.decodeStream(in);
-            if (bmp != null) {
-                atlas = bmp;
-                Log.i(TAG, "Pet loaded from assets: " + petDir);
+            if (bmp == null) {
+                Log.e(TAG, "decode spritesheet failed: " + petDir);
+                return;
             }
+            atlas = bmp;
+            Log.i(TAG, "pet loaded (assets): " + petDir);
         } catch (IOException e) {
-            Log.e(TAG, "Load spritesheet failed: " + petDir, e);
+            Log.e(TAG, "load spritesheet failed: " + petDir, e);
         }
     }
 
+    /** 依次尝试打开 webp / png */
     private InputStream tryOpen(Context context, String first, String second) throws IOException {
         try {
             return context.getAssets().open(first);
@@ -197,13 +200,14 @@ public class SpritePetView extends View {
         }
     }
 
-    /** 切换状态动画 */
-    public void updateState(PetState state) {
+    /** 根据 Operit 状态切换动画 */
+    public void updateState(OperitState state) {
         if (state == currentState) return;
         currentState = state;
         AnimRow row = mapRow(state);
         if (row == baseRow) return;
         baseRow = row;
+        // 拖动/一次性动作播放中不打断（结束后自动落到新状态）
         if (oneShotRow == null) {
             currentRow = row;
         }
@@ -212,7 +216,7 @@ public class SpritePetView extends View {
         invalidate();
     }
 
-    /** 拖动方向：dir>0 向右跑、dir<0 向左跑、dir==0 恢复基础待机 */
+    /** 拖动方向：dir>0 向右跑、dir<0 向左跑、dir==0 恢复状态动画 */
     public void setMoveDirection(int dir) {
         if (dir > 0) {
             switchTo(ROW_RUN_RIGHT);
@@ -223,12 +227,12 @@ public class SpritePetView extends View {
         }
     }
 
-    /** 一次性动作（点击挥手、跳跃、出错） */
+    /** 一次性动作（如点击挥手/跳跃），播完恢复基础行 */
     public void playOneShot(String action) {
         AnimRow row;
-        if ("jumping".equalsIgnoreCase(action)) {
+        if ("jumping".equals(action)) {
             row = ROW_JUMPING;
-        } else if ("failed".equalsIgnoreCase(action) || "error".equalsIgnoreCase(action)) {
+        } else if ("failed".equals(action) || "error".equals(action) || "sad".equals(action)) {
             row = ROW_FAILED;
         } else {
             row = ROW_WAVING;
@@ -241,7 +245,7 @@ public class SpritePetView extends View {
     }
 
     private void switchTo(AnimRow row) {
-        if (oneShotRow != null) return;
+        if (oneShotRow != null) return; // 一次性动作期间不打断
         if (row == currentRow) return;
         currentRow = row;
         frameIndex = 0;
@@ -249,13 +253,16 @@ public class SpritePetView extends View {
         invalidate();
     }
 
-    private AnimRow mapRow(PetState state) {
+    private AnimRow mapRow(OperitState state) {
         switch (state) {
-            case RUNNING:
+            case WORKING:
+            case THINKING:
+            case RESPONDING:
+            case TOOL_RUNNING:   // 工具执行=正在干活，用工作动画
                 return ROW_RUNNING;
-            case WAITING:
+            case WAITING:        // 等待审批/外部响应，才是等待动画
                 return ROW_WAITING;
-            case FAILED:
+            case ERROR:
                 return ROW_FAILED;
             case IDLE:
             case UNKNOWN:
@@ -274,10 +281,12 @@ public class SpritePetView extends View {
         int srcX = col * CELL_W;
         int srcY = row * CELL_H;
 
+        // 等比缩放到 View 尺寸（保持 192:208 比例）
         int vw = getWidth();
         int vh = getHeight();
         if (vw == 0 || vh == 0) return;
 
+        // 以宽度为基准，等比计算高度（保持角色比例居中）
         float scale = (float) vw / CELL_W;
         int dstH = Math.round(CELL_H * scale);
         if (dstH > vh) {
@@ -293,7 +302,7 @@ public class SpritePetView extends View {
         canvas.drawBitmap(atlas, srcRect, dstRect, drawPaint);
     }
 
-    public void startTicker() {
+    private void startTicker() {
         if (!isTickerRunning && atlas != null && getVisibility() == VISIBLE) {
             isTickerRunning = true;
             handler.removeCallbacks(ticker);
@@ -301,7 +310,7 @@ public class SpritePetView extends View {
         }
     }
 
-    public void stopTicker() {
+    private void stopTicker() {
         isTickerRunning = false;
         handler.removeCallbacks(ticker);
     }

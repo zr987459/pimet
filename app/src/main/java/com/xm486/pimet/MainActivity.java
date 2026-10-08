@@ -47,10 +47,17 @@ import com.xm486.pimet.proot.PiWebManager;
 import com.xm486.pimet.proot.ProotManager;
 import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
+import com.xm486.pimet.monitor.OperitState;
+import com.xm486.pimet.monitor.PiWebMonitor;
+import com.xm486.pimet.pet.BubbleMessage;
+import com.xm486.pimet.pet.ChatConfig;
+import com.xm486.pimet.pet.PetDexShop;
+import com.xm486.pimet.pet.PetOverlayService;
+import com.xm486.pimet.pet.PetParamsDialog;
 import com.xm486.pimet.pet.PetRegistry;
+import com.xm486.pimet.pet.PetTypewriter;
 import com.xm486.pimet.pet.SpritePetView;
-import com.xm486.pimet.pet.PetAgentState;
-import com.xm486.pimet.pet.PiWebMonitor;
+import com.xm486.pimet.ui.StateStyle;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -106,8 +113,11 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvCurrentPetName;
     private TextView btnTogglePetEnabled;
     private TextView btnSelectPet;
+    private TextView btnPetParams;
+    private TextView btnPetShop;
+    private TextView btnToggleGlobalOverlay;
     private PiWebMonitor piWebMonitor;
-    private PetAgentState.Snapshot lastPetSnapshot = new PetAgentState.Snapshot();
+    private OperitState.Snapshot lastPetSnapshot = new OperitState.Snapshot();
     private final Handler petBubbleHandler = new Handler(Looper.getMainLooper());
     private final Runnable petBubbleDismissRunnable = () -> {
         if (petBubbleLayout != null) {
@@ -480,6 +490,9 @@ public class MainActivity extends AppCompatActivity {
         tvCurrentPetName = findViewById(R.id.tvCurrentPetName);
         btnTogglePetEnabled = findViewById(R.id.btnTogglePetEnabled);
         btnSelectPet = findViewById(R.id.btnSelectPet);
+        btnPetParams = findViewById(R.id.btnPetParams);
+        btnPetShop = findViewById(R.id.btnPetShop);
+        btnToggleGlobalOverlay = findViewById(R.id.btnToggleGlobalOverlay);
 
         // 终端多窗口 Tab 容器与新建按钮
         termTabsContainer = findViewById(R.id.termTabsContainer);
@@ -564,12 +577,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showPetBubble(String msg) {
-        if (petBubbleLayout != null && petBubbleTv != null) {
-            petBubbleTv.setText(msg);
-            petBubbleLayout.setVisibility(View.VISIBLE);
-            petBubbleHandler.removeCallbacks(petBubbleDismissRunnable);
-            petBubbleHandler.postDelayed(petBubbleDismissRunnable, 3500);
-        }
+        if (petBubbleLayout == null || petBubbleTv == null) return;
+        petBubbleHandler.removeCallbacks(petBubbleDismissRunnable);
+        petBubbleLayout.setVisibility(View.VISIBLE);
+        petBubbleTv.setText("");
+        final int len = msg != null ? msg.length() : 0;
+        final String text = msg != null ? msg : "";
+        final int[] idx = new int[]{0};
+        Runnable typer = new Runnable() {
+            @Override
+            public void run() {
+                if (idx[0] < len) {
+                    idx[0]++;
+                    petBubbleTv.setText(text.substring(0, idx[0]));
+                    petBubbleHandler.postDelayed(this, 30);
+                } else {
+                    int duration = PetRegistry.getIntPref(MainActivity.this, PetRegistry.KEY_BUBBLE_WIDTH, 4000);
+                    petBubbleHandler.postDelayed(petBubbleDismissRunnable, 4500);
+                }
+            }
+        };
+        petBubbleHandler.post(typer);
     }
 
     private void updatePetDisplay(boolean isPetEnabled) {
@@ -622,43 +650,32 @@ public class MainActivity extends AppCompatActivity {
         }
         piWebMonitor = new PiWebMonitor(this, port, new PiWebMonitor.Listener() {
             @Override
-            public void onSnapshot(PetAgentState.Snapshot snapshot) {
+            public void onSnapshot(OperitState.Snapshot snapshot) {
                 lastPetSnapshot = snapshot;
                 if (!PetRegistry.isPetEnabled(MainActivity.this) && !isFullscreen) {
                     return;
                 }
+                if (floatingPetView != null) {
+                    floatingPetView.updateState(snapshot.state);
+                }
                 switch (snapshot.state) {
                     case THINKING:
-                        if (floatingPetView != null) {
-                            floatingPetView.setMoveDirection(0);
-                            floatingPetView.playOneShot("waiting");
-                        }
                         showPetBubble("🤔 Agent 正在深度思考中...");
                         break;
                     case TOOL_RUNNING:
-                        if (floatingPetView != null) {
-                            floatingPetView.setMoveDirection(1);
-                        }
                         String tool = TextUtils.isEmpty(snapshot.lastTool) ? "指令执行" : snapshot.lastTool;
                         showPetBubble("🔧 正在调用工具: " + tool);
                         break;
                     case RESPONDING:
-                        if (floatingPetView != null) {
-                            floatingPetView.setMoveDirection(0);
-                        }
                         showPetBubble("💬 Agent 正在组织回复...");
                         break;
                     case IDLE:
                         if (floatingPetView != null) {
-                            floatingPetView.setMoveDirection(0);
                             floatingPetView.playOneShot("jumping");
                         }
                         showPetBubble("🎉 任务完成！随时待命");
                         break;
                     case ERROR:
-                        if (floatingPetView != null) {
-                            floatingPetView.playOneShot("failed");
-                        }
                         showPetBubble("😱 任务出错啦: " + snapshot.lastTool);
                         break;
                     default:
@@ -670,6 +687,98 @@ public class MainActivity extends AppCompatActivity {
             public void onError(String message) {}
         });
         piWebMonitor.start();
+    }
+
+    private void showPetMenuDialog() {
+        String curPet = PetRegistry.getPetDir(this);
+        String[] menuItems = new String[]{
+                "🔄 切换桌宠形象 (当前: " + curPet + ")",
+                "🎛️ 参数调节二级菜单 (尺寸/气泡/卡片/缩放)",
+                "💬 萌宠对话与实时监控状态",
+                "🏪 宠物商城与社区素材",
+                "🌐 系统全局桌宠悬浮窗 (" + (PetOverlayService.isRunning() ? "🟢 运行中·点击关闭" : "⚪ 未开启·点击开启") + ")",
+                "💻 唤出 PRoot Linux 终端抽屉"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("🐾 桌宠控制中心与功能菜单")
+                .setItems(menuItems, (d, which) -> {
+                    switch (which) {
+                        case 0:
+                            showPetSwitchDialog();
+                            break;
+                        case 1:
+                            showPetParamsDialog();
+                            break;
+                        case 2:
+                            showPetChatDialog();
+                            break;
+                        case 3:
+                            startActivity(new Intent(this, PetShopActivity.class));
+                            break;
+                        case 4:
+                            toggleGlobalOverlay();
+                            break;
+                        case 5:
+                            openTerminalInWorkbench();
+                            break;
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showPetParamsDialog() {
+        new PetParamsDialog(this, this::applyPetParams).show();
+    }
+
+    private void applyPetParams() {
+        int petSize = PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
+        int bubbleWidth = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
+        if (floatingPetView != null) {
+            int px = (int) (petSize * getResources().getDisplayMetrics().density + 0.5f);
+            ViewGroup.LayoutParams lp = floatingPetView.getLayoutParams();
+            if (lp != null) {
+                lp.width = px;
+                lp.height = (int) (px * 1.08f);
+                floatingPetView.setLayoutParams(lp);
+            }
+        }
+        if (petBubbleLayout != null) {
+            int pxW = (int) (bubbleWidth * getResources().getDisplayMetrics().density + 0.5f);
+            ViewGroup.LayoutParams lp = petBubbleLayout.getLayoutParams();
+            if (lp != null) {
+                lp.width = pxW;
+                petBubbleLayout.setLayoutParams(lp);
+            }
+        }
+    }
+
+    private void toggleGlobalOverlay() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "开启系统级全局悬浮窗需要授予「显示在其他应用上层」权限", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+            return;
+        }
+        Intent svc = new Intent(this, PetOverlayService.class);
+        if (PetOverlayService.isRunning()) {
+            stopService(svc);
+            Toast.makeText(this, "已关闭系统全局桌宠悬浮窗", Toast.LENGTH_SHORT).show();
+            if (btnToggleGlobalOverlay != null) {
+                btnToggleGlobalOverlay.setText("🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
+            }
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
+            Toast.makeText(this, "已开启系统全局桌宠悬浮窗！退出应用后桌宠依然在屏幕上陪伴", Toast.LENGTH_SHORT).show();
+            if (btnToggleGlobalOverlay != null) {
+                btnToggleGlobalOverlay.setText("🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)");
+            }
+        }
     }
 
     private void showPetChatDialog() {
@@ -702,8 +811,31 @@ public class MainActivity extends AppCompatActivity {
             layout.addView(tvEvents);
         }
 
+        // 快捷提问 Chips
+        LinearLayout chipsRow = new LinearLayout(this);
+        chipsRow.setOrientation(LinearLayout.HORIZONTAL);
+        chipsRow.setPadding(0, 4, 0, 10);
+        String[] quickPrompts = new String[]{"💡 忙什么", "🐧 容器状态", "🧹 清屏", "✨ 讲个笑话"};
+        for (String qp : quickPrompts) {
+            TextView chip = new TextView(this);
+            chip.setText(qp);
+            chip.setTextColor(0xFF58A6FF);
+            chip.setTextSize(11);
+            chip.setBackgroundResource(R.drawable.bg_badge_port);
+            chip.setPadding(18, 8, 18, 8);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            clp.setMarginEnd(12);
+            chip.setLayoutParams(clp);
+            chip.setOnClickListener(v -> {
+                sendPetChatMessage(qp);
+            });
+            chipsRow.addView(chip);
+        }
+        layout.addView(chipsRow);
+
         EditText inputEt = new EditText(this);
-        inputEt.setHint("对桌宠说点什么或提问 (如: 检查容器环境、写个脚本)...");
+        inputEt.setHint("对桌宠说点什么 (支持 #test, #clear, 或日常聊天)...");
         inputEt.setTextColor(0xFFF0F6FC);
         inputEt.setHintTextColor(0xFF8B949E);
         inputEt.setTextSize(13);
@@ -713,7 +845,7 @@ public class MainActivity extends AppCompatActivity {
                 .setTitle("🐾 桌宠智能监控与对话")
                 .setView(layout)
                 .setPositiveButton("发送给桌宠", null)
-                .setNeutralButton("🚀 唤出终端", (d, w) -> openTerminalInWorkbench())
+                .setNeutralButton("🎛️ 参数调节", (d, w) -> showPetParamsDialog())
                 .setNegativeButton("关闭", null)
                 .create();
 
@@ -737,6 +869,15 @@ public class MainActivity extends AppCompatActivity {
             floatingPetView.playOneShot("waving");
         }
         showPetBubble("收到啦！正在思考回答中...");
+
+        if (question.startsWith("#test")) {
+            showPetBubble("连通性正常！端口: " + PiMetConfig.getWebPort(this));
+            return;
+        } else if (question.startsWith("#clear")) {
+            sendToCurrentSession("clear\n");
+            showPetBubble("已为主人清空终端屏幕啦~ 🧹");
+            return;
+        }
 
         String apiKey = PiMetConfig.getAiApiKey(this);
         if (TextUtils.isEmpty(apiKey)) {
@@ -1274,7 +1415,7 @@ public class MainActivity extends AppCompatActivity {
         if (btnFloatPetSwitch != null) {
             btnFloatPetSwitch.setOnClickListener(v -> {
                 floatingMenuVertical.setVisibility(View.GONE);
-                showPetSwitchDialog();
+                showPetMenuDialog();
             });
         }
         btnFloatReload.setOnClickListener(v -> {
@@ -2302,6 +2443,18 @@ public class MainActivity extends AppCompatActivity {
         if (btnSelectPet != null) {
             btnSelectPet.setOnClickListener(v -> showPetSwitchDialog());
         }
+        if (btnPetParams != null) {
+            btnPetParams.setOnClickListener(v -> showPetParamsDialog());
+        }
+        if (btnPetShop != null) {
+            btnPetShop.setOnClickListener(v -> startActivity(new Intent(this, PetShopActivity.class)));
+        }
+        if (btnToggleGlobalOverlay != null) {
+            btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
+                    ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
+                    : "🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
+            btnToggleGlobalOverlay.setOnClickListener(v -> toggleGlobalOverlay());
+        }
 
         refreshStorageSize();
         refreshPrivilegeStatus();
@@ -3012,6 +3165,13 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         initPetMonitor();
+        applyPetParams();
+        updatePetDisplay(PetRegistry.isPetEnabled(this));
+        if (btnToggleGlobalOverlay != null) {
+            btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
+                    ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
+                    : "🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
+        }
     }
 
     @Override
