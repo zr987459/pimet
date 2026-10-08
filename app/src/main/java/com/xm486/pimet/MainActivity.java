@@ -74,9 +74,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView tabTerminalText;
     private TextView tabSettingsText;
 
-    // 顶部栏
-    private View btnTopBrowser;
-
     // Launch (启动/仪表盘) 视图组件
     private View launchStatusDot;
     private TextView launchStateTv;
@@ -121,6 +118,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnTermFontInc;
     private View btnTermQuickWeb;
     private View btnTermReconnect;
+    private View btnTermAiChat;
+    private View btnTermAiWatch;
     private float currentTermFontSize = 12.0f;
     private ProotSession terminalSession;
     private final AnsiParser terminalAnsi = new AnsiParser();
@@ -128,7 +127,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean isTerminalStarted = false;
 
     // 布局全屏与增强组件
-    private View appBar;
     private View bottomNavBar;
     private ProgressBar piWebProgressBar;
     private FrameLayout floatingMenuContainer;
@@ -216,13 +214,8 @@ public class MainActivity extends AppCompatActivity {
         tabTerminalText = findViewById(R.id.tabTerminalText);
         tabSettingsText = findViewById(R.id.tabSettingsText);
 
-        // 顶栏与底栏
-        appBar = findViewById(R.id.appBar);
+        // 底栏导航
         bottomNavBar = findViewById(R.id.bottomNavBar);
-
-        // 顶栏
-        btnTopBrowser = findViewById(R.id.btnTopBrowser);
-        btnTopBrowser.setOnClickListener(v -> openExternalBrowser());
 
         // Launch 组件
         launchStatusDot = findViewById(R.id.launchStatusDot);
@@ -268,6 +261,8 @@ public class MainActivity extends AppCompatActivity {
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
         btnTermReconnect = findViewById(R.id.btnTermReconnect);
+        btnTermAiChat = findViewById(R.id.btnTermAiChat);
+        btnTermAiWatch = findViewById(R.id.btnTermAiWatch);
         btnClear = findViewById(R.id.btnClear);
         btnCtrlC = findViewById(R.id.btnCtrlC);
         btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
@@ -614,8 +609,32 @@ public class MainActivity extends AppCompatActivity {
                     float dy = event.getRawY() - floatDownRawY;
                     if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
                         isFloatDragging = true;
-                        floatingMenuContainer.setTranslationX(floatInitialX + dx);
-                        floatingMenuContainer.setTranslationY(floatInitialY + dy);
+                        View parent = (View) floatingMenuContainer.getParent();
+                        if (parent != null) {
+                            int parentWidth = parent.getWidth();
+                            int parentHeight = parent.getHeight();
+                            int containerWidth = floatingMenuContainer.getWidth();
+                            int containerHeight = floatingMenuContainer.getHeight();
+
+                            float targetX = floatingMenuContainer.getLeft() + floatInitialX + dx;
+                            float targetY = floatingMenuContainer.getTop() + floatInitialY + dy;
+
+                            // 关键边界防护：顶部保留至少 64dp 安全区（避免被状态栏/刘海遮挡导致拖至顶层丢失）
+                            // 底部预留 16dp，左右预留 8dp
+                            float density = getResources().getDisplayMetrics().density;
+                            float minMarginTop = 64 * density;
+                            float minMarginBottom = 16 * density;
+                            float minMarginSide = 8 * density;
+
+                            float clampedX = Math.max(minMarginSide, Math.min(targetX, parentWidth - containerWidth - minMarginSide));
+                            float clampedY = Math.max(minMarginTop, Math.min(targetY, parentHeight - containerHeight - minMarginBottom));
+
+                            floatingMenuContainer.setTranslationX(clampedX - floatingMenuContainer.getLeft());
+                            floatingMenuContainer.setTranslationY(clampedY - floatingMenuContainer.getTop());
+                        } else {
+                            floatingMenuContainer.setTranslationX(floatInitialX + dx);
+                            floatingMenuContainer.setTranslationY(floatInitialY + dy);
+                        }
                     }
                     return true;
 
@@ -677,7 +696,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void toggleFullscreen(boolean fullscreen) {
         isFullscreen = fullscreen;
-        appBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
         bottomNavBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
         btnFloatFullscreen.setText(fullscreen ? "✕" : "⛶");
         Toast.makeText(this, fullscreen ? "已进入沉浸模式 (可拖拽悬浮球随时切换)" : "已退出全屏", Toast.LENGTH_SHORT).show();
@@ -736,6 +754,22 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "正在重新连接终端...", Toast.LENGTH_SHORT).show();
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
+
+        // 🤖 AI 终端快捷对话
+        btnTermAiChat.setOnClickListener(v -> {
+            if (terminalSession != null) {
+                terminalSession.write("pi\n");
+                Toast.makeText(this, "正在启动 AI 实时交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // 👁️ 实时追踪 AI 动态
+        btnTermAiWatch.setOnClickListener(v -> {
+            if (terminalSession != null) {
+                terminalSession.write("tail -f -n 50 /root/pi-web.log\n");
+                Toast.makeText(this, "正在实时追踪后台 AI 工作日志 (退出追踪请按 ⛔ 按钮)...", Toast.LENGTH_SHORT).show();
+            }
+        });
 
         btnClear.setOnClickListener(v -> {
             terminalBuffer.clear();

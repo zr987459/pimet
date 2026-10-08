@@ -5,73 +5,6 @@
     android:background="#0D1117"
     android:orientation="vertical">
 
-    <!-- 顶部应用标题栏 (App Bar) -->
-    <LinearLayout
-        android:id="@+id/appBar"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="#161B22"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="12dp">
-
-        <FrameLayout
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_logo">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="🤖"
-                android:textSize="18sp" />
-        </FrameLayout>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/topBarTitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="PiMet"
-                android:textColor="#F0F6FC"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/topBarSubtitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="PRoot Linux · Pi Coding Agent"
-                android:textColor="#8B949E"
-                android:textSize="11sp" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/btnTopBrowser"
-            android:layout_width="wrap_content"
-            android:layout_height="32dp"
-            android:background="@drawable/bg_btn_secondary"
-            android:gravity="center"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:text="↗ 外部打开"
-            android:textColor="#C9D1D9"
-            android:textSize="12sp" />
-    </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="#21262D" />
-
     <!-- 主体内容区域 (4个页面切换) -->
     <FrameLayout
         android:id="@+id/mainContentContainer"
@@ -628,12 +561,24 @@
                     android:gravity="center_horizontal"
                     android:orientation="vertical">
 
-                    <!-- 垂直展开的功能菜单 (竖向显示功能) -->
+                    <!-- 可拖拽移动的微型主悬浮球 (居顶部，手势抓手) -->
+                    <TextView
+                        android:id="@+id/floatingBall"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="@drawable/bg_floating_ball"
+                        android:elevation="6dp"
+                        android:gravity="center"
+                        android:text="⚡"
+                        android:textColor="#58A6FF"
+                        android:textSize="18sp" />
+
+                    <!-- 垂直展开的功能菜单 (在悬浮球下方竖向展开) -->
                     <LinearLayout
                         android:id="@+id/floatingMenuVertical"
                         android:layout_width="50dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginBottom="8dp"
+                        android:layout_marginTop="8dp"
                         android:background="@drawable/bg_floating_menu"
                         android:gravity="center_horizontal"
                         android:orientation="vertical"
@@ -699,18 +644,6 @@
                             android:textColor="#8B949E"
                             android:textSize="12sp" />
                     </LinearLayout>
-
-                    <!-- 可拖拽移动的微型主悬浮球 -->
-                    <TextView
-                        android:id="@+id/floatingBall"
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="@drawable/bg_floating_ball"
-                        android:elevation="6dp"
-                        android:gravity="center"
-                        android:text="⚡"
-                        android:textColor="#58A6FF"
-                        android:textSize="18sp" />
                 </LinearLayout>
             </FrameLayout>
         </FrameLayout>
@@ -723,58 +656,63 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 终端顶部操作栏 (带字号控制与快速切工作台) -->
+            <!-- 终端顶部操作栏 (AI 对话 / 实时动态 / 重连 / 快捷操作) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:background="#161B22"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp">
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp">
 
                 <TextView
                     android:id="@+id/termTitleTv"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="💻 PRoot 终端"
+                    android:text="💻 AI 终端"
                     android:textColor="#58A6FF"
                     android:textSize="12sp"
                     android:textStyle="bold" />
 
-                <!-- 字体调小 / 调大 -->
+                <!-- 🤖 AI 对话快捷启动入口 -->
                 <TextView
-                    android:id="@+id/btnTermFontDec"
-                    android:layout_width="26dp"
+                    android:id="@+id/btnTermAiChat"
+                    android:layout_width="wrap_content"
                     android:layout_height="26dp"
-                    android:background="@drawable/bg_btn_secondary"
+                    android:background="@drawable/bg_btn_primary"
                     android:gravity="center"
-                    android:text="A-"
-                    android:textColor="#C9D1D9"
-                    android:textSize="10sp" />
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="🤖 AI 对话"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
 
+                <!-- 👁️ 实时追踪 AI 动态 -->
                 <TextView
-                    android:id="@+id/btnTermFontInc"
-                    android:layout_width="26dp"
+                    android:id="@+id/btnTermAiWatch"
+                    android:layout_width="wrap_content"
                     android:layout_height="26dp"
                     android:layout_marginStart="4dp"
                     android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:text="A+"
-                    android:textColor="#C9D1D9"
-                    android:textSize="10sp" />
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="👁️ AI 动态"
+                    android:textColor="#3FB950"
+                    android:textSize="11sp" />
 
                 <TextView
                     android:id="@+id/btnTermReconnect"
                     android:layout_width="wrap_content"
                     android:layout_height="26dp"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="4dp"
                     android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="🔄 重连"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:text="🔄"
                     android:textColor="#58A6FF"
                     android:textSize="11sp" />
 
@@ -782,12 +720,12 @@
                     android:id="@+id/btnClear"
                     android:layout_width="wrap_content"
                     android:layout_height="26dp"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="4dp"
                     android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="🧹 清屏"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:text="🧹"
                     android:textColor="#C9D1D9"
                     android:textSize="11sp" />
 
@@ -795,13 +733,35 @@
                     android:id="@+id/btnCtrlC"
                     android:layout_width="wrap_content"
                     android:layout_height="26dp"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="4dp"
                     android:background="@drawable/bg_btn_danger"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="⛔ Ctrl+C"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:text="⛔"
                     android:textColor="#FCA5A5"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/btnTermFontDec"
+                    android:layout_width="22dp"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="2dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="-"
+                    android:textColor="#C9D1D9"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/btnTermFontInc"
+                    android:layout_width="22dp"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="2dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="+"
+                    android:textColor="#C9D1D9"
                     android:textSize="11sp" />
 
                 <!-- 右上角极速切回工作台入口 -->
@@ -809,13 +769,13 @@
                     android:id="@+id/btnTermQuickWeb"
                     android:layout_width="wrap_content"
                     android:layout_height="26dp"
-                    android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_btn_primary"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="🌐 工作台"
-                    android:textColor="#FFFFFF"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
+                    android:text="🌐"
+                    android:textColor="#58A6FF"
                     android:textSize="11sp" />
             </LinearLayout>
 
@@ -1144,7 +1104,7 @@
                     android:layout_weight="1"
                     android:background="#0D1117"
                     android:fontFamily="monospace"
-                    android:hint="输入 Linux 命令并回车..."
+                    android:hint="输入指令或与 AI 对话内容..."
                     android:imeOptions="actionSend"
                     android:inputType="text"
                     android:paddingStart="10dp"
