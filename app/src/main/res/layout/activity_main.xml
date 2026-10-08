@@ -824,66 +824,6 @@
                 android:layout_height="1dp"
                 android:background="#21262D" />
 
-            <!-- 多窗口 / 多会话 Tab 栏 (DSHA Terminal Tabs) -->
-            <HorizontalScrollView
-                android:layout_width="match_parent"
-                android:layout_height="32dp"
-                android:background="#11151C"
-                android:scrollbars="none">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp">
-
-                    <TextView
-                        android:id="@+id/tabTermSession1"
-                        android:layout_width="wrap_content"
-                        android:layout_height="24dp"
-                        android:background="@drawable/bg_btn_primary"
-                        android:gravity="center"
-                        android:paddingStart="10dp"
-                        android:paddingEnd="10dp"
-                        android:text="终端 1 (主会话)"
-                        android:textColor="#FFFFFF"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/tabTermSession2"
-                        android:layout_width="wrap_content"
-                        android:layout_height="24dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="10dp"
-                        android:paddingEnd="10dp"
-                        android:text="终端 2"
-                        android:textColor="#8B949E"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/btnTermNewSession"
-                        android:layout_width="wrap_content"
-                        android:layout_height="24dp"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="+ 监控"
-                        android:textColor="#58A6FF"
-                        android:textSize="11sp" />
-                </LinearLayout>
-            </HorizontalScrollView>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#21262D" />
-
             <!-- 终端日志回显框 -->
             <ScrollView
                 android:id="@+id/terminalScrollView"

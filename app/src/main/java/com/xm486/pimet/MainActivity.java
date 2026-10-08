@@ -121,10 +121,11 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnTermFontInc;
     private View btnTermQuickWeb;
     private View btnTermReconnect;
-    private TextView tabTermSession1;
-    private TextView tabTermSession2;
-    private View btnTermNewSession;
     private float currentTermFontSize = 12.0f;
+    private ProotSession terminalSession;
+    private final AnsiParser terminalAnsi = new AnsiParser();
+    private final SpannableStringBuilder terminalBuffer = new SpannableStringBuilder();
+    private boolean isTerminalStarted = false;
 
     // 布局全屏与增强组件
     private View appBar;
@@ -168,25 +169,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsStorageTv;
     private View btnClearNpmCache;
     private View btnResetContainer;
-
-    // 多终端会话管理 (Multi-Session Terminal)
-    private static class TermSessionHolder {
-        ProotSession session;
-        final SpannableStringBuilder buffer = new SpannableStringBuilder();
-        final AnsiParser ansi = new AnsiParser();
-        boolean started = false;
-        final String name;
-
-        TermSessionHolder(String name) {
-            this.name = name;
-        }
-    }
-
-    private final TermSessionHolder[] termSessions = new TermSessionHolder[]{
-            new TermSessionHolder("终端 1 (主会话)"),
-            new TermSessionHolder("终端 2")
-    };
-    private int activeSessionIdx = 0;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isPiWebAlive = false;
@@ -289,9 +271,6 @@ public class MainActivity extends AppCompatActivity {
         btnClear = findViewById(R.id.btnClear);
         btnCtrlC = findViewById(R.id.btnCtrlC);
         btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
-        tabTermSession1 = findViewById(R.id.tabTermSession1);
-        tabTermSession2 = findViewById(R.id.tabTermSession2);
-        btnTermNewSession = findViewById(R.id.btnTermNewSession);
         terminalOutput = findViewById(R.id.terminalOutput);
         terminalScrollView = findViewById(R.id.terminalScrollView);
         commandInput = findViewById(R.id.commandInput);
@@ -346,6 +325,11 @@ public class MainActivity extends AppCompatActivity {
             refreshLaunchLog();
         } else if (index == 1) {
             updatePiWebDisplay();
+        } else if (index == 2) {
+            if (!isTerminalStarted || terminalSession == null || !terminalSession.isRunning()) {
+                startTerminalSession();
+            }
+            terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
         } else if (index == 3) {
             refreshStorageSize();
         }
@@ -465,7 +449,6 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onLog(String log) {
                 appendLaunchLog(log);
-                appendTerminalLog(log);
             }
 
             @Override
@@ -552,13 +535,9 @@ public class MainActivity extends AppCompatActivity {
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
                         // 重置终端会话状态，允许进入时立即启动 Bash
-                        for (TermSessionHolder holder : termSessions) {
-                            if (holder != null) {
-                                holder.started = false;
-                                if (holder.session != null) {
-                                    holder.session.close();
-                                }
-                            }
+                        isTerminalStarted = false;
+                        if (terminalSession != null) {
+                            terminalSession.close();
                         }
                         startPiWebService();
                     });
@@ -733,7 +712,7 @@ public class MainActivity extends AppCompatActivity {
         piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
     }
 
-    // ================= PRoot 终端 (多窗口 / 专业快捷键) =================
+    // ================= PRoot 终端 (单会话 / 专业快捷键) =================
     private void initTerminalPanel() {
         btnSend.setOnClickListener(v -> sendCommand());
         commandInput.setOnEditorActionListener((v, actionId, event) -> {
@@ -749,33 +728,25 @@ public class MainActivity extends AppCompatActivity {
 
         // 右上角快速重连与切回工作台
         btnTermReconnect.setOnClickListener(v -> {
-            TermSessionHolder cur = termSessions[activeSessionIdx];
-            if (cur.session != null) {
-                cur.session.close();
+            if (terminalSession != null) {
+                terminalSession.close();
             }
-            cur.started = false;
-            startSession(activeSessionIdx);
+            isTerminalStarted = false;
+            startTerminalSession();
             Toast.makeText(this, "正在重新连接终端...", Toast.LENGTH_SHORT).show();
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
-        // 多会话 Tab 切换
-        tabTermSession1.setOnClickListener(v -> selectSession(0));
-        tabTermSession2.setOnClickListener(v -> selectSession(1));
-        btnTermNewSession.setOnClickListener(v -> selectSession(1));
-
         btnClear.setOnClickListener(v -> {
-            TermSessionHolder cur = termSessions[activeSessionIdx];
-            cur.buffer.clear();
-            cur.ansi.reset();
+            terminalBuffer.clear();
+            terminalAnsi.reset();
             terminalOutput.setText("");
         });
 
         btnCtrlC.setOnClickListener(v -> {
-            TermSessionHolder cur = termSessions[activeSessionIdx];
-            if (cur.session != null) {
-                cur.session.sendCtrlC();
-                Toast.makeText(this, "已向终端 " + (activeSessionIdx + 1) + " 发送 Ctrl+C", Toast.LENGTH_SHORT).show();
+            if (terminalSession != null) {
+                terminalSession.sendCtrlC();
+                Toast.makeText(this, "已发送 Ctrl+C", Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -812,96 +783,59 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void selectSession(int idx) {
-        if (idx < 0 || idx >= termSessions.length) return;
-        activeSessionIdx = idx;
-        TermSessionHolder cur = termSessions[idx];
-        if (!cur.started || cur.session == null || !cur.session.isRunning()) {
-            startSession(idx);
-        }
-        updateSessionTabUi();
-        terminalOutput.setText(termSessions[idx].buffer);
-        terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
-    }
-
-    private void updateSessionTabUi() {
-        if (activeSessionIdx == 0) {
-            tabTermSession1.setBackgroundResource(R.drawable.bg_btn_primary);
-            tabTermSession1.setTextColor(0xFFFFFFFF);
-            tabTermSession2.setBackgroundResource(R.drawable.bg_btn_secondary);
-            tabTermSession2.setTextColor(0xFF8B949E);
-            termTitleTv.setText("💻 PRoot 终端 (会话 1)");
-        } else {
-            tabTermSession1.setBackgroundResource(R.drawable.bg_btn_secondary);
-            tabTermSession1.setTextColor(0xFF8B949E);
-            tabTermSession2.setBackgroundResource(R.drawable.bg_btn_primary);
-            tabTermSession2.setTextColor(0xFFFFFFFF);
-            termTitleTv.setText("💻 PRoot 终端 (会话 2)");
-        }
-    }
-
     private void setupKeyButton(int viewId, String keySequence) {
         View v = findViewById(viewId);
         if (v != null) {
             v.setOnClickListener(view -> {
-                TermSessionHolder cur = termSessions[activeSessionIdx];
-                if (cur != null && cur.session != null) {
-                    cur.session.write(keySequence);
+                if (terminalSession != null) {
+                    terminalSession.write(keySequence);
                 }
             });
         }
     }
 
-    private void startSession(int idx) {
-        TermSessionHolder holder = termSessions[idx];
-        if (holder.session != null && holder.session.isRunning()) return;
+    private void startTerminalSession() {
+        if (terminalSession != null && terminalSession.isRunning()) return;
 
         if (!ProotManager.isRootfsInstalled(this)) {
-            holder.started = false;
-            holder.buffer.clear();
-            holder.ansi.reset();
-            holder.buffer.append("\u001B[33m• Linux 容器系统尚未部署，请先在【控制中心】点击一键部署！\u001B[0m\r\n");
-            if (activeSessionIdx == idx) {
-                terminalOutput.setText(holder.buffer);
-            }
+            isTerminalStarted = false;
+            terminalBuffer.clear();
+            terminalAnsi.reset();
+            terminalBuffer.append("\u001B[33m• Linux 容器系统尚未部署，请先在【控制中心】点击一键部署！\u001B[0m\r\n");
+            terminalOutput.setText(terminalBuffer);
             return;
         }
 
-        holder.buffer.clear();
-        holder.ansi.reset();
-        holder.started = true;
-        if (holder.session != null) {
-            holder.session.close();
+        terminalBuffer.clear();
+        terminalAnsi.reset();
+        isTerminalStarted = true;
+        if (terminalSession != null) {
+            terminalSession.close();
         }
-        holder.session = new ProotSession(this, new ProotSession.OutputListener() {
+        terminalSession = new ProotSession(this, new ProotSession.OutputListener() {
             @Override
             public void onOutput(String text) {
-                appendTerminalLog(idx, text);
+                appendTerminalLog(text);
             }
 
             @Override
             public void onExit(int code) {
-                holder.started = false;
-                appendTerminalLog(idx, "\n\u001B[33m[会话 " + (idx + 1) + " 已退出, 退出码: " + code + ", 点击右上角重连]\u001B[0m\n");
+                isTerminalStarted = false;
+                appendTerminalLog("\n\u001B[33m[终端已退出, 退出码: " + code + ", 点击右上角重连]\u001B[0m\n");
             }
         });
-        holder.session.start();
+        terminalSession.start();
     }
 
     private void appendTerminalLog(String text) {
-        appendTerminalLog(activeSessionIdx, text);
-    }
-
-    private void appendTerminalLog(int sessionIdx, String text) {
         if (text == null) return;
         mainHandler.post(() -> {
-            TermSessionHolder holder = termSessions[sessionIdx];
-            holder.ansi.appendAnsiText(holder.buffer, text);
-            if (holder.buffer.length() > 30000) {
-                holder.buffer.delete(0, 6000);
+            terminalAnsi.appendAnsiText(terminalBuffer, text);
+            if (terminalBuffer.length() > 30000) {
+                terminalBuffer.delete(0, 6000);
             }
-            if (activeSessionIdx == sessionIdx) {
-                terminalOutput.setText(holder.buffer);
+            if (viewTerminal.getVisibility() == View.VISIBLE) {
+                terminalOutput.setText(terminalBuffer);
                 terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
             }
         });
@@ -909,9 +843,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendCommand() {
         String cmd = commandInput.getText().toString();
-        TermSessionHolder cur = termSessions[activeSessionIdx];
-        if (cur != null && cur.session != null && !TextUtils.isEmpty(cmd)) {
-            cur.session.write(cmd + "\n");
+        if (terminalSession != null && !TextUtils.isEmpty(cmd)) {
+            terminalSession.write(cmd + "\n");
             commandInput.setText("");
         }
     }
@@ -991,9 +924,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnClearNpmCache.setOnClickListener(v -> {
-            TermSessionHolder cur = termSessions[activeSessionIdx];
-            if (cur != null && cur.session != null) {
-                cur.session.write("npm cache clean --force\n");
+            if (terminalSession != null) {
+                terminalSession.write("npm cache clean --force\n");
                 Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
                 switchTab(2);
             }
@@ -1225,10 +1157,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        for (TermSessionHolder holder : termSessions) {
-            if (holder != null && holder.session != null) {
-                holder.session.close();
-            }
+        if (terminalSession != null) {
+            terminalSession.close();
         }
     }
 }
