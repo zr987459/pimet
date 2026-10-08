@@ -47,6 +47,8 @@ import com.xm486.pimet.proot.PiWebManager;
 import com.xm486.pimet.proot.ProotManager;
 import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
+import com.xm486.pimet.pet.PetRegistry;
+import com.xm486.pimet.pet.SpritePetView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -81,14 +83,33 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout tabLaunch;
     private LinearLayout tabPiWeb;
     private LinearLayout tabPlugins;
-    private LinearLayout tabTerminal;
     private LinearLayout tabSettings;
 
     private TextView tabLaunchText;
     private TextView tabPiWebText;
     private TextView tabPluginsText;
-    private TextView tabTerminalText;
     private TextView tabSettingsText;
+
+    // 操控台融合终端控制组件
+    private TextView btnTermMaximize;
+    private TextView btnTermClose;
+    private boolean isTermMaximized = false;
+
+    // 桌面宠物组件
+    private SpritePetView floatingPetView;
+    private LinearLayout petBubbleLayout;
+    private TextView petBubbleTv;
+    private TextView btnFloatPetSwitch;
+    private TextView tvCurrentPetName;
+    private TextView btnTogglePetEnabled;
+    private TextView btnSelectPet;
+    private final Handler petBubbleHandler = new Handler(Looper.getMainLooper());
+    private final Runnable petBubbleDismissRunnable = () -> {
+        if (petBubbleLayout != null) {
+            petBubbleLayout.setVisibility(View.GONE);
+        }
+    };
+    private int petInteractionCount = 0;
 
     // 插件面板组件
     private View btnSyncPluginsAll;
@@ -337,17 +358,15 @@ public class MainActivity extends AppCompatActivity {
         viewTerminal = findViewById(R.id.viewTerminal);
         viewSettings = findViewById(R.id.viewSettings);
 
-        // 底栏 Tab
+        // 底栏 Tab (4 栏: 启动, 操控台, 插件, 设置)
         tabLaunch = findViewById(R.id.tabLaunch);
         tabPiWeb = findViewById(R.id.tabPiWeb);
         tabPlugins = findViewById(R.id.tabPlugins);
-        tabTerminal = findViewById(R.id.tabTerminal);
         tabSettings = findViewById(R.id.tabSettings);
 
         tabLaunchText = findViewById(R.id.tabLaunchText);
         tabPiWebText = findViewById(R.id.tabPiWebText);
         tabPluginsText = findViewById(R.id.tabPluginsText);
-        tabTerminalText = findViewById(R.id.tabTerminalText);
         tabSettingsText = findViewById(R.id.tabSettingsText);
 
         // 底栏导航
@@ -385,6 +404,10 @@ public class MainActivity extends AppCompatActivity {
         floatingMenuContainer = findViewById(R.id.floatingMenuContainer);
         floatingMenuVertical = findViewById(R.id.floatingMenuVertical);
         floatingBall = findViewById(R.id.floatingBall);
+        floatingPetView = findViewById(R.id.floatingPetView);
+        petBubbleLayout = findViewById(R.id.petBubbleLayout);
+        petBubbleTv = findViewById(R.id.petBubbleTv);
+        btnFloatPetSwitch = findViewById(R.id.btnFloatPetSwitch);
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
         btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
         btnFloatReload = findViewById(R.id.btnFloatReload);
@@ -393,7 +416,9 @@ public class MainActivity extends AppCompatActivity {
         btnFloatBrowser = findViewById(R.id.btnFloatBrowser);
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
-        // Terminal 组件
+        // Terminal 组件 (操控台内置)
+        btnTermMaximize = findViewById(R.id.btnTermMaximize);
+        btnTermClose = findViewById(R.id.btnTermClose);
         termToolbarContainer = findViewById(R.id.termToolbarContainer);
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
@@ -445,6 +470,11 @@ public class MainActivity extends AppCompatActivity {
         btnTermClipboard = findViewById(R.id.btnTermClipboard);
         btnFloatClipboard = findViewById(R.id.btnFloatClipboard);
 
+        // 桌面宠物设置组件
+        tvCurrentPetName = findViewById(R.id.tvCurrentPetName);
+        btnTogglePetEnabled = findViewById(R.id.btnTogglePetEnabled);
+        btnSelectPet = findViewById(R.id.btnSelectPet);
+
         // 终端多窗口 Tab 容器与新建按钮
         termTabsContainer = findViewById(R.id.termTabsContainer);
         btnNewTab = findViewById(R.id.btnNewTab);
@@ -457,16 +487,14 @@ public class MainActivity extends AppCompatActivity {
         tabLaunch.setOnClickListener(v -> switchTab(0));
         tabPiWeb.setOnClickListener(v -> switchTab(1));
         if (tabPlugins != null) tabPlugins.setOnClickListener(v -> switchTab(2));
-        tabTerminal.setOnClickListener(v -> switchTab(3));
-        tabSettings.setOnClickListener(v -> switchTab(4));
+        tabSettings.setOnClickListener(v -> switchTab(3));
     }
 
     private void switchTab(int index) {
         viewLaunch.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
         if (viewPlugins != null) viewPlugins.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
-        viewTerminal.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
-        viewSettings.setVisibility(index == 4 ? View.VISIBLE : View.GONE);
+        viewSettings.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
 
         // 更新底栏颜色
         int activeColor = 0xFF58A6FF;
@@ -475,8 +503,7 @@ public class MainActivity extends AppCompatActivity {
         tabLaunchText.setTextColor(index == 0 ? activeColor : normalColor);
         tabPiWebText.setTextColor(index == 1 ? activeColor : normalColor);
         if (tabPluginsText != null) tabPluginsText.setTextColor(index == 2 ? activeColor : normalColor);
-        tabTerminalText.setTextColor(index == 3 ? activeColor : normalColor);
-        tabSettingsText.setTextColor(index == 4 ? activeColor : normalColor);
+        tabSettingsText.setTextColor(index == 3 ? activeColor : normalColor);
 
         if (index == 0) {
             checkServiceStatus();
@@ -486,23 +513,100 @@ public class MainActivity extends AppCompatActivity {
         } else if (index == 2) {
             // 插件与生态中心
         } else if (index == 3) {
-            if (terminalTabs.isEmpty()) {
-                createTab(true);
-            } else {
-                TerminalTab active = getActiveTab();
-                if (active != null) {
-                    terminalOutput.setText(active.buffer);
-                    if (active.session == null || !active.session.isRunning()) {
-                        restartActiveTab();
-                    }
-                }
-            }
-            refreshTabsUi();
-            terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
-        } else if (index == 4) {
             refreshStorageSize();
             refreshPrivilegeStatus();
+            if (tvCurrentPetName != null) {
+                tvCurrentPetName.setText("当前角色: " + PetRegistry.getPetDir(this) + " (全屏时悬浮桌宠互动/拖动有奔跑动作)");
+            }
         }
+    }
+
+    public void openTerminalInWorkbench() {
+        switchTab(1);
+        if (viewTerminal != null) {
+            viewTerminal.setVisibility(View.VISIBLE);
+        }
+        if (terminalTabs.isEmpty()) {
+            createTab(true);
+        } else {
+            TerminalTab active = getActiveTab();
+            if (active != null) {
+                terminalOutput.setText(active.buffer);
+                if (active.session == null || !active.session.isRunning()) {
+                    restartActiveTab();
+                }
+            }
+        }
+        refreshTabsUi();
+        terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+    }
+
+    public void closeTerminalInWorkbench() {
+        if (viewTerminal != null) {
+            viewTerminal.setVisibility(View.GONE);
+        }
+    }
+
+    public void toggleTerminalInWorkbench() {
+        if (viewTerminal != null) {
+            if (viewTerminal.getVisibility() == View.VISIBLE) {
+                closeTerminalInWorkbench();
+            } else {
+                openTerminalInWorkbench();
+            }
+        }
+    }
+
+    private void showPetBubble(String msg) {
+        if (petBubbleLayout != null && petBubbleTv != null) {
+            petBubbleTv.setText(msg);
+            petBubbleLayout.setVisibility(View.VISIBLE);
+            petBubbleHandler.removeCallbacks(petBubbleDismissRunnable);
+            petBubbleHandler.postDelayed(petBubbleDismissRunnable, 3500);
+        }
+    }
+
+    private void updatePetDisplay(boolean isPetEnabled) {
+        if (floatingPetView == null || floatingBall == null) return;
+        boolean shouldShowPet = isPetEnabled || isFullscreen;
+        if (shouldShowPet) {
+            floatingPetView.setVisibility(View.VISIBLE);
+            floatingBall.setVisibility(View.GONE);
+            floatingPetView.startTicker();
+        } else {
+            floatingPetView.setVisibility(View.GONE);
+            floatingBall.setVisibility(View.VISIBLE);
+            floatingPetView.stopTicker();
+        }
+        if (tvCurrentPetName != null) {
+            tvCurrentPetName.setText("当前角色: " + PetRegistry.getPetDir(this) + " (全屏时悬浮桌宠互动/拖动有奔跑动作)");
+        }
+        if (btnTogglePetEnabled != null) {
+            btnTogglePetEnabled.setText(isPetEnabled ? "🐾 桌宠模式: 开启" : "⚪ 桌宠模式: 关闭");
+        }
+    }
+
+    private void showPetSwitchDialog() {
+        java.util.List<PetRegistry.PetInfo> pets = PetRegistry.loadPets(this);
+        String[] names = new String[pets.size()];
+        for (int i = 0; i < pets.size(); i++) {
+            names[i] = pets.get(i).displayName + " (" + pets.get(i).dir + ")";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("🐾 选择切换桌宠伙伴")
+                .setItems(names, (dialog, which) -> {
+                    PetRegistry.PetInfo selected = pets.get(which);
+                    PetRegistry.setPetDir(this, selected.dir);
+                    if (floatingPetView != null) {
+                        floatingPetView.setPetDir(selected.dir);
+                        floatingPetView.playOneShot("waving");
+                    }
+                    updatePetDisplay(PetRegistry.isPetEnabled(this));
+                    showPetBubble("主人~ 我是 " + selected.displayName + "，请多关照！(≧∇≦)ﾉ");
+                    Toast.makeText(this, "已切换为桌宠: " + selected.displayName, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void initLaunchPanel() {
@@ -527,7 +631,7 @@ public class MainActivity extends AppCompatActivity {
 
         btnActionCopyUrl.setOnClickListener(v -> copyTextToClipboard(getPiWebUrl(), "访问地址已复制到剪切板"));
         btnActionOpenBrowser.setOnClickListener(v -> openExternalBrowser());
-        btnActionModelConfig.setOnClickListener(v -> switchTab(4));
+        btnActionModelConfig.setOnClickListener(v -> switchTab(3));
 
         updateLaunchModelDesc();
 
@@ -878,6 +982,78 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
 
+        // 桌面宠物自由拖拽交互、奔跑手势与互动动作
+        if (floatingPetView != null) {
+            floatingPetView.setOnTouchListener((v, event) -> {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        floatDownRawX = event.getRawX();
+                        floatDownRawY = event.getRawY();
+                        floatInitialX = floatingMenuContainer.getTranslationX();
+                        floatInitialY = floatingMenuContainer.getTranslationY();
+                        isFloatDragging = false;
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        float dx = event.getRawX() - floatDownRawX;
+                        float dy = event.getRawY() - floatDownRawY;
+                        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+                            isFloatDragging = true;
+                            // 拖动方向灵敏检测 -> 奔跑逐帧动画切换
+                            if (dx > 4) {
+                                floatingPetView.setMoveDirection(1);
+                            } else if (dx < -4) {
+                                floatingPetView.setMoveDirection(-1);
+                            }
+
+                            View parent = (View) floatingMenuContainer.getParent();
+                            if (parent != null) {
+                                int parentWidth = parent.getWidth();
+                                int parentHeight = parent.getHeight();
+                                int containerWidth = floatingMenuContainer.getWidth();
+                                int containerHeight = floatingMenuContainer.getHeight();
+
+                                float targetX = floatingMenuContainer.getLeft() + floatInitialX + dx;
+                                float targetY = floatingMenuContainer.getTop() + floatInitialY + dy;
+
+                                float density = getResources().getDisplayMetrics().density;
+                                float minMarginTop = 32 * density;
+                                float minMarginBottom = 16 * density;
+                                float minMarginSide = 8 * density;
+
+                                float clampedX = Math.max(minMarginSide, Math.min(targetX, parentWidth - containerWidth - minMarginSide));
+                                float clampedY = Math.max(minMarginTop, Math.min(targetY, parentHeight - containerHeight - minMarginBottom));
+
+                                floatingMenuContainer.setTranslationX(clampedX - floatingMenuContainer.getLeft());
+                                floatingMenuContainer.setTranslationY(clampedY - floatingMenuContainer.getTop());
+                            } else {
+                                floatingMenuContainer.setTranslationX(floatInitialX + dx);
+                                floatingMenuContainer.setTranslationY(floatInitialY + dy);
+                            }
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_UP:
+                        floatingPetView.setMoveDirection(0); // 停止跑步恢复呼吸
+                        if (!isFloatDragging) {
+                            // 点击交互：交替触发挥手与跳跃动作，并弹出气泡互动
+                            if (petInteractionCount++ % 2 == 0) {
+                                floatingPetView.playOneShot("waving");
+                                showPetBubble("主人~ 终端与工作台就绪！(ฅ'ω'ฅ)");
+                            } else {
+                                floatingPetView.playOneShot("jumping");
+                                showPetBubble("随时准备为您服务~ ⚡");
+                            }
+                            toggleFloatingMenu();
+                        }
+                        return true;
+                }
+                return false;
+            });
+        }
+
+        updatePetDisplay(PetRegistry.isPetEnabled(this));
+
         btnFloatClose.setOnClickListener(v -> floatingMenuVertical.setVisibility(View.GONE));
         btnFloatFullscreen.setOnClickListener(v -> {
             toggleFullscreen(!isFullscreen);
@@ -885,8 +1061,14 @@ public class MainActivity extends AppCompatActivity {
         });
         btnFloatTerminal.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
-            switchTab(3);
+            toggleTerminalInWorkbench();
         });
+        if (btnFloatPetSwitch != null) {
+            btnFloatPetSwitch.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                showPetSwitchDialog();
+            });
+        }
         btnFloatReload.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
             if (isPiWebAlive) {
@@ -937,7 +1119,12 @@ public class MainActivity extends AppCompatActivity {
         isFullscreen = fullscreen;
         bottomNavBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
         btnFloatFullscreen.setText(fullscreen ? "✕" : "⛶");
-        Toast.makeText(this, fullscreen ? "已进入沉浸模式 (可拖拽悬浮球随时切换)" : "已退出全屏", Toast.LENGTH_SHORT).show();
+        updatePetDisplay(PetRegistry.isPetEnabled(this));
+        if (fullscreen && floatingPetView != null) {
+            floatingPetView.playOneShot("waving");
+            showPetBubble("已进入全屏沉浸模式！ฅ'ω'ฅ");
+        }
+        Toast.makeText(this, fullscreen ? "已进入沉浸模式 (桌宠悬浮常驻)" : "已退出全屏", Toast.LENGTH_SHORT).show();
     }
 
     private void updatePiWebDisplay() {
@@ -977,6 +1164,25 @@ public class MainActivity extends AppCompatActivity {
             return true;
         });
 
+        // 内置终端抽屉折叠与最大化控制
+        if (btnTermClose != null) {
+            btnTermClose.setOnClickListener(v -> closeTerminalInWorkbench());
+        }
+        if (btnTermMaximize != null) {
+            btnTermMaximize.setOnClickListener(v -> {
+                isTermMaximized = !isTermMaximized;
+                ViewGroup.LayoutParams lp = viewTerminal.getLayoutParams();
+                if (isTermMaximized) {
+                    lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+                    btnTermMaximize.setText("⇲ 半屏");
+                } else {
+                    lp.height = (int) (350 * getResources().getDisplayMetrics().density);
+                    btnTermMaximize.setText("⛶ 最大化");
+                }
+                viewTerminal.setLayoutParams(lp);
+            });
+        }
+
         // 字体缩放控制
         currentTermFontSize = PiMetConfig.getTermFontSize(this);
         terminalOutput.setTextSize(currentTermFontSize);
@@ -988,7 +1194,7 @@ public class MainActivity extends AppCompatActivity {
             restartActiveTab();
             Toast.makeText(this, "正在重新连接当前窗口...", Toast.LENGTH_SHORT).show();
         });
-        btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
+        btnTermQuickWeb.setOnClickListener(v -> closeTerminalInWorkbench());
 
         // 🤖 AI 终端快捷对话: 连续交互终端、快捷单次提问与工作台直达
         btnTermAiChat.setOnClickListener(v -> handleAiChatClick());
@@ -1784,7 +1990,7 @@ public class MainActivity extends AppCompatActivity {
         btnClearNpmCache.setOnClickListener(v -> {
             executeCommand("npm cache clean --force\n");
             Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
-            switchTab(3);
+            openTerminalInWorkbench();
         });
 
         btnResetContainer.setOnClickListener(v -> {
@@ -1875,6 +2081,19 @@ public class MainActivity extends AppCompatActivity {
 
         // 剪贴板即时同步
         btnSyncClipboard.setOnClickListener(v -> syncClipboardToContainer(true));
+
+        // 桌面宠物设置
+        if (btnTogglePetEnabled != null) {
+            btnTogglePetEnabled.setOnClickListener(v -> {
+                boolean enabled = !PetRegistry.isPetEnabled(this);
+                PetRegistry.setPetEnabled(this, enabled);
+                updatePetDisplay(enabled);
+                Toast.makeText(this, enabled ? "已开启桌宠悬浮形态" : "已切换为极简悬浮球", Toast.LENGTH_SHORT).show();
+            });
+        }
+        if (btnSelectPet != null) {
+            btnSelectPet.setOnClickListener(v -> showPetSwitchDialog());
+        }
 
         refreshStorageSize();
         refreshPrivilegeStatus();
@@ -1994,7 +2213,7 @@ public class MainActivity extends AppCompatActivity {
             new AlertDialog.Builder(this)
                     .setTitle("⚠️ 请先配置 AI 密钥")
                     .setMessage("尚未检测到 AI 密钥 (如 DeepSeek、OpenAI、Claude 等)。\n\n请前往【设置】面板配置 API Key，保存后即可在终端与 AI 连续对话！")
-                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(4))
+                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(3))
                     .setNegativeButton("稍后再说", null)
                     .show();
             return;
@@ -2032,7 +2251,7 @@ public class MainActivity extends AppCompatActivity {
                             switchTab(1);
                             break;
                         case 3:
-                            switchTab(4);
+                            switchTab(3);
                             break;
                     }
                 })
@@ -2336,6 +2555,10 @@ public class MainActivity extends AppCompatActivity {
             floatingMenuVertical.setVisibility(View.GONE);
             return;
         }
+        if (viewTerminal != null && viewTerminal.getVisibility() == View.VISIBLE) {
+            closeTerminalInWorkbench();
+            return;
+        }
         if (isFullscreen) {
             toggleFullscreen(false);
             return;
@@ -2538,7 +2761,7 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "请输入需要安装的 npm 包名或插件名称", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                switchTab(3); // 切换至终端
+                openTerminalInWorkbench(); // 唤出工作台抽屉终端
                 TerminalTab active = getActiveTab();
                 if (active != null && active.session != null) {
                     active.session.write("npm install -g " + pkg + " --registry=" + PiMetConfig.getNpmRegistry(this) + "\n");
