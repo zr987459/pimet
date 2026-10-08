@@ -34,7 +34,6 @@ import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
 
 import java.io.File;
-import java.util.Arrays;
 
 /**
  * PiMet 主界面：深度融合 PRoot 独立 Linux 容器、全功能 Web 控制台、交互终端与系统设置
@@ -114,6 +113,8 @@ public class MainActivity extends AppCompatActivity {
     // 后台与状态调度
     private ProotSession prootSession;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final SpannableStringBuilder termBuffer = new SpannableStringBuilder();
+    private final AnsiParser ansiParser = new AnsiParser();
     private boolean isPiWebAlive = false;
     private boolean isDeploying = false;
 
@@ -334,12 +335,17 @@ public class MainActivity extends AppCompatActivity {
         launchStateTv.setText("正在拉起服务...");
         launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
 
-        PiWebManager.startPiWebDaemon(this, new PiWebManager.PiWebListener() {
+        PiWebManager.startOrDeploy(this, new PiWebManager.StateListener() {
             @Override
             public void onLog(String log) {
-                if (prootSession != null) {
-                    prootSession.appendOutput(log);
-                }
+                appendTerminalLog(log);
+            }
+
+            @Override
+            public void onProgress(String message, int percent) {
+                mainHandler.post(() -> {
+                    launchSubtitleTv.setText(message + " (" + percent + "%)");
+                });
             }
 
             @Override
@@ -385,27 +391,41 @@ public class MainActivity extends AppCompatActivity {
         launchProgressBar.setVisibility(View.VISIBLE);
         switchTab(2); // 自动切到终端查看实时输出
 
-        new Thread(() -> {
-            mainHandler.post(() -> appendTerminalLog("\u001B[33m🚀 开始执行一键部署流水线...\u001B[0m\n"));
+        appendTerminalLog("\u001B[33m🚀 开始执行一键部署流水线...\u001B[0m\n");
 
-            if (!ProotManager.isInstalled(this)) {
-                mainHandler.post(() -> appendTerminalLog("\u001B[36m• 正在从镜像源提取 Linux 根文件系统...\u001B[0m\n"));
-                boolean ok = ProotManager.installFromAssets(this);
-                if (!ok) {
+        if (!ProotManager.isRootfsInstalled(this)) {
+            appendTerminalLog("\u001B[36m• 正在从镜像源提取 Linux 根文件系统...\u001B[0m\n");
+            ProotManager.installRootfs(this, new ProotManager.InstallCallback() {
+                @Override
+                public void onProgress(String message, int percent) {
+                    mainHandler.post(() -> {
+                        appendTerminalLog("• " + message + " " + percent + "%\n");
+                    });
+                }
+
+                @Override
+                public void onSuccess() {
+                    mainHandler.post(() -> {
+                        appendTerminalLog("\u001B[32m✔ Linux 根系统部署完成！\u001B[0m\n");
+                        isDeploying = false;
+                        launchProgressBar.setVisibility(View.GONE);
+                        startPiWebService();
+                    });
+                }
+
+                @Override
+                public void onError(String error) {
                     mainHandler.post(() -> {
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
-                        appendTerminalLog("\u001B[31m❌ 根文件系统解压失败！\u001B[0m\n");
+                        appendTerminalLog("\u001B[31m❌ 根系统部署失败: " + error + "\u001B[0m\n");
                     });
-                    return;
                 }
-            }
-
-            mainHandler.post(() -> {
-                isDeploying = false;
-                startPiWebService();
             });
-        }).start();
+        } else {
+            isDeploying = false;
+            startPiWebService();
+        }
     }
 
     // ================= Pi-Web 工作台 =================
@@ -478,7 +498,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnClear.setOnClickListener(v -> {
-            if (prootSession != null) prootSession.clearBuffer();
+            termBuffer.clear();
+            ansiParser.reset();
             terminalOutput.setText("");
         });
 
@@ -521,17 +542,31 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startTerminalSession() {
-        prootSession = new ProotSession(this);
-        prootSession.setOutputListener(text -> mainHandler.post(() -> {
-            appendTerminalLog(text);
-        }));
-        prootSession.startSession();
+        prootSession = new ProotSession(this, new ProotSession.OutputListener() {
+            @Override
+            public void onOutput(String text) {
+                appendTerminalLog(text);
+            }
+
+            @Override
+            public void onExit(int code) {
+                appendTerminalLog("\n\u001B[33m[会话已结束, 退出码: " + code + "]\u001B[0m\n");
+            }
+        });
+        prootSession.start();
     }
 
     private void appendTerminalLog(String text) {
-        SpannableStringBuilder parsed = AnsiParser.parse(text);
-        terminalOutput.append(parsed);
-        terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        if (text == null) return;
+        mainHandler.post(() -> {
+            ansiParser.appendAnsiText(termBuffer, text);
+            // 终端显示最多保留 25000 字符，避免 OOM
+            if (termBuffer.length() > 25000) {
+                termBuffer.delete(0, 5000);
+            }
+            terminalOutput.setText(termBuffer);
+            terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        });
     }
 
     private void sendCommand() {
@@ -565,13 +600,13 @@ public class MainActivity extends AppCompatActivity {
 
         updateRegistryButtons();
         btnRegistryMirror.setOnClickListener(v -> {
-            PiMetConfig.setNpmRegistry(this, PiMetConfig.DEFAULT_NPM_REGISTRY);
+            PiMetConfig.setNpmRegistry(this, PiMetConfig.NPM_MIRROR_TAOBAO);
             updateRegistryButtons();
             Toast.makeText(this, "已切换为国内加速源", Toast.LENGTH_SHORT).show();
         });
 
         btnRegistryOfficial.setOnClickListener(v -> {
-            PiMetConfig.setNpmRegistry(this, PiMetConfig.OFFICIAL_NPM_REGISTRY);
+            PiMetConfig.setNpmRegistry(this, PiMetConfig.NPM_MIRROR_OFFICIAL);
             updateRegistryButtons();
             Toast.makeText(this, "已切换为官方 npm 源", Toast.LENGTH_SHORT).show();
         });
@@ -649,7 +684,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         if (prootSession != null) {
-            prootSession.destroy();
+            prootSession.close();
         }
     }
 }

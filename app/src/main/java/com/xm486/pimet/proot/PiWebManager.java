@@ -23,6 +23,7 @@ public final class PiWebManager {
 
     public interface StateListener {
         void onLog(String log);
+        default void onProgress(String message, int percent) {}
         void onStarted();
         void onError(String error);
     }
@@ -36,10 +37,11 @@ public final class PiWebManager {
         new Thread(() -> {
             Handler mainHandler = new Handler(Looper.getMainLooper());
             try {
-                if (ProotManager.isPiWebPortAlive()) {
+                int port = PiMetConfig.getWebPort(context);
+                if (ProotManager.isPiWebPortAlive(port)) {
                     mainHandler.post(() -> {
                         if (listener != null) {
-                            listener.onLog("\u001B[32m✔ Pi-Web 已在本地端口 30141 运行中\u001B[0m\n");
+                            listener.onLog("\u001B[32m✔ Pi-Web 已在本地端口 " + port + " 运行中\u001B[0m\n");
                             listener.onStarted();
                         }
                     });
