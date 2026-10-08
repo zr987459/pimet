@@ -128,8 +128,8 @@ public class DeployScriptGenerator {
         sb.append("  npm config set prefix \"$NPM_CONFIG_PREFIX\" >/dev/null 2>&1\n");
         sb.append("fi\n\n");
 
-        sb.append("if is_step_done \"PI_WEB_INSTALLED\" && command -v pi-web >/dev/null 2>&1; then\n");
-        sb.append("  echo \"\\033[1;32m✔ Pi-Web 已安装，跳过重复拉取\\033[0m\"\n");
+        sb.append("if is_step_done \"PI_WEB_INSTALLED\" && command -v pi-web >/dev/null 2>&1 && command -v pi >/dev/null 2>&1; then\n");
+        sb.append("  echo \"\\033[1;32m✔ Pi 命令行与 Pi-Web 已安装就绪\\033[0m\"\n");
         sb.append("else\n");
         sb.append("  echo \"\\033[36m• 正在从镜像源全局安装 @agegr/pi-web (请稍候)...\\033[0m\"\n");
         sb.append("  npm install -g @earendil-works/pi-coding-agent @agegr/pi-web --registry=\"").append(fastestNpm).append("\"\n");

@@ -924,10 +924,10 @@ public class MainActivity extends AppCompatActivity {
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
-        // 🤖 AI 终端快捷对话: 自动检测安装并拉起原版 pi 命令行交互会话
+        // 🤖 AI 终端快捷对话: 直接在当前终端启动原版 pi 命令行交互会话
         btnTermAiChat.setOnClickListener(v -> {
-            executeCommand("if command -v pi >/dev/null 2>&1; then pi; else echo -e \"\\033[33m• 正在从镜像源安装 AI 终端核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && npm install -g @earendil-works/pi-coding-agent && pi; fi\n");
-            Toast.makeText(this, "正在启动 AI 命令行交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
+            executeCommand("if command -v pi >/dev/null 2>&1; then pi; else echo -e \"\\033[33m• pi 命令行核心未就绪，请前往【控制中心】点击【一键部署】安装核心套件\\033[0m\"; fi\n");
+            Toast.makeText(this, "正在启动 AI 命令行会话...", Toast.LENGTH_SHORT).show();
         });
 
         // ⚙️ 快捷键自定义与注释管理

@@ -106,17 +106,25 @@ public final class ProotManager {
     }
 
     /**
-     * 判定 Pi-Web 是否已在容器内就绪
+     * 判定 Pi 官方命令行核心与 Pi-Web 是否已在容器内就绪
      */
+    public static boolean isPiInstalled(Context context) {
+        File rootfs = getRootfsDir(context);
+        File piBin1 = new File(rootfs, "usr/local/bin/pi");
+        File piBin2 = new File(rootfs, "usr/bin/pi");
+        return piBin1.exists() || piBin2.exists();
+    }
+
     public static boolean isPiWebInstalled(Context context) {
         File rootfs = getRootfsDir(context);
         File piWebJs1 = new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js");
         File piWebJs2 = new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js");
         File piWebBin1 = new File(rootfs, "usr/local/bin/pi-web");
         File piWebBin2 = new File(rootfs, "usr/bin/pi-web");
-        return (piWebJs1.exists() && piWebJs1.length() > 50) ||
+        boolean webReady = (piWebJs1.exists() && piWebJs1.length() > 50) ||
                (piWebJs2.exists() && piWebJs2.length() > 50) ||
                piWebBin1.exists() || piWebBin2.exists();
+        return webReady && isPiInstalled(context);
     }
 
     /**
@@ -552,7 +560,6 @@ public final class ProotManager {
         } else {
             argv.add("/bin/bash");
             argv.add("-l");
-            argv.add("-i");
         }
 
         ProcessBuilder pb = new ProcessBuilder(argv);
