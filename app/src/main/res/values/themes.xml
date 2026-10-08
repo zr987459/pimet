@@ -38,6 +38,8 @@
         <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
 
+    <style name="Theme.DevPetM" parent="AppTheme" />
+
     <!-- ===== 经典单色系 (Light) ===== -->
 
     <style name="AppTheme.Purple" parent="AppTheme">
