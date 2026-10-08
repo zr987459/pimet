@@ -110,15 +110,57 @@ public final class ProotManager {
     }
 
     /**
-     * 端口 30141 存活检测
+     * 端口存活检测
      */
-    public static boolean isPiWebPortAlive() {
+    public static boolean isPiWebPortAlive(int port) {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", PI_WEB_PORT), 400);
+            socket.connect(new InetSocketAddress("127.0.0.1", port), 400);
             return true;
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    public static boolean isPiWebPortAlive() {
+        return isPiWebPortAlive(PI_WEB_PORT);
+    }
+
+    public static long getDirectorySize(File dir) {
+        if (dir == null || !dir.exists()) return 0;
+        if (!dir.isDirectory()) return dir.length();
+        long size = 0;
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    size += getDirectorySize(file);
+                } else {
+                    size += file.length();
+                }
+            }
+        }
+        return size;
+    }
+
+    public static String formatSize(long bytes) {
+        if (bytes <= 0) return "0 B";
+        final String[] units = new String[]{"B", "KB", "MB", "GB", "TB"};
+        int digitGroups = (int) (Math.log10(bytes) / Math.log10(1024));
+        if (digitGroups >= units.length) digitGroups = units.length - 1;
+        return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024, digitGroups), units[digitGroups]);
+    }
+
+    public static boolean deleteRecursive(File f) {
+        if (f == null || !f.exists()) return true;
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        return f.delete();
     }
 
     /**

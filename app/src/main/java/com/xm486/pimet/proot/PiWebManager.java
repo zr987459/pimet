@@ -5,6 +5,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import com.xm486.pimet.PiMetConfig;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -74,15 +75,18 @@ public final class PiWebManager {
                     return;
                 }
 
+                String registry = PiMetConfig.getNpmRegistry(context);
+                int port = PiMetConfig.getWebPort(context);
+
                 // 如果未安装 pi-web，在标准 Linux 容器内执行 npm install
                 if (!ProotManager.isPiWebInstalled(context)) {
                     mainHandler.post(() -> {
-                        if (listener != null) listener.onLog("\u001B[33m• 正在从镜像源安装 Pi-Web 与 Pi 核心套件...\u001B[0m\n");
+                        if (listener != null) listener.onLog("\u001B[33m• 正在从镜像源安装 Pi-Web 与 Pi 核心套件 (" + registry + ")...\u001B[0m\n");
                     });
 
                     List<String> installCmd = Arrays.asList(
                             "/bin/bash", "-c",
-                            "npm install -g --ignore-scripts --no-audit --no-fund --registry=https://registry.npmmirror.com @earendil-works/pi-coding-agent@1.0.0 @agegr/pi-web"
+                            "npm install -g --ignore-scripts --no-audit --no-fund --registry=" + registry + " @earendil-works/pi-coding-agent@1.0.0 @agegr/pi-web"
                     );
 
                     ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", installCmd);
@@ -110,12 +114,12 @@ public final class PiWebManager {
 
                 // 后台启动守护服务
                 mainHandler.post(() -> {
-                    if (listener != null) listener.onLog("\u001B[36m• 正在拉起 Pi-Web 服务 (PORT 30141)...\u001B[0m\n");
+                    if (listener != null) listener.onLog("\u001B[36m• 正在拉起 Pi-Web 服务 (PORT " + port + ")...\u001B[0m\n");
                 });
 
                 List<String> startCmd = Arrays.asList(
                         "/bin/bash", "-c",
-                        "export PORT=30141; if command -v pi-web >/dev/null 2>&1; then exec pi-web; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js; fi"
+                        "export PORT=" + port + "; if command -v pi-web >/dev/null 2>&1; then exec pi-web; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js; fi"
                 );
 
                 stopPiWeb();
@@ -130,7 +134,7 @@ public final class PiWebManager {
                 boolean alive = false;
                 for (int i = 0; i < 15; i++) {
                     Thread.sleep(1000);
-                    if (ProotManager.isPiWebPortAlive()) {
+                    if (ProotManager.isPiWebPortAlive(port)) {
                         alive = true;
                         break;
                     }
@@ -139,7 +143,7 @@ public final class PiWebManager {
                 if (alive) {
                     mainHandler.post(() -> {
                         if (listener != null) {
-                            listener.onLog("\u001B[32m🎉 Pi-Web 服务已成功启动！端口: 30141\u001B[0m\n");
+                            listener.onLog("\u001B[32m🎉 Pi-Web 服务已成功启动！端口: " + port + "\u001B[0m\n");
                             listener.onStarted();
                         }
                     });
@@ -167,6 +171,19 @@ public final class PiWebManager {
                 daemonProcess.destroy();
             } catch (Throwable ignored) {}
             daemonProcess = null;
+        }
+    }
+
+    public static boolean isProcessAlive() {
+        return daemonProcess != null && daemonProcess.isAlive();
+    }
+
+    public static void clearLog(Context context) {
+        File logFile = new File(ProotManager.getRootfsDir(context), "root/pi-web.log");
+        if (logFile.exists()) {
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile)) {
+                fos.write(new byte[0]);
+            } catch (Throwable ignored) {}
         }
     }
 
