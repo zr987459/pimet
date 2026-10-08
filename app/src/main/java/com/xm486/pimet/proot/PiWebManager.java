@@ -9,7 +9,9 @@ import com.xm486.pimet.PiMetConfig;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
@@ -19,6 +21,7 @@ import java.util.List;
 public final class PiWebManager {
 
     private static final String TAG = "PiWebManager";
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static volatile Process daemonProcess;
 
     public interface StateListener {
@@ -240,7 +243,7 @@ public final class PiWebManager {
         new Thread(() -> {
             stopPiWebSync(context);
             if (callback != null) {
-                mainHandler.post(callback);
+                MAIN_HANDLER.post(callback);
             }
         }).start();
     }
