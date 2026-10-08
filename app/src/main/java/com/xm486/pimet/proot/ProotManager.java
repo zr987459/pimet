@@ -1,7 +1,11 @@
 package com.xm486.pimet.proot;
 
+import android.content.ContentResolver;
 import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.OpenableColumns;
 import android.util.Log;
 import android.util.Pair;
 
@@ -260,6 +264,15 @@ public final class ProotManager {
         copyExec(new File(nativeLibDir, "libtalloc.so"), new File(libDir, "libtalloc.so.2"));
         copyExec(new File(nativeLibDir, "libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
 
+        // 确保外部存储与互通挂载点在 rootfs 内部存在
+        File rootfsDir = getRootfsDir(context);
+        File sdcardMount = new File(rootfsDir, "sdcard");
+        if (!sdcardMount.exists()) sdcardMount.mkdirs();
+        File storageMount = new File(rootfsDir, "storage/emulated/0");
+        if (!storageMount.exists()) storageMount.mkdirs();
+        File sharedMount = new File(rootfsDir, "root/shared");
+        if (!sharedMount.exists()) sharedMount.mkdirs();
+
         ensureContainerDns(context);
         ensureContainerGroups(context);
     }
@@ -513,11 +526,20 @@ public final class ProotManager {
         argv.add("-b"); argv.add("/sys");
         argv.add("-b"); argv.add("/proc/self/fd:/dev/fd");
 
-        // 手机公共存储挂载 (如果可访问)
+        // 手机公共存储挂载
         File sdcard = new File("/storage/emulated/0");
-        if (sdcard.exists() && sdcard.canRead()) {
+        if (sdcard.exists()) {
             argv.add("-b");
             argv.add("/storage/emulated/0:/sdcard");
+            argv.add("-b");
+            argv.add("/storage/emulated/0:/storage/emulated/0");
+        }
+
+        // 应用独立公共目录挂载（随时随地免权限互通）
+        File appExternalDir = context.getExternalFilesDir(null);
+        if (appExternalDir != null && appExternalDir.exists()) {
+            argv.add("-b");
+            argv.add(appExternalDir.getAbsolutePath() + ":/root/shared");
         }
 
         // 工作目录
@@ -619,6 +641,50 @@ public final class ProotManager {
             fos.flush();
         } finally {
             conn.disconnect();
+        }
+    }
+
+    /**
+     * 将外部选择的 Uri 文件或图片拷贝到 PRoot 容器指定目录 (例如 /root)
+     */
+    public static String copyUriToContainer(Context context, Uri uri, String destSubPath) {
+        if (context == null || uri == null) return null;
+        ContentResolver resolver = context.getContentResolver();
+        String displayName = null;
+        try (Cursor cursor = resolver.query(uri, null, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (nameIndex != -1) {
+                    displayName = cursor.getString(nameIndex);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to resolve display name for uri: " + uri, t);
+        }
+
+        if (displayName == null || displayName.trim().isEmpty()) {
+            displayName = "file_" + System.currentTimeMillis();
+        }
+
+        File rootfsDir = getRootfsDir(context);
+        File targetDir = new File(rootfsDir, destSubPath != null ? destSubPath : "root");
+        if (!targetDir.exists()) {
+            targetDir.mkdirs();
+        }
+        File destFile = new File(targetDir, displayName);
+
+        try (InputStream in = resolver.openInputStream(uri);
+             FileOutputStream out = new FileOutputStream(destFile)) {
+            if (in == null) return null;
+            byte[] buf = new byte[8192];
+            int len;
+            while ((len = in.read(buf)) != -1) {
+                out.write(buf, 0, len);
+            }
+            return displayName;
+        } catch (Throwable t) {
+            Log.e(TAG, "copyUriToContainer error", t);
+            return null;
         }
     }
 }

@@ -624,6 +624,16 @@
                             android:textColor="#C9D1D9"
                             android:textSize="10.5sp" />
 
+                        <!-- 📁 导入手机文件/图片 -->
+                        <TextView
+                            android:id="@+id/btnFloatImport"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="📁"
+                            android:textColor="#C9D1D9"
+                            android:textSize="15sp" />
+
                         <!-- ↗ 外部浏览器打开 -->
                         <TextView
                             android:id="@+id/btnFloatBrowser"
@@ -701,6 +711,20 @@
                     android:paddingEnd="8dp"
                     android:text="👁️ AI 动态"
                     android:textColor="#3FB950"
+                    android:textSize="11sp" />
+
+                <!-- 📁 导入文件/图片至工作区 -->
+                <TextView
+                    android:id="@+id/btnTermImportFile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:paddingStart="7dp"
+                    android:paddingEnd="7dp"
+                    android:text="📁 导入"
+                    android:textColor="#C9D1D9"
                     android:textSize="11sp" />
 
                 <TextView

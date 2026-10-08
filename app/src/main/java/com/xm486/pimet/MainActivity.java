@@ -1,11 +1,15 @@
 package com.xm486.pimet;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,6 +18,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -120,6 +125,7 @@ public class MainActivity extends AppCompatActivity {
     private View btnTermReconnect;
     private View btnTermAiChat;
     private View btnTermAiWatch;
+    private View btnTermImportFile;
     private float currentTermFontSize = 12.0f;
     private ProotSession terminalSession;
     private final AnsiParser terminalAnsi = new AnsiParser();
@@ -136,8 +142,15 @@ public class MainActivity extends AppCompatActivity {
     private View btnFloatTerminal;
     private View btnFloatReload;
     private TextView btnFloatZoom;
+    private View btnFloatImport;
     private View btnFloatBrowser;
     private View btnFloatClose;
+
+    // 文件选择与导入回调
+    private ValueCallback<Uri[]> filePathCallback;
+    private static final int REQUEST_CODE_FILE_CHOOSER = 1001;
+    private static final int REQUEST_CODE_IMPORT_CONTAINER = 1002;
+    private static final int REQUEST_CODE_PERMISSIONS = 1003;
     private boolean isFullscreen = false;
 
     // 拖拽手势状态
@@ -177,6 +190,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        checkStoragePermissions();
         initViews();
         initNavigation();
         initLaunchPanel();
@@ -253,6 +267,7 @@ public class MainActivity extends AppCompatActivity {
         btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
         btnFloatReload = findViewById(R.id.btnFloatReload);
         btnFloatZoom = findViewById(R.id.btnFloatZoom);
+        btnFloatImport = findViewById(R.id.btnFloatImport);
         btnFloatBrowser = findViewById(R.id.btnFloatBrowser);
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
@@ -263,6 +278,7 @@ public class MainActivity extends AppCompatActivity {
         btnTermReconnect = findViewById(R.id.btnTermReconnect);
         btnTermAiChat = findViewById(R.id.btnTermAiChat);
         btnTermAiWatch = findViewById(R.id.btnTermAiWatch);
+        btnTermImportFile = findViewById(R.id.btnTermImportFile);
         btnClear = findViewById(R.id.btnClear);
         btnCtrlC = findViewById(R.id.btnCtrlC);
         btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
@@ -566,6 +582,10 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setSupportZoom(true);
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
+        webSettings.setAllowFileAccess(true);
+        webSettings.setAllowContentAccess(true);
+        webSettings.setAllowFileAccessFromFileURLs(true);
+        webSettings.setAllowUniversalAccessFromFileURLs(true);
 
         // 初始化网页缩放
         int savedZoom = PiMetConfig.getWebZoom(this);
@@ -589,6 +609,52 @@ public class MainActivity extends AppCompatActivity {
                     piWebProgressBar.setProgress(newProgress);
                 } else {
                     piWebProgressBar.setVisibility(View.GONE);
+                }
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                    filePathCallback = null;
+                }
+                filePathCallback = callback;
+
+                Intent intent = null;
+                if (params != null) {
+                    try {
+                        intent = params.createIntent();
+                    } catch (Exception ignored) {}
+                }
+
+                if (intent == null) {
+                    intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                }
+
+                if (params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                }
+
+                try {
+                    startActivityForResult(Intent.createChooser(intent, "选择导入的文件或图片"), REQUEST_CODE_FILE_CHOOSER);
+                    return true;
+                } catch (ActivityNotFoundException e) {
+                    try {
+                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                        fallback.setType("*/*");
+                        startActivityForResult(Intent.createChooser(fallback, "选择导入的文件或图片"), REQUEST_CODE_FILE_CHOOSER);
+                        return true;
+                    } catch (Exception ex) {
+                        if (filePathCallback != null) {
+                            filePathCallback.onReceiveValue(null);
+                            filePathCallback = null;
+                        }
+                        Toast.makeText(MainActivity.this, "未能找到系统文件选择器", Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
                 }
             }
         });
@@ -665,6 +731,10 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         btnFloatZoom.setOnClickListener(v -> cycleWebZoom());
+        btnFloatImport.setOnClickListener(v -> {
+            floatingMenuVertical.setVisibility(View.GONE);
+            launchFilePickerForContainer();
+        });
         btnFloatBrowser.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
             openExternalBrowser();
@@ -770,6 +840,9 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "正在实时追踪后台 AI 工作日志 (退出追踪请按 ⛔ 按钮)...", Toast.LENGTH_SHORT).show();
             }
         });
+
+        // 📁 从手机导入文件/图片至 PRoot 容器
+        btnTermImportFile.setOnClickListener(v -> launchFilePickerForContainer());
 
         btnClear.setOnClickListener(v -> {
             terminalBuffer.clear();
@@ -1186,6 +1259,110 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         super.onBackPressed();
+    }
+
+    private void launchFilePickerForContainer() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try {
+            startActivityForResult(Intent.createChooser(intent, "选择导入到容器的文件或图片"), REQUEST_CODE_IMPORT_CONTAINER);
+        } catch (Exception e) {
+            Toast.makeText(this, "未能打开系统文件选择器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleImportToContainer(Intent data) {
+        List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            int count = data.getClipData().getItemCount();
+            for (int i = 0; i < count; i++) {
+                uris.add(data.getClipData().getItemAt(i).getUri());
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+
+        if (uris.isEmpty()) return;
+
+        Toast.makeText(this, "正在导入 " + uris.size() + " 个文件...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            int successCount = 0;
+            StringBuilder sb = new StringBuilder();
+            for (Uri uri : uris) {
+                String fileName = ProotManager.copyUriToContainer(this, uri, "root");
+                if (fileName != null) {
+                    successCount++;
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(fileName);
+                }
+            }
+            final int count = successCount;
+            final String names = sb.toString();
+            mainHandler.post(() -> {
+                if (count > 0) {
+                    Toast.makeText(this, "成功导入 " + count + " 个文件至 /root", Toast.LENGTH_SHORT).show();
+                    appendTerminalLog("\n\u001B[32m[已导入 " + count + " 个文件至 /root: " + names + "]\u001B[0m\n");
+                    if (terminalSession != null && terminalSession.isRunning()) {
+                        terminalSession.write("ls -la /root\n");
+                    }
+                } else {
+                    Toast.makeText(this, "导入文件失败，请检查文件或权限", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }).start();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_CODE_FILE_CHOOSER) {
+            if (filePathCallback == null) return;
+            Uri[] results = null;
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    int count = data.getClipData().getItemCount();
+                    results = new Uri[count];
+                    for (int i = 0; i < count; i++) {
+                        results[i] = data.getClipData().getItemAt(i).getUri();
+                    }
+                } else if (data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                }
+            }
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+        } else if (requestCode == REQUEST_CODE_IMPORT_CONTAINER) {
+            if (resultCode == RESULT_OK && data != null) {
+                handleImportToContainer(data);
+            }
+        }
+    }
+
+    private void checkStoragePermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            List<String> needed = new ArrayList<>();
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                    needed.add(Manifest.permission.READ_MEDIA_IMAGES);
+                }
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                    needed.add(Manifest.permission.READ_MEDIA_VIDEO);
+                }
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    needed.add(Manifest.permission.READ_MEDIA_AUDIO);
+                }
+            } else {
+                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    needed.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+                }
+            }
+            if (!needed.isEmpty()) {
+                requestPermissions(needed.toArray(new String[0]), REQUEST_CODE_PERMISSIONS);
+            }
+        }
     }
 
     @Override
