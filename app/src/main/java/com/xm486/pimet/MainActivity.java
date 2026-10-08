@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
@@ -874,7 +875,13 @@ public class MainActivity extends AppCompatActivity {
             showPetBubble("连通性正常！端口: " + PiMetConfig.getWebPort(this));
             return;
         } else if (question.startsWith("#clear")) {
-            sendToCurrentSession("clear\n");
+            TerminalTab tab = getActiveTab();
+            if (tab != null) {
+                tab.buffer.clear();
+                tab.ansi.reset();
+                if (terminalOutput != null) terminalOutput.setText("");
+                if (tab.session != null) tab.session.write("clear\n");
+            }
             showPetBubble("已为主人清空终端屏幕啦~ 🧹");
             return;
         }

@@ -302,7 +302,7 @@ public class SpritePetView extends View {
         canvas.drawBitmap(atlas, srcRect, dstRect, drawPaint);
     }
 
-    private void startTicker() {
+    public void startTicker() {
         if (!isTickerRunning && atlas != null && getVisibility() == VISIBLE) {
             isTickerRunning = true;
             handler.removeCallbacks(ticker);
@@ -310,7 +310,7 @@ public class SpritePetView extends View {
         }
     }
 
-    private void stopTicker() {
+    public void stopTicker() {
         isTickerRunning = false;
         handler.removeCallbacks(ticker);
     }

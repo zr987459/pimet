@@ -1,6 +1,7 @@
 package com.xm486.pimet.pet;
 
 import android.app.AlertDialog;
+import android.content.Context;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;

@@ -121,8 +121,9 @@ public class PiWebActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url != null && url.startsWith("devpetm://terminal")) {
-                    Intent intent = new Intent(PiWebActivity.this, com.xm486.pimet.terminal.TerminalActivity.class);
+                if (url != null && (url.startsWith("devpetm://terminal") || url.startsWith("pimet://terminal"))) {
+                    Intent intent = new Intent(PiWebActivity.this, MainActivity.class);
+                    intent.putExtra("action", "open_terminal");
                     startActivity(intent);
                     return true;
                 }
