@@ -258,7 +258,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsStorageTv;
     private View btnClearNpmCache;
     private View btnResetContainer;
-    private View btnBatteryIgnoreOpt;
+    private TextView btnBatteryIgnoreOpt;
     private View btnAutoStartSettings;
     private TextView btnPrivilegeRoot;
     private TextView btnPrivilegeShizuku;
@@ -2038,8 +2038,8 @@ public class MainActivity extends AppCompatActivity {
                             Toast.makeText(this, "已作为提问发送给 AI", Toast.LENGTH_SHORT).show();
                             break;
                         case 1:
-                            terminalInput.append(clip);
-                            terminalInput.requestFocus();
+                            commandInput.append(clip);
+                            commandInput.requestFocus();
                             break;
                         case 2:
                             syncClipboardToContainer(true);
