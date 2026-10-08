@@ -132,16 +132,19 @@ public class DeployScriptGenerator {
         sb.append("  echo \"\\033[1;32m✔ Pi-Web 已安装，跳过重复拉取\\033[0m\"\n");
         sb.append("else\n");
         sb.append("  echo \"\\033[36m• 正在从镜像源全局安装 @agegr/pi-web (请稍候)...\\033[0m\"\n");
-        sb.append("  npm install -g @agegr/pi-web --registry=\"").append(fastestNpm).append("\"\n");
+        sb.append("  npm install -g @earendil-works/pi-coding-agent @agegr/pi-web --registry=\"").append(fastestNpm).append("\"\n");
         sb.append("  if command -v pi-web >/dev/null 2>&1; then\n");
         sb.append("    mark_step_done \"PI_WEB_INSTALLED\"\n");
-        sb.append("    echo \"\\033[1;32m✔ Pi-Web 安装成功！\\033[0m\"\n");
+        sb.append("    echo \"\\033[1;32m✔ Pi-Web 与 Pi 命令行安装成功！\\033[0m\"\n");
         sb.append("  else\n");
         sb.append("    echo \"\\033[1;31m✘ 未能在 PATH 中定位到 pi-web，尝试将本地 bin 写入软链...\\033[0m\"\n");
         sb.append("    find \"$HOME\" -name \"pi-web\" -type f -perm /111 2>/dev/null | head -n 1 | while read -r p; do\n");
         sb.append("      ln -sf \"$p\" \"$BIN/pi-web\"\n");
         sb.append("    done\n");
         sb.append("  fi\n");
+        sb.append("  find \"$HOME\" -name \"pi\" -type f -perm /111 2>/dev/null | head -n 1 | while read -r p; do\n");
+        sb.append("    ln -sf \"$p\" \"$BIN/pi\"\n");
+        sb.append("  done\n");
         sb.append("fi\n\n");
 
         // ---- 阶段 3: 后台守护拉起 ----

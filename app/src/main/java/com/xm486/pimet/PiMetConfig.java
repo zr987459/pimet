@@ -22,6 +22,9 @@ public final class PiMetConfig {
     public static final String KEY_KEEP_ALIVE = "keep_alive";
     public static final String KEY_WEB_ZOOM = "web_zoom";
     public static final String KEY_TERM_FONT_SIZE = "term_font_size";
+    public static final String KEY_CUSTOM_SHORTCUTS = "custom_shortcuts";
+    public static final String KEY_TOP_TOOLBAR_ORDER = "top_toolbar_order";
+    public static final String KEY_KEYBOARD_PINNED = "keyboard_pinned";
 
     // AI 模型与 API Key 配置键
     public static final String KEY_AI_PROVIDER = "ai_provider";
@@ -68,6 +71,30 @@ public final class PiMetConfig {
 
     public static void setTermFontSize(Context context, float size) {
         getPrefs(context).edit().putFloat(KEY_TERM_FONT_SIZE, size).apply();
+    }
+
+    public static String getCustomShortcutsJson(Context context) {
+        return getPrefs(context).getString(KEY_CUSTOM_SHORTCUTS, "");
+    }
+
+    public static void setCustomShortcutsJson(Context context, String json) {
+        getPrefs(context).edit().putString(KEY_CUSTOM_SHORTCUTS, json).apply();
+    }
+
+    public static String getTopToolbarOrder(Context context) {
+        return getPrefs(context).getString(KEY_TOP_TOOLBAR_ORDER, "");
+    }
+
+    public static void setTopToolbarOrder(Context context, String order) {
+        getPrefs(context).edit().putString(KEY_TOP_TOOLBAR_ORDER, order).apply();
+    }
+
+    public static boolean isKeyboardPinned(Context context) {
+        return getPrefs(context).getBoolean(KEY_KEYBOARD_PINNED, true);
+    }
+
+    public static void setKeyboardPinned(Context context, boolean pinned) {
+        getPrefs(context).edit().putBoolean(KEY_KEYBOARD_PINNED, pinned).apply();
     }
 
     public static int getWebPort(Context context) {

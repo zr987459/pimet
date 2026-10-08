@@ -704,7 +704,7 @@
                 android:layout_height="1dp"
                 android:background="#21262D" />
 
-            <!-- 顶栏 2: 终端快捷操作工具栏 (横向滚动，彻底告别按键挤压) -->
+            <!-- 顶栏 2: 终端快捷操作工具栏 (横向滚动，支持长按调换位置) -->
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="36dp"
@@ -712,6 +712,7 @@
                 android:scrollbars="none">
 
                 <LinearLayout
+                    android:id="@+id/termToolbarContainer"
                     android:layout_width="wrap_content"
                     android:layout_height="match_parent"
                     android:gravity="center_vertical"
@@ -732,9 +733,9 @@
                         android:textColor="#FFFFFF"
                         android:textSize="11sp" />
 
-                    <!-- 👁️ 实时追踪 AI 动态 -->
+                    <!-- ⚙️ 快捷键自定义与注释管理 -->
                     <TextView
-                        android:id="@+id/btnTermAiWatch"
+                        android:id="@+id/btnTermCustomKey"
                         android:layout_width="wrap_content"
                         android:layout_height="26dp"
                         android:layout_marginStart="6dp"
@@ -742,8 +743,8 @@
                         android:gravity="center"
                         android:paddingStart="8dp"
                         android:paddingEnd="8dp"
-                        android:text="👁️ AI 动态"
-                        android:textColor="#3FB950"
+                        android:text="⚙️ 自定义快捷键"
+                        android:textColor="#58A6FF"
                         android:textSize="11sp" />
 
                     <!-- 📁 导入文件/图片至工作区 -->
@@ -873,280 +874,76 @@
                 android:layout_height="1dp"
                 android:background="#21262D" />
 
-            <!-- 横向滚动全面快捷键栏 (专为 pi 与终端优化) -->
+            <!-- 输入 / 时弹出的快捷指令与注释卡片 (类似 Slack / Discord / Termux 交互) -->
+            <LinearLayout
+                android:id="@+id/slashSuggestCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#161B22"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="28dp"
+                    android:background="#0D1117"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="⚡ 快捷指令提示 (点击执行/填充，长按查看详情)"
+                        android:textColor="#58A6FF"
+                        android:textSize="10.5sp" />
+
+                    <TextView
+                        android:id="@+id/btnSlashSuggestClose"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:padding="4dp"
+                        android:text="✕"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxHeight="160dp">
+
+                    <LinearLayout
+                        android:id="@+id/slashSuggestContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#21262D" />
+            </LinearLayout>
+
+            <!-- Termux 风格专用扩展按键栏 (支持常驻 / 收起、注释查看与自定义拓展) -->
             <HorizontalScrollView
+                android:id="@+id/termuxKeysBar"
                 android:layout_width="match_parent"
                 android:layout_height="34dp"
                 android:background="#161B22"
                 android:scrollbars="none">
 
                 <LinearLayout
+                    android:id="@+id/termuxKeysContainer"
                     android:layout_width="wrap_content"
                     android:layout_height="match_parent"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingStart="6dp"
-                    android:paddingEnd="6dp">
-
-                    <TextView
-                        android:id="@+id/keyCtrlC"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="Ctrl+C"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyCtrlD"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="Ctrl+D"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyCtrlL"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="Ctrl+L"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyTab"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="Tab"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyEsc"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="ESC"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPi"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_primary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="pi"
-                        android:textColor="#FFFFFF"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPiHelp"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="pi -h"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPiModel"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="/model"
-                        android:textColor="#58A6FF"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPiLogin"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="/login"
-                        android:textColor="#58A6FF"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyTilde"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="~"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keySlash"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="/"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyDash"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="-"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPipe"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="|"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyGt"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text=">"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyAmp"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="&amp;"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyNodeV"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="node -v"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyNpmV"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="npm -v"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyPs"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="ps -ef"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyTop"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="top"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/keyClear"
-                        android:layout_width="wrap_content"
-                        android:layout_height="26dp"
-                        android:layout_marginStart="4dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:gravity="center"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp"
-                        android:text="clear"
-                        android:textColor="#C9D1D9"
-                        android:textSize="11sp" />
-                </LinearLayout>
+                    android:paddingEnd="6dp" />
             </HorizontalScrollView>
 
             <!-- 底部命令输入框 -->
@@ -1159,14 +956,25 @@
                 android:paddingStart="8dp"
                 android:paddingEnd="8dp">
 
+                <TextView
+                    android:id="@+id/btnToggleKeysBar"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="⌨"
+                    android:textColor="#58A6FF"
+                    android:textSize="13sp" />
+
                 <EditText
                     android:id="@+id/commandInput"
                     android:layout_width="0dp"
                     android:layout_height="36dp"
+                    android:layout_marginStart="6dp"
                     android:layout_weight="1"
                     android:background="#0D1117"
                     android:fontFamily="monospace"
-                    android:hint="输入指令或与 AI 对话内容..."
+                    android:hint="输入指令或与 AI 对话 (输入 / 唤出指令)..."
                     android:imeOptions="actionSend"
                     android:inputType="text"
                     android:paddingStart="10dp"

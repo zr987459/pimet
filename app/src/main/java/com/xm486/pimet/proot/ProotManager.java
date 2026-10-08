@@ -552,6 +552,7 @@ public final class ProotManager {
         } else {
             argv.add("/bin/bash");
             argv.add("-l");
+            argv.add("-i");
         }
 
         ProcessBuilder pb = new ProcessBuilder(argv);

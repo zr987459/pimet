@@ -13,8 +13,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
@@ -28,6 +30,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -124,9 +127,66 @@ public class MainActivity extends AppCompatActivity {
     private View btnTermQuickWeb;
     private View btnTermReconnect;
     private View btnTermAiChat;
-    private View btnTermAiWatch;
+    private View btnTermCustomKey;
     private View btnTermImportFile;
+    private LinearLayout termToolbarContainer;
+    private HorizontalScrollView termuxKeysBar;
+    private LinearLayout termuxKeysContainer;
+    private TextView btnToggleKeysBar;
+    private View slashSuggestCard;
+    private LinearLayout slashSuggestContainer;
+    private View btnSlashSuggestClose;
     private float currentTermFontSize = 12.0f;
+
+    // 历史命令与 Termux 快捷按键模型
+    private final List<String> commandHistory = new ArrayList<>();
+    private int historyIndex = -1;
+    private final List<ShortcutKey> shortcutKeys = new ArrayList<>();
+
+    // 终端快捷键数据模型
+    public static class ShortcutKey {
+        public String id;
+        public String label;
+        public String command;
+        public String description;
+        public boolean isDirectRun;
+        public boolean isSystem;
+
+        public ShortcutKey(String id, String label, String command, String description, boolean isDirectRun, boolean isSystem) {
+            this.id = id;
+            this.label = label;
+            this.command = command;
+            this.description = description;
+            this.isDirectRun = isDirectRun;
+            this.isSystem = isSystem;
+        }
+
+        public JSONObject toJson() {
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("id", id);
+                obj.put("label", label);
+                obj.put("command", command);
+                obj.put("description", description);
+                obj.put("isDirectRun", isDirectRun);
+                obj.put("isSystem", isSystem);
+                return obj;
+            } catch (Exception e) {
+                return new JSONObject();
+            }
+        }
+
+        public static ShortcutKey fromJson(JSONObject obj) {
+            return new ShortcutKey(
+                obj.optString("id", String.valueOf(System.currentTimeMillis())),
+                obj.optString("label", "KEY"),
+                obj.optString("command", ""),
+                obj.optString("description", ""),
+                obj.optBoolean("isDirectRun", false),
+                obj.optBoolean("isSystem", false)
+            );
+        }
+    }
 
     // 多窗口终端架构
     private static class TerminalTab {
@@ -290,17 +350,24 @@ public class MainActivity extends AppCompatActivity {
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
         // Terminal 组件
+        termToolbarContainer = findViewById(R.id.termToolbarContainer);
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
         btnTermReconnect = findViewById(R.id.btnTermReconnect);
         btnTermAiChat = findViewById(R.id.btnTermAiChat);
-        btnTermAiWatch = findViewById(R.id.btnTermAiWatch);
+        btnTermCustomKey = findViewById(R.id.btnTermCustomKey);
         btnTermImportFile = findViewById(R.id.btnTermImportFile);
         btnClear = findViewById(R.id.btnClear);
         btnCtrlC = findViewById(R.id.btnCtrlC);
         btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
         terminalOutput = findViewById(R.id.terminalOutput);
         terminalScrollView = findViewById(R.id.terminalScrollView);
+        slashSuggestCard = findViewById(R.id.slashSuggestCard);
+        slashSuggestContainer = findViewById(R.id.slashSuggestContainer);
+        btnSlashSuggestClose = findViewById(R.id.btnSlashSuggestClose);
+        termuxKeysBar = findViewById(R.id.termuxKeysBar);
+        termuxKeysContainer = findViewById(R.id.termuxKeysContainer);
+        btnToggleKeysBar = findViewById(R.id.btnToggleKeysBar);
         commandInput = findViewById(R.id.commandInput);
         btnSend = findViewById(R.id.btnSend);
 
@@ -836,7 +903,7 @@ public class MainActivity extends AppCompatActivity {
         piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
     }
 
-    // ================= PRoot 终端 (多窗口 / 快捷按键) =================
+    // ================= PRoot 终端 (多窗口 / 快捷按键 / Termux 交互) =================
     private void initTerminalPanel() {
         btnSend.setOnClickListener(v -> sendCommand());
         commandInput.setOnEditorActionListener((v, actionId, event) -> {
@@ -857,17 +924,14 @@ public class MainActivity extends AppCompatActivity {
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
-        // 🤖 AI 终端快捷对话
+        // 🤖 AI 终端快捷对话: 自动检测安装并拉起原版 pi 命令行交互会话
         btnTermAiChat.setOnClickListener(v -> {
-            executeCommand("pi\n");
-            Toast.makeText(this, "正在启动 AI 实时交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
+            executeCommand("if command -v pi >/dev/null 2>&1; then pi; else echo -e \"\\033[33m• 正在从镜像源安装 AI 终端核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && npm install -g @earendil-works/pi-coding-agent && pi; fi\n");
+            Toast.makeText(this, "正在启动 AI 命令行交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
         });
 
-        // 👁️ 实时追踪 AI 动态
-        btnTermAiWatch.setOnClickListener(v -> {
-            executeCommand("tail -f -n 50 /root/pi-web.log\n");
-            Toast.makeText(this, "正在实时追踪后台 AI 工作日志 (退出追踪请按 ⛔ 按钮)...", Toast.LENGTH_SHORT).show();
-        });
+        // ⚙️ 快捷键自定义与注释管理
+        btnTermCustomKey.setOnClickListener(v -> showCustomShortcutsManagerDialog());
 
         // 📁 从手机导入文件/图片至 PRoot 容器
         btnTermImportFile.setOnClickListener(v -> launchFilePickerForContainer());
@@ -893,67 +957,481 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // 快捷键栏: 控制键
-        setupActionKey(R.id.keyCtrlC, () -> {
-            TerminalTab tab = getActiveTab();
-            if (tab != null && tab.session != null) {
-                tab.session.sendCtrlC();
-                appendTerminalLog(tab, "^C\r\n");
-                Toast.makeText(this, "已发送 Ctrl+C", Toast.LENGTH_SHORT).show();
+        // 初始化 Termux 风格快捷键与交互
+        initDefaultShortcutKeys();
+        loadCustomShortcuts();
+        renderTermuxKeys();
+        setupSlashCommandSuggestions();
+        setupToolbarReordering();
+        restoreToolbarOrder();
+        restoreKeyboardPinnedState();
+
+        btnToggleKeysBar.setOnClickListener(v -> toggleKeyboardPinnedState());
+        btnSlashSuggestClose.setOnClickListener(v -> slashSuggestCard.setVisibility(View.GONE));
+    }
+
+    private void initDefaultShortcutKeys() {
+        shortcutKeys.clear();
+        // 控制键与导航键
+        shortcutKeys.add(new ShortcutKey("esc", "ESC", "\u001B", "退出当前输入模式 / Vi Esc", true, true));
+        shortcutKeys.add(new ShortcutKey("tab", "TAB", "    ", "插入 4 个空格缩进 / 制表符", false, true));
+        shortcutKeys.add(new ShortcutKey("ctrl_c", "Ctrl+C", "\u0003", "发送 SIGINT 中断当前前台任务", true, true));
+        shortcutKeys.add(new ShortcutKey("ctrl_d", "Ctrl+D", "\u0004", "发送 EOF 退出当前 Shell", true, true));
+        shortcutKeys.add(new ShortcutKey("ctrl_l", "Ctrl+L", "clear\n", "清屏终端显示内容", true, true));
+        shortcutKeys.add(new ShortcutKey("key_up", "↑", "UP", "调出上一条历史执行指令", false, true));
+        shortcutKeys.add(new ShortcutKey("key_down", "↓", "DOWN", "调出下一条历史执行指令", false, true));
+        shortcutKeys.add(new ShortcutKey("key_left", "←", "LEFT", "将光标向左移动一位", false, true));
+        shortcutKeys.add(new ShortcutKey("key_right", "→", "RIGHT", "将光标向右移动一位", false, true));
+
+        // 常用 Linux 符号
+        shortcutKeys.add(new ShortcutKey("tilde", "~", "~", "Linux 家目录符号 (~)", false, true));
+        shortcutKeys.add(new ShortcutKey("slash", "/", "/", "路径斜杠 / 唤出指令补全提示", false, true));
+        shortcutKeys.add(new ShortcutKey("dash", "-", "-", "短横线减号 / 命令参数前缀 (-)", false, true));
+        shortcutKeys.add(new ShortcutKey("pipe", "|", "|", "管道符号 (|) 将输出传递给下一指令", false, true));
+        shortcutKeys.add(new ShortcutKey("gt", ">", ">", "重定向输出符号 (>)", false, true));
+        shortcutKeys.add(new ShortcutKey("amp", "&", "&", "后台运行或条件连接符号 (&)", false, true));
+
+        // 核心指令按键 (统一样式，无过度高亮)
+        shortcutKeys.add(new ShortcutKey("pi", "pi", "pi\n", "启动 Pi 官方命令行 AI 编程助手", true, true));
+        shortcutKeys.add(new ShortcutKey("pi_model", "/model", "/model\n", "查看与切换当前配置的 AI 模型", true, true));
+        shortcutKeys.add(new ShortcutKey("pi_login", "/login", "/login\n", "登录配置 AI 服务提供商凭证", true, true));
+        shortcutKeys.add(new ShortcutKey("node_v", "node -v", "node -v\n", "查看容器内 Node.js 运行时版本", true, true));
+        shortcutKeys.add(new ShortcutKey("npm_v", "npm -v", "npm -v\n", "查看容器内 npm 包管理器版本", true, true));
+        shortcutKeys.add(new ShortcutKey("ps_ef", "ps -ef", "ps -ef\n", "查看 Linux 容器内运行的所有进程", true, true));
+        shortcutKeys.add(new ShortcutKey("top", "top", "top\n", "实时监控系统资源与 CPU 内存占用", true, true));
+        shortcutKeys.add(new ShortcutKey("clear", "clear", "clear\n", "执行 clear 清空终端缓冲区", true, true));
+    }
+
+    private void loadCustomShortcuts() {
+        String jsonStr = PiMetConfig.getCustomShortcutsJson(this);
+        if (TextUtils.isEmpty(jsonStr)) return;
+        try {
+            JSONArray arr = new JSONArray(jsonStr);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject obj = arr.getJSONObject(i);
+                ShortcutKey customKey = ShortcutKey.fromJson(obj);
+                // 检查是否覆盖了系统按键注释
+                boolean replaced = false;
+                for (int j = 0; j < shortcutKeys.size(); j++) {
+                    if (shortcutKeys.get(j).id.equals(customKey.id)) {
+                        shortcutKeys.set(j, customKey);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) {
+                    shortcutKeys.add(customKey);
+                }
             }
-        });
-        setupActionKey(R.id.keyCtrlD, () -> {
+        } catch (Exception e) {
+            Log.e("PiMet", "Failed to parse custom shortcuts: " + e.getMessage());
+        }
+    }
+
+    private void saveCustomShortcuts() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (ShortcutKey key : shortcutKeys) {
+                if (!key.isSystem || !TextUtils.isEmpty(key.description)) {
+                    arr.put(key.toJson());
+                }
+            }
+            PiMetConfig.setCustomShortcutsJson(this, arr.toString());
+        } catch (Exception e) {
+            Log.e("PiMet", "Failed to save custom shortcuts: " + e.getMessage());
+        }
+    }
+
+    private void renderTermuxKeys() {
+        if (termuxKeysContainer == null) return;
+        termuxKeysContainer.removeAllViews();
+
+        for (ShortcutKey key : shortcutKeys) {
+            View keyView = getLayoutInflater().inflate(R.layout.item_termux_key, termuxKeysContainer, false);
+            TextView labelTv = keyView.findViewById(R.id.termuxKeyLabel);
+            labelTv.setText(key.label);
+
+            keyView.setOnClickListener(v -> handleShortcutKeyClick(key));
+            keyView.setOnLongClickListener(v -> {
+                String desc = TextUtils.isEmpty(key.description) ? "暂无注释" : key.description;
+                Toast.makeText(this, "【" + key.label + "】 " + desc + "\n指令: " + key.command.replace("\n", ""), Toast.LENGTH_SHORT).show();
+                return true;
+            });
+
+            termuxKeysContainer.addView(keyView);
+        }
+
+        // 尾部添加快捷添加按键 (+)
+        TextView btnAddKey = new TextView(this);
+        btnAddKey.setText("＋");
+        btnAddKey.setTextColor(0xFF58A6FF);
+        btnAddKey.setTextSize(12);
+        btnAddKey.setGravity(android.view.Gravity.CENTER);
+        btnAddKey.setBackgroundResource(R.drawable.bg_btn_secondary);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dpToPx(28), dpToPx(26));
+        lp.setMargins(dpToPx(4), 0, dpToPx(4), 0);
+        btnAddKey.setLayoutParams(lp);
+        btnAddKey.setOnClickListener(v -> showEditShortcutKeyDialog(null, true));
+        termuxKeysContainer.addView(btnAddKey);
+    }
+
+    private void handleShortcutKeyClick(ShortcutKey key) {
+        if ("key_up".equals(key.id)) {
+            handleHistoryKey(true);
+            return;
+        }
+        if ("key_down".equals(key.id)) {
+            handleHistoryKey(false);
+            return;
+        }
+        if ("key_left".equals(key.id)) {
+            int pos = Math.max(0, commandInput.getSelectionStart() - 1);
+            commandInput.setSelection(pos);
+            return;
+        }
+        if ("key_right".equals(key.id)) {
+            int pos = Math.min(commandInput.getText().length(), commandInput.getSelectionStart() + 1);
+            commandInput.setSelection(pos);
+            return;
+        }
+        if ("ctrl_c".equals(key.id)) {
+            btnCtrlC.performClick();
+            return;
+        }
+        if ("ctrl_d".equals(key.id)) {
             TerminalTab tab = getActiveTab();
             if (tab != null && tab.session != null) {
                 tab.session.write("\u0004");
                 appendTerminalLog(tab, "^D\r\n");
-                Toast.makeText(this, "已发送 Ctrl+D", Toast.LENGTH_SHORT).show();
             }
-        });
-        setupActionKey(R.id.keyCtrlL, () -> {
-            TerminalTab tab = getActiveTab();
-            if (tab != null) {
-                tab.buffer.clear();
-                tab.ansi.reset();
-                terminalOutput.setText("");
-                if (tab.session != null) tab.session.write("clear\n");
-            }
-        });
-        setupActionKey(R.id.keyTab, () -> insertTextToInput("    "));
-        setupActionKey(R.id.keyEsc, () -> {
+            return;
+        }
+        if ("ctrl_l".equals(key.id) || "clear".equals(key.id)) {
+            btnClear.performClick();
+            return;
+        }
+        if ("esc".equals(key.id)) {
             TerminalTab tab = getActiveTab();
             if (tab != null && tab.session != null) {
                 tab.session.write("\u001B");
-                Toast.makeText(this, "已发送 ESC", Toast.LENGTH_SHORT).show();
             }
-        });
+            return;
+        }
 
-        // 快捷指令键
-        setupActionKey(R.id.keyPi, () -> executeCommand("pi\n"));
-        setupActionKey(R.id.keyPiHelp, () -> executeCommand("pi -h\n"));
-        setupActionKey(R.id.keyPiModel, () -> executeCommand("/model\n"));
-        setupActionKey(R.id.keyPiLogin, () -> executeCommand("/login\n"));
-        setupActionKey(R.id.keyNodeV, () -> executeCommand("node -v\n"));
-        setupActionKey(R.id.keyNpmV, () -> executeCommand("npm -v\n"));
-        setupActionKey(R.id.keyPs, () -> executeCommand("ps -ef\n"));
-        setupActionKey(R.id.keyTop, () -> executeCommand("top\n"));
-        setupActionKey(R.id.keyClear, () -> {
-            TerminalTab tab = getActiveTab();
-            if (tab != null) {
-                tab.buffer.clear();
-                tab.ansi.reset();
-                terminalOutput.setText("");
-                if (tab.session != null) tab.session.write("clear\n");
+        if (key.isDirectRun) {
+            executeCommand(key.command);
+        } else {
+            insertTextToInput(key.command);
+        }
+    }
+
+    private void handleHistoryKey(boolean up) {
+        if (commandHistory.isEmpty()) return;
+        if (up) {
+            if (historyIndex == -1) {
+                historyIndex = commandHistory.size() - 1;
+            } else if (historyIndex > 0) {
+                historyIndex--;
             }
-        });
+        } else {
+            if (historyIndex != -1 && historyIndex < commandHistory.size() - 1) {
+                historyIndex++;
+            } else {
+                historyIndex = -1;
+                commandInput.setText("");
+                return;
+            }
+        }
+        if (historyIndex >= 0 && historyIndex < commandHistory.size()) {
+            commandInput.setText(commandHistory.get(historyIndex));
+            commandInput.setSelection(commandInput.getText().length());
+        }
+    }
 
-        // 符号按键 (直接插入输入框当前光标位置)
-        setupActionKey(R.id.keyTilde, () -> insertTextToInput("~"));
-        setupActionKey(R.id.keySlash, () -> insertTextToInput("/"));
-        setupActionKey(R.id.keyDash, () -> insertTextToInput("-"));
-        setupActionKey(R.id.keyPipe, () -> insertTextToInput("|"));
-        setupActionKey(R.id.keyGt, () -> insertTextToInput(">"));
-        setupActionKey(R.id.keyAmp, () -> insertTextToInput("&"));
+    private void setupSlashCommandSuggestions() {
+        commandInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                String text = s != null ? s.toString() : "";
+                if (text.startsWith("/")) {
+                    updateSlashSuggestions(text);
+                } else {
+                    slashSuggestCard.setVisibility(View.GONE);
+                }
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {}
+        });
+    }
+
+    private void updateSlashSuggestions(String query) {
+        if (slashSuggestContainer == null) return;
+        slashSuggestContainer.removeAllViews();
+
+        String q = query.trim().toLowerCase();
+        List<ShortcutKey> matches = new ArrayList<>();
+        for (ShortcutKey key : shortcutKeys) {
+            String lbl = key.label.toLowerCase();
+            String cmd = key.command.toLowerCase();
+            String desc = key.description.toLowerCase();
+            if (q.equals("/") || lbl.contains(q) || cmd.contains(q) || desc.contains(q)) {
+                matches.add(key);
+            }
+        }
+
+        if (matches.isEmpty()) {
+            slashSuggestCard.setVisibility(View.GONE);
+            return;
+        }
+
+        slashSuggestCard.setVisibility(View.VISIBLE);
+        for (ShortcutKey key : matches) {
+            View itemView = getLayoutInflater().inflate(R.layout.item_slash_suggest, slashSuggestContainer, false);
+            TextView cmdTv = itemView.findViewById(R.id.suggestCommandTv);
+            TextView descTv = itemView.findViewById(R.id.suggestDescTv);
+
+            cmdTv.setText(key.label);
+            descTv.setText(TextUtils.isEmpty(key.description) ? key.command.replace("\n", "") : key.description);
+
+            itemView.setOnClickListener(v -> {
+                if (key.isDirectRun) {
+                    executeCommand(key.command);
+                    commandInput.setText("");
+                } else {
+                    commandInput.setText(key.command);
+                    commandInput.setSelection(commandInput.getText().length());
+                }
+                slashSuggestCard.setVisibility(View.GONE);
+            });
+
+            slashSuggestContainer.addView(itemView);
+        }
+    }
+
+    private void restoreKeyboardPinnedState() {
+        boolean pinned = PiMetConfig.isKeyboardPinned(this);
+        termuxKeysBar.setVisibility(pinned ? View.VISIBLE : View.GONE);
+        btnToggleKeysBar.setText(pinned ? "⌨" : "⌨⋯");
+    }
+
+    private void toggleKeyboardPinnedState() {
+        boolean nowPinned = termuxKeysBar.getVisibility() != View.VISIBLE;
+        termuxKeysBar.setVisibility(nowPinned ? View.VISIBLE : View.GONE);
+        btnToggleKeysBar.setText(nowPinned ? "⌨" : "⌨⋯");
+        PiMetConfig.setKeyboardPinned(this, nowPinned);
+        Toast.makeText(this, nowPinned ? "快捷按键栏已常驻" : "快捷按键栏已收起", Toast.LENGTH_SHORT).show();
+    }
+
+    // 终端顶部工具栏长按调换位置与持久化
+    private void setupToolbarReordering() {
+        if (termToolbarContainer == null) return;
+        for (int i = 0; i < termToolbarContainer.getChildCount(); i++) {
+            View child = termToolbarContainer.getChildAt(i);
+            child.setOnLongClickListener(v -> {
+                showReorderToolbarDialog(v);
+                return true;
+            });
+        }
+    }
+
+    private void restoreToolbarOrder() {
+        String order = PiMetConfig.getTopToolbarOrder(this);
+        if (TextUtils.isEmpty(order) || termToolbarContainer == null) return;
+        String[] ids = order.split(",");
+        List<View> orderedViews = new ArrayList<>();
+        List<View> allViews = new ArrayList<>();
+
+        for (int i = 0; i < termToolbarContainer.getChildCount(); i++) {
+            allViews.add(termToolbarContainer.getChildAt(i));
+        }
+
+        for (String idName : ids) {
+            String trimmed = idName.trim();
+            for (View v : allViews) {
+                if (v.getId() != View.NO_ID) {
+                    try {
+                        String entryName = getResources().getResourceEntryName(v.getId());
+                        if (trimmed.equals(entryName) && !orderedViews.contains(v)) {
+                            orderedViews.add(v);
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        // 追加剩余未在排序配置中的按钮
+        for (View v : allViews) {
+            if (!orderedViews.contains(v)) {
+                orderedViews.add(v);
+            }
+        }
+
+        termToolbarContainer.removeAllViews();
+        for (View v : orderedViews) {
+            termToolbarContainer.addView(v);
+        }
+    }
+
+    private void saveToolbarOrder() {
+        if (termToolbarContainer == null) return;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < termToolbarContainer.getChildCount(); i++) {
+            View v = termToolbarContainer.getChildAt(i);
+            if (v.getId() != View.NO_ID) {
+                try {
+                    String name = getResources().getResourceEntryName(v.getId());
+                    if (sb.length() > 0) sb.append(",");
+                    sb.append(name);
+                } catch (Exception ignored) {}
+            }
+        }
+        PiMetConfig.setTopToolbarOrder(this, sb.toString());
+    }
+
+    private void showReorderToolbarDialog(View targetView) {
+        String btnName = (targetView instanceof TextView) ? ((TextView) targetView).getText().toString() : "该按钮";
+        String[] actions = {"⬅ 向左移动一位", "➡ 向右移动一位", "⏮ 置顶到最前", "⏭ 移到最后"};
+
+        new AlertDialog.Builder(this)
+                .setTitle("调整工具栏按钮顺序: " + btnName)
+                .setItems(actions, (dialog, which) -> {
+                    int currentIndex = termToolbarContainer.indexOfChild(targetView);
+                    int total = termToolbarContainer.getChildCount();
+                    termToolbarContainer.removeView(targetView);
+
+                    if (which == 0) { // 向左
+                        termToolbarContainer.addView(targetView, Math.max(0, currentIndex - 1));
+                    } else if (which == 1) { // 向右
+                        termToolbarContainer.addView(targetView, Math.min(total - 1, currentIndex + 1));
+                    } else if (which == 2) { // 置顶
+                        termToolbarContainer.addView(targetView, 0);
+                    } else if (which == 3) { // 移到最后
+                        termToolbarContainer.addView(targetView, total - 1);
+                    }
+                    saveToolbarOrder();
+                    Toast.makeText(this, "按钮位置已更新并保存", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    // 快捷键自定义与注释管理对话框
+    private void showCustomShortcutsManagerDialog() {
+        String[] items = new String[shortcutKeys.size() + 1];
+        items[0] = "➕ 添加新快捷键...";
+        for (int i = 0; i < shortcutKeys.size(); i++) {
+            ShortcutKey k = shortcutKeys.get(i);
+            String desc = TextUtils.isEmpty(k.description) ? "无注释" : k.description;
+            items[i + 1] = k.label + " (" + desc + ") → " + k.command.replace("\n", "");
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("⚙️ 快捷键与注释管理")
+                .setItems(items, (dialog, which) -> {
+                    if (which == 0) {
+                        showEditShortcutKeyDialog(null, true);
+                    } else {
+                        showEditShortcutKeyDialog(shortcutKeys.get(which - 1), false);
+                    }
+                })
+                .setPositiveButton("完成", null)
+                .show();
+    }
+
+    private void showEditShortcutKeyDialog(ShortcutKey existingKey, boolean isNew) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+
+        TextView labelPrompt = new TextView(this);
+        labelPrompt.setText("按键名称 (Label):");
+        labelPrompt.setTextColor(0xFFC9D1D9);
+        layout.addView(labelPrompt);
+
+        EditText etLabel = new EditText(this);
+        etLabel.setHint("如: git st");
+        etLabel.setTextColor(0xFFF0F6FC);
+        etLabel.setText(existingKey != null ? existingKey.label : "");
+        layout.addView(etLabel);
+
+        TextView cmdPrompt = new TextView(this);
+        cmdPrompt.setText("执行/插入指令 (Command):");
+        cmdPrompt.setTextColor(0xFFC9D1D9);
+        cmdPrompt.setPadding(0, dpToPx(8), 0, 0);
+        layout.addView(cmdPrompt);
+
+        EditText etCmd = new EditText(this);
+        etCmd.setHint("如: git status\\n");
+        etCmd.setTextColor(0xFFF0F6FC);
+        etCmd.setText(existingKey != null ? existingKey.command.replace("\n", "\\n") : "");
+        layout.addView(etCmd);
+
+        TextView descPrompt = new TextView(this);
+        descPrompt.setText("注释说明 (Description):");
+        descPrompt.setTextColor(0xFFC9D1D9);
+        descPrompt.setPadding(0, dpToPx(8), 0, 0);
+        layout.addView(descPrompt);
+
+        EditText etDesc = new EditText(this);
+        etDesc.setHint("如: 查看当前 Git 工作区状态");
+        etDesc.setTextColor(0xFFF0F6FC);
+        etDesc.setText(existingKey != null ? existingKey.description : "");
+        layout.addView(etDesc);
+
+        android.widget.CheckBox cbDirectRun = new android.widget.CheckBox(this);
+        cbDirectRun.setText("直接在终端执行 (不勾选则填入输入框)");
+        cbDirectRun.setTextColor(0xFF8B949E);
+        cbDirectRun.setChecked(existingKey == null || existingKey.isDirectRun);
+        layout.addView(cbDirectRun);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(isNew ? "添加自定义快捷键" : "编辑快捷键与注释")
+                .setView(layout)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String label = etLabel.getText().toString().trim();
+                    String cmd = etCmd.getText().toString().replace("\\n", "\n");
+                    String desc = etDesc.getText().toString().trim();
+                    boolean directRun = cbDirectRun.isChecked();
+
+                    if (TextUtils.isEmpty(label)) {
+                        Toast.makeText(this, "按键名称不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    if (isNew) {
+                        String id = "custom_" + System.currentTimeMillis();
+                        shortcutKeys.add(new ShortcutKey(id, label, cmd, desc, directRun, false));
+                    } else if (existingKey != null) {
+                        existingKey.label = label;
+                        existingKey.command = cmd;
+                        existingKey.description = desc;
+                        existingKey.isDirectRun = directRun;
+                    }
+                    saveCustomShortcuts();
+                    renderTermuxKeys();
+                    Toast.makeText(this, "快捷键已保存", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null);
+
+        if (!isNew && existingKey != null && !existingKey.isSystem) {
+            builder.setNeutralButton("删除", (dialog, which) -> {
+                shortcutKeys.remove(existingKey);
+                saveCustomShortcuts();
+                renderTermuxKeys();
+                Toast.makeText(this, "已删除快捷键", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        builder.show();
+    }
+
+    private int dpToPx(int dp) {
+        return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void adjustTermFontSize(float delta) {
@@ -963,13 +1441,6 @@ public class MainActivity extends AppCompatActivity {
             terminalOutput.setTextSize(currentTermFontSize);
             PiMetConfig.setTermFontSize(this, currentTermFontSize);
             Toast.makeText(this, "终端字体: " + (int) currentTermFontSize + "sp", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void setupActionKey(int viewId, Runnable action) {
-        View v = findViewById(viewId);
-        if (v != null) {
-            v.setOnClickListener(view -> action.run());
         }
     }
 
@@ -1157,6 +1628,8 @@ public class MainActivity extends AppCompatActivity {
     private void sendCommand() {
         String cmd = commandInput.getText().toString();
         if (!TextUtils.isEmpty(cmd)) {
+            commandHistory.add(cmd);
+            historyIndex = -1;
             executeCommand(cmd + "\n");
             commandInput.setText("");
         }
