@@ -187,7 +187,7 @@ public class MainActivity extends AppCompatActivity {
         initSettingsPanel();
 
         // 启动主终端会话
-        startSession(0);
+        startTerminalSession();
 
         // 首次状态自检
         checkServiceStatus();
