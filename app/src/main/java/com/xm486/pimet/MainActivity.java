@@ -18,6 +18,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -118,7 +119,6 @@ public class MainActivity extends AppCompatActivity {
     private View btnSend;
     private View btnClear;
     private View btnCtrlC;
-    private TextView termTitleTv;
     private TextView btnTermFontDec;
     private TextView btnTermFontInc;
     private View btnTermQuickWeb;
@@ -127,10 +127,26 @@ public class MainActivity extends AppCompatActivity {
     private View btnTermAiWatch;
     private View btnTermImportFile;
     private float currentTermFontSize = 12.0f;
-    private ProotSession terminalSession;
-    private final AnsiParser terminalAnsi = new AnsiParser();
-    private final SpannableStringBuilder terminalBuffer = new SpannableStringBuilder();
-    private boolean isTerminalStarted = false;
+
+    // 多窗口终端架构
+    private static class TerminalTab {
+        int id;
+        String title;
+        ProotSession session;
+        SpannableStringBuilder buffer = new SpannableStringBuilder();
+        AnsiParser ansi = new AnsiParser();
+
+        TerminalTab(int id, String title) {
+            this.id = id;
+            this.title = title;
+        }
+    }
+
+    private final List<TerminalTab> terminalTabs = new ArrayList<>();
+    private int activeTabId = -1;
+    private int nextTabId = 1;
+    private LinearLayout termTabsContainer;
+    private View btnNewTab;
 
     // 布局全屏与增强组件
     private View bottomNavBar;
@@ -199,7 +215,9 @@ public class MainActivity extends AppCompatActivity {
         initSettingsPanel();
 
         // 启动主终端会话
-        startTerminalSession();
+        if (ProotManager.isRootfsInstalled(this)) {
+            createTab(true);
+        }
 
         // 首次状态自检
         checkServiceStatus();
@@ -307,6 +325,13 @@ public class MainActivity extends AppCompatActivity {
         settingsStorageTv = findViewById(R.id.settingsStorageTv);
         btnClearNpmCache = findViewById(R.id.btnClearNpmCache);
         btnResetContainer = findViewById(R.id.btnResetContainer);
+
+        // 终端多窗口 Tab 容器与新建按钮
+        termTabsContainer = findViewById(R.id.termTabsContainer);
+        btnNewTab = findViewById(R.id.btnNewTab);
+        if (btnNewTab != null) {
+            btnNewTab.setOnClickListener(v -> createTab(true));
+        }
     }
 
     private void initNavigation() {
@@ -337,9 +362,18 @@ public class MainActivity extends AppCompatActivity {
         } else if (index == 1) {
             updatePiWebDisplay();
         } else if (index == 2) {
-            if (!isTerminalStarted || terminalSession == null || !terminalSession.isRunning()) {
-                startTerminalSession();
+            if (terminalTabs.isEmpty()) {
+                createTab(true);
+            } else {
+                TerminalTab active = getActiveTab();
+                if (active != null) {
+                    terminalOutput.setText(active.buffer);
+                    if (active.session == null || !active.session.isRunning()) {
+                        restartActiveTab();
+                    }
+                }
             }
+            refreshTabsUi();
             terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
         } else if (index == 3) {
             refreshStorageSize();
@@ -545,11 +579,14 @@ public class MainActivity extends AppCompatActivity {
                         appendLaunchLog("\u001B[32m✔ Linux 根系统部署完成！\u001B[0m\n");
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
-                        // 重置终端会话状态，允许进入时立即启动 Bash
-                        isTerminalStarted = false;
-                        if (terminalSession != null) {
-                            terminalSession.close();
+                        for (TerminalTab t : terminalTabs) {
+                            if (t.session != null) t.session.close();
                         }
+                        terminalTabs.clear();
+                        nextTabId = 1;
+                        activeTabId = -1;
+                        refreshTabsUi();
+                        createTab(false);
                         startPiWebService();
                     });
                 }
@@ -800,7 +837,7 @@ public class MainActivity extends AppCompatActivity {
         piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
     }
 
-    // ================= PRoot 终端 (单会话 / 专业快捷键) =================
+    // ================= PRoot 终端 (多窗口 / 快捷按键) =================
     private void initTerminalPanel() {
         btnSend.setOnClickListener(v -> sendCommand());
         commandInput.setOnEditorActionListener((v, actionId, event) -> {
@@ -814,70 +851,110 @@ public class MainActivity extends AppCompatActivity {
         btnTermFontDec.setOnClickListener(v -> adjustTermFontSize(-1.0f));
         btnTermFontInc.setOnClickListener(v -> adjustTermFontSize(1.0f));
 
-        // 右上角快速重连与切回工作台
+        // 顶部操作栏事件
         btnTermReconnect.setOnClickListener(v -> {
-            if (terminalSession != null) {
-                terminalSession.close();
-            }
-            isTerminalStarted = false;
-            startTerminalSession();
-            Toast.makeText(this, "正在重新连接终端...", Toast.LENGTH_SHORT).show();
+            restartActiveTab();
+            Toast.makeText(this, "正在重新连接当前窗口...", Toast.LENGTH_SHORT).show();
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
         // 🤖 AI 终端快捷对话
         btnTermAiChat.setOnClickListener(v -> {
-            if (terminalSession != null) {
-                terminalSession.write("pi\n");
-                Toast.makeText(this, "正在启动 AI 实时交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
-            }
+            executeCommand("pi\n");
+            Toast.makeText(this, "正在启动 AI 实时交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
         });
 
         // 👁️ 实时追踪 AI 动态
         btnTermAiWatch.setOnClickListener(v -> {
-            if (terminalSession != null) {
-                terminalSession.write("tail -f -n 50 /root/pi-web.log\n");
-                Toast.makeText(this, "正在实时追踪后台 AI 工作日志 (退出追踪请按 ⛔ 按钮)...", Toast.LENGTH_SHORT).show();
-            }
+            executeCommand("tail -f -n 50 /root/pi-web.log\n");
+            Toast.makeText(this, "正在实时追踪后台 AI 工作日志 (退出追踪请按 ⛔ 按钮)...", Toast.LENGTH_SHORT).show();
         });
 
         // 📁 从手机导入文件/图片至 PRoot 容器
         btnTermImportFile.setOnClickListener(v -> launchFilePickerForContainer());
 
         btnClear.setOnClickListener(v -> {
-            terminalBuffer.clear();
-            terminalAnsi.reset();
-            terminalOutput.setText("");
+            TerminalTab tab = getActiveTab();
+            if (tab != null) {
+                tab.buffer.clear();
+                tab.ansi.reset();
+                terminalOutput.setText("");
+                if (tab.session != null) {
+                    tab.session.write("clear\n");
+                }
+            }
         });
 
         btnCtrlC.setOnClickListener(v -> {
-            if (terminalSession != null) {
-                terminalSession.sendCtrlC();
+            TerminalTab tab = getActiveTab();
+            if (tab != null && tab.session != null) {
+                tab.session.sendCtrlC();
+                appendTerminalLog(tab, "^C\r\n");
                 Toast.makeText(this, "已发送 Ctrl+C", Toast.LENGTH_SHORT).show();
             }
         });
 
-        // 快捷键栏绑定
-        setupKeyButton(R.id.keyCtrlC, "\u0003");
-        setupKeyButton(R.id.keyCtrlD, "\u0004");
-        setupKeyButton(R.id.keyCtrlL, "\u000C");
-        setupKeyButton(R.id.keyTab, "\t");
-        setupKeyButton(R.id.keyEsc, "\u001B");
-        setupKeyButton(R.id.keyPi, "pi\n");
-        setupKeyButton(R.id.keyPiHelp, "pi -h\n");
-        setupKeyButton(R.id.keyPiModel, "/model\n");
-        setupKeyButton(R.id.keyPiLogin, "/login\n");
-        setupKeyButton(R.id.keyTilde, "~");
-        setupKeyButton(R.id.keySlash, "/");
-        setupKeyButton(R.id.keyDash, "-");
-        setupKeyButton(R.id.keyPipe, "|");
-        setupKeyButton(R.id.keyGt, ">");
-        setupKeyButton(R.id.keyAmp, "&");
-        setupKeyButton(R.id.keyNodeV, "node -v\n");
-        setupKeyButton(R.id.keyNpmV, "npm -v\n");
-        setupKeyButton(R.id.keyPs, "ps -ef\n");
-        setupKeyButton(R.id.keyTop, "top\n");
-        setupKeyButton(R.id.keyClear, "clear\n");
+        // 快捷键栏: 控制键
+        setupActionKey(R.id.keyCtrlC, () -> {
+            TerminalTab tab = getActiveTab();
+            if (tab != null && tab.session != null) {
+                tab.session.sendCtrlC();
+                appendTerminalLog(tab, "^C\r\n");
+                Toast.makeText(this, "已发送 Ctrl+C", Toast.LENGTH_SHORT).show();
+            }
+        });
+        setupActionKey(R.id.keyCtrlD, () -> {
+            TerminalTab tab = getActiveTab();
+            if (tab != null && tab.session != null) {
+                tab.session.write("\u0004");
+                appendTerminalLog(tab, "^D\r\n");
+                Toast.makeText(this, "已发送 Ctrl+D", Toast.LENGTH_SHORT).show();
+            }
+        });
+        setupActionKey(R.id.keyCtrlL, () -> {
+            TerminalTab tab = getActiveTab();
+            if (tab != null) {
+                tab.buffer.clear();
+                tab.ansi.reset();
+                terminalOutput.setText("");
+                if (tab.session != null) tab.session.write("clear\n");
+            }
+        });
+        setupActionKey(R.id.keyTab, () -> insertTextToInput("    "));
+        setupActionKey(R.id.keyEsc, () -> {
+            TerminalTab tab = getActiveTab();
+            if (tab != null && tab.session != null) {
+                tab.session.write("\u001B");
+                Toast.makeText(this, "已发送 ESC", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // 快捷指令键
+        setupActionKey(R.id.keyPi, () -> executeCommand("pi\n"));
+        setupActionKey(R.id.keyPiHelp, () -> executeCommand("pi -h\n"));
+        setupActionKey(R.id.keyPiModel, () -> executeCommand("/model\n"));
+        setupActionKey(R.id.keyPiLogin, () -> executeCommand("/login\n"));
+        setupActionKey(R.id.keyNodeV, () -> executeCommand("node -v\n"));
+        setupActionKey(R.id.keyNpmV, () -> executeCommand("npm -v\n"));
+        setupActionKey(R.id.keyPs, () -> executeCommand("ps -ef\n"));
+        setupActionKey(R.id.keyTop, () -> executeCommand("top\n"));
+        setupActionKey(R.id.keyClear, () -> {
+            TerminalTab tab = getActiveTab();
+            if (tab != null) {
+                tab.buffer.clear();
+                tab.ansi.reset();
+                terminalOutput.setText("");
+                if (tab.session != null) tab.session.write("clear\n");
+            }
+        });
+
+        // 符号按键 (直接插入输入框当前光标位置)
+        setupActionKey(R.id.keyTilde, () -> insertTextToInput("~"));
+        setupActionKey(R.id.keySlash, () -> insertTextToInput("/"));
+        setupActionKey(R.id.keyDash, () -> insertTextToInput("-"));
+        setupActionKey(R.id.keyPipe, () -> insertTextToInput("|"));
+        setupActionKey(R.id.keyGt, () -> insertTextToInput(">"));
+        setupActionKey(R.id.keyAmp, () -> insertTextToInput("&"));
     }
 
     private void adjustTermFontSize(float delta) {
@@ -890,68 +967,198 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void setupKeyButton(int viewId, String keySequence) {
+    private void setupActionKey(int viewId, Runnable action) {
         View v = findViewById(viewId);
         if (v != null) {
-            v.setOnClickListener(view -> {
-                if (terminalSession != null) {
-                    terminalSession.write(keySequence);
-                }
-            });
+            v.setOnClickListener(view -> action.run());
         }
     }
 
-    private void startTerminalSession() {
-        if (terminalSession != null && terminalSession.isRunning()) return;
+    private void insertTextToInput(String text) {
+        if (commandInput == null || text == null) return;
+        int start = Math.max(commandInput.getSelectionStart(), 0);
+        int end = Math.max(commandInput.getSelectionEnd(), 0);
+        commandInput.getText().replace(Math.min(start, end), Math.max(start, end), text, 0, text.length());
+        commandInput.requestFocus();
+    }
 
+    private TerminalTab getActiveTab() {
+        for (TerminalTab tab : terminalTabs) {
+            if (tab.id == activeTabId) return tab;
+        }
+        if (!terminalTabs.isEmpty()) return terminalTabs.get(0);
+        return null;
+    }
+
+    private void createTab(boolean switchToIt) {
         if (!ProotManager.isRootfsInstalled(this)) {
-            isTerminalStarted = false;
-            terminalBuffer.clear();
-            terminalAnsi.reset();
-            terminalBuffer.append("\u001B[33m• Linux 容器系统尚未部署，请先在【控制中心】点击一键部署！\u001B[0m\r\n");
-            terminalOutput.setText(terminalBuffer);
+            Toast.makeText(this, "Linux 容器尚未部署，请先在控制中心部署！", Toast.LENGTH_SHORT).show();
+            terminalOutput.setText("• Linux 容器尚未部署，请先在【控制中心】点击一键部署！");
             return;
         }
 
-        terminalBuffer.clear();
-        terminalAnsi.reset();
-        isTerminalStarted = true;
-        if (terminalSession != null) {
-            terminalSession.close();
+        int id = nextTabId++;
+        TerminalTab tab = new TerminalTab(id, "窗口 " + id);
+        terminalTabs.add(tab);
+
+        startTabSession(tab);
+        if (switchToIt) {
+            switchToTab(id);
+        } else {
+            refreshTabsUi();
         }
-        terminalSession = new ProotSession(this, new ProotSession.OutputListener() {
+    }
+
+    private void startTabSession(TerminalTab tab) {
+        if (tab.session != null) {
+            tab.session.close();
+        }
+        tab.buffer.clear();
+        tab.ansi.reset();
+
+        tab.session = new ProotSession(this, new ProotSession.OutputListener() {
             @Override
             public void onOutput(String text) {
-                appendTerminalLog(text);
+                appendTerminalLog(tab, text);
             }
 
             @Override
             public void onExit(int code) {
-                isTerminalStarted = false;
-                appendTerminalLog("\n\u001B[33m[终端已退出, 退出码: " + code + ", 点击右上角重连]\u001B[0m\n");
+                appendTerminalLog(tab, "\n\u001B[33m[窗口 " + tab.id + " 已退出, 退出码: " + code + ", 点击上方重连]\u001B[0m\n");
             }
         });
-        terminalSession.start();
+        tab.session.start();
     }
 
-    private void appendTerminalLog(String text) {
-        if (text == null) return;
-        mainHandler.post(() -> {
-            terminalAnsi.appendAnsiText(terminalBuffer, text);
-            if (terminalBuffer.length() > 30000) {
-                terminalBuffer.delete(0, 6000);
+    private void restartActiveTab() {
+        TerminalTab tab = getActiveTab();
+        if (tab != null) {
+            startTabSession(tab);
+            terminalOutput.setText(tab.buffer);
+        }
+    }
+
+    private void closeTab(int id) {
+        if (terminalTabs.size() <= 1) {
+            Toast.makeText(this, "至少保留一个终端窗口", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        TerminalTab target = null;
+        for (TerminalTab t : terminalTabs) {
+            if (t.id == id) {
+                target = t;
+                break;
             }
-            if (viewTerminal.getVisibility() == View.VISIBLE) {
-                terminalOutput.setText(terminalBuffer);
+        }
+        if (target != null) {
+            if (target.session != null) {
+                target.session.close();
+            }
+            int index = terminalTabs.indexOf(target);
+            terminalTabs.remove(target);
+            if (activeTabId == id) {
+                int nextIndex = Math.min(index, terminalTabs.size() - 1);
+                switchToTab(terminalTabs.get(nextIndex).id);
+            } else {
+                refreshTabsUi();
+            }
+        }
+    }
+
+    private void switchToTab(int id) {
+        activeTabId = id;
+        TerminalTab tab = getActiveTab();
+        if (tab != null) {
+            terminalOutput.setText(tab.buffer);
+            terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        }
+        refreshTabsUi();
+    }
+
+    private void refreshTabsUi() {
+        if (termTabsContainer == null) return;
+        termTabsContainer.removeAllViews();
+
+        for (TerminalTab tab : terminalTabs) {
+            View tabView = getLayoutInflater().inflate(R.layout.item_terminal_tab, termTabsContainer, false);
+            TextView titleTv = tabView.findViewById(R.id.tabTitleTv);
+            TextView closeBtn = tabView.findViewById(R.id.tabCloseBtn);
+
+            titleTv.setText(tab.title);
+            boolean isActive = (tab.id == activeTabId);
+            if (isActive) {
+                tabView.setBackgroundResource(R.drawable.bg_btn_primary);
+                titleTv.setTextColor(0xFFFFFFFF);
+                closeBtn.setTextColor(0xCCFFFFFF);
+            } else {
+                tabView.setBackgroundResource(R.drawable.bg_btn_secondary);
+                titleTv.setTextColor(0xFF8B949E);
+                closeBtn.setTextColor(0xFF8B949E);
+            }
+
+            if (terminalTabs.size() > 1) {
+                closeBtn.setVisibility(View.VISIBLE);
+                closeBtn.setOnClickListener(v -> closeTab(tab.id));
+            } else {
+                closeBtn.setVisibility(View.GONE);
+            }
+
+            tabView.setOnClickListener(v -> switchToTab(tab.id));
+            termTabsContainer.addView(tabView);
+        }
+
+        if (btnNewTab != null) {
+            if (btnNewTab.getParent() != null) {
+                ((ViewGroup) btnNewTab.getParent()).removeView(btnNewTab);
+            }
+            int h = (int) (26 * getResources().getDisplayMetrics().density + 0.5f);
+            int m = (int) (4 * getResources().getDisplayMetrics().density + 0.5f);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, h);
+            lp.setMargins(m, 0, 0, 0);
+            termTabsContainer.addView(btnNewTab, lp);
+        }
+    }
+
+    private void appendTerminalLog(TerminalTab tab, String text) {
+        if (tab == null || text == null) return;
+        mainHandler.post(() -> {
+            tab.ansi.appendAnsiText(tab.buffer, text);
+            if (tab.buffer.length() > 40000) {
+                tab.buffer.delete(0, 8000);
+            }
+            TerminalTab active = getActiveTab();
+            if (active != null && active.id == tab.id && viewTerminal.getVisibility() == View.VISIBLE) {
+                terminalOutput.setText(tab.buffer);
                 terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
             }
         });
     }
 
+    private void executeCommand(String cmd) {
+        TerminalTab tab = getActiveTab();
+        if (tab == null) {
+            createTab(true);
+            tab = getActiveTab();
+        }
+        if (tab == null) return;
+
+        if (tab.session == null || !tab.session.isRunning()) {
+            Toast.makeText(this, "正在重新启动会话...", Toast.LENGTH_SHORT).show();
+            startTabSession(tab);
+        }
+
+        String toSend = cmd.endsWith("\n") ? cmd : cmd + "\n";
+        appendTerminalLog(tab, "\u001B[32mroot@pimet\u001B[0m:\u001B[34m~\u001B[0m# " + toSend);
+        if (tab.session != null) {
+            tab.session.write(toSend);
+        }
+    }
+
     private void sendCommand() {
         String cmd = commandInput.getText().toString();
-        if (terminalSession != null && !TextUtils.isEmpty(cmd)) {
-            terminalSession.write(cmd + "\n");
+        if (!TextUtils.isEmpty(cmd)) {
+            executeCommand(cmd + "\n");
             commandInput.setText("");
         }
     }
@@ -1031,11 +1238,9 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnClearNpmCache.setOnClickListener(v -> {
-            if (terminalSession != null) {
-                terminalSession.write("npm cache clean --force\n");
-                Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
-                switchTab(2);
-            }
+            executeCommand("npm cache clean --force\n");
+            Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
+            switchTab(2);
         });
 
         btnResetContainer.setOnClickListener(v -> {
@@ -1044,6 +1249,13 @@ public class MainActivity extends AppCompatActivity {
                     .setMessage("此操作将彻底删除内置 PRoot 容器文件系统，所有已安装的 npm 包及数据将被清空。")
                     .setPositiveButton("确认重置", (dialog, which) -> {
                         Toast.makeText(this, "正在清理容器目录...", Toast.LENGTH_SHORT).show();
+                        for (TerminalTab t : terminalTabs) {
+                            if (t.session != null) t.session.close();
+                        }
+                        terminalTabs.clear();
+                        nextTabId = 1;
+                        activeTabId = -1;
+                        refreshTabsUi();
                         new Thread(() -> {
                             File rootfs = ProotManager.getRootfsDir(this);
                             ProotManager.deleteRecursive(rootfs);
@@ -1303,10 +1515,11 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 if (count > 0) {
                     Toast.makeText(this, "成功导入 " + count + " 个文件至 /root", Toast.LENGTH_SHORT).show();
-                    appendTerminalLog("\n\u001B[32m[已导入 " + count + " 个文件至 /root: " + names + "]\u001B[0m\n");
-                    if (terminalSession != null && terminalSession.isRunning()) {
-                        terminalSession.write("ls -la /root\n");
+                    TerminalTab tab = getActiveTab();
+                    if (tab != null) {
+                        appendTerminalLog(tab, "\n\u001B[32m[已导入 " + count + " 个文件至 /root: " + names + "]\u001B[0m\n");
                     }
+                    executeCommand("ls -la /root\n");
                 } else {
                     Toast.makeText(this, "导入文件失败，请检查文件或权限", Toast.LENGTH_SHORT).show();
                 }
@@ -1368,8 +1581,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (terminalSession != null) {
-            terminalSession.close();
+        for (TerminalTab tab : terminalTabs) {
+            if (tab.session != null) {
+                tab.session.close();
+            }
         }
+        terminalTabs.clear();
     }
 }

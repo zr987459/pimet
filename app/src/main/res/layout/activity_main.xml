@@ -666,142 +666,180 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 终端顶部操作栏 (AI 对话 / 实时动态 / 重连 / 快捷操作) -->
-            <LinearLayout
+            <!-- 顶栏 1: 终端多窗口标签栏 (可横向滑动切换多会话) -->
+            <HorizontalScrollView
                 android:layout_width="match_parent"
-                android:layout_height="40dp"
+                android:layout_height="36dp"
                 android:background="#161B22"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp">
+                android:scrollbars="none">
 
-                <TextView
-                    android:id="@+id/termTitleTv"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="💻 AI 终端"
-                    android:textColor="#58A6FF"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <!-- 🤖 AI 对话快捷启动入口 -->
-                <TextView
-                    android:id="@+id/btnTermAiChat"
+                <LinearLayout
+                    android:id="@+id/termTabsContainer"
                     android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:background="@drawable/bg_btn_primary"
-                    android:gravity="center"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
                     android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="🤖 AI 对话"
-                    android:textColor="#FFFFFF"
-                    android:textSize="11sp" />
+                    android:paddingEnd="8dp">
 
-                <!-- 👁️ 实时追踪 AI 动态 -->
-                <TextView
-                    android:id="@+id/btnTermAiWatch"
+                    <!-- 动态注入窗口 Tab -->
+
+                    <!-- ➕ 新建窗口按钮 -->
+                    <TextView
+                        android:id="@+id/btnNewTab"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="➕ 新建窗口"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#21262D" />
+
+            <!-- 顶栏 2: 终端快捷操作工具栏 (横向滚动，彻底告别按键挤压) -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:background="#0D1117"
+                android:scrollbars="none">
+
+                <LinearLayout
                     android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
                     android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="👁️ AI 动态"
-                    android:textColor="#3FB950"
-                    android:textSize="11sp" />
+                    android:paddingEnd="8dp">
 
-                <!-- 📁 导入文件/图片至工作区 -->
-                <TextView
-                    android:id="@+id/btnTermImportFile"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
-                    android:text="📁 导入"
-                    android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    <!-- 🤖 AI 对话快捷启动入口 -->
+                    <TextView
+                        android:id="@+id/btnTermAiChat"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:background="@drawable/bg_btn_primary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="🤖 AI 对话"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11sp" />
 
-                <TextView
-                    android:id="@+id/btnTermReconnect"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:text="🔄"
-                    android:textColor="#58A6FF"
-                    android:textSize="11sp" />
+                    <!-- 👁️ 实时追踪 AI 动态 -->
+                    <TextView
+                        android:id="@+id/btnTermAiWatch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="👁️ AI 动态"
+                        android:textColor="#3FB950"
+                        android:textSize="11sp" />
 
-                <TextView
-                    android:id="@+id/btnClear"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:text="🧹"
-                    android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    <!-- 📁 导入文件/图片至工作区 -->
+                    <TextView
+                        android:id="@+id/btnTermImportFile"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="📁 导入"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
 
-                <TextView
-                    android:id="@+id/btnCtrlC"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_danger"
-                    android:gravity="center"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:text="⛔"
-                    android:textColor="#FCA5A5"
-                    android:textSize="11sp" />
+                    <!-- 🔄 快速重连 -->
+                    <TextView
+                        android:id="@+id/btnTermReconnect"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="🔄 重连"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
 
-                <TextView
-                    android:id="@+id/btnTermFontDec"
-                    android:layout_width="22dp"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="2dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:text="-"
-                    android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    <!-- 🧹 清屏 -->
+                    <TextView
+                        android:id="@+id/btnClear"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="🧹 清屏"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
 
-                <TextView
-                    android:id="@+id/btnTermFontInc"
-                    android:layout_width="22dp"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="2dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:text="+"
-                    android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    <!-- ⛔ 中断 (Ctrl+C) -->
+                    <TextView
+                        android:id="@+id/btnCtrlC"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_danger"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="⛔ 中断"
+                        android:textColor="#FCA5A5"
+                        android:textSize="11sp" />
 
-                <!-- 右上角极速切回工作台入口 -->
-                <TextView
-                    android:id="@+id/btnTermQuickWeb"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_secondary"
-                    android:gravity="center"
-                    android:paddingStart="7dp"
-                    android:paddingEnd="7dp"
-                    android:text="🌐"
-                    android:textColor="#58A6FF"
-                    android:textSize="11sp" />
-            </LinearLayout>
+                    <!-- 字体大小控制 -->
+                    <TextView
+                        android:id="@+id/btnTermFontDec"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:text="A-"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnTermFontInc"
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:text="A+"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <!-- 极速切回工作台 -->
+                    <TextView
+                        android:id="@+id/btnTermQuickWeb"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="🌐 工作台"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </HorizontalScrollView>
 
             <View
                 android:layout_width="match_parent"
@@ -824,7 +862,7 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="monospace"
                     android:lineSpacingExtra="2dp"
-                    android:text="正在初始化 PRoot 终端环境..."
+                    android:text=""
                     android:textColor="#3FB950"
                     android:textIsSelectable="true"
                     android:textSize="12sp" />
