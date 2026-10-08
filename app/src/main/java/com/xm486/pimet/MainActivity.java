@@ -367,6 +367,18 @@ public class MainActivity extends AppCompatActivity {
         launchModelDescTv.setText(provider + " · " + model);
     }
 
+    private void appendLaunchLog(String message) {
+        if (message == null) return;
+        mainHandler.post(() -> {
+            CharSequence cur = launchLogTv.getText();
+            if (cur == null || cur.toString().contains("[系统就绪]")) {
+                launchLogTv.setText(message);
+            } else {
+                launchLogTv.append(message);
+            }
+        });
+    }
+
     private void refreshLaunchLog() {
         new Thread(() -> {
             String log = PiWebManager.readLastLog(this);
@@ -477,7 +489,7 @@ public class MainActivity extends AppCompatActivity {
         }
         isDeploying = true;
         launchProgressBar.setVisibility(View.VISIBLE);
-        updateLaunchHero();
+        updateLaunchStatusUI(false);
 
         appendLaunchLog("\u001B[33m🚀 开始执行一键部署流水线...\u001B[0m\n");
 
@@ -505,7 +517,7 @@ public class MainActivity extends AppCompatActivity {
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
                         appendLaunchLog("\u001B[31m❌ 根系统部署失败: " + error + "\u001B[0m\n");
-                        updateLaunchHero();
+                        updateLaunchStatusUI(false);
                     });
                 }
             });
@@ -769,6 +781,10 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         holder.session.start();
+    }
+
+    private void appendTerminalLog(String text) {
+        appendTerminalLog(activeSessionIdx, text);
     }
 
     private void appendTerminalLog(int sessionIdx, String text) {
