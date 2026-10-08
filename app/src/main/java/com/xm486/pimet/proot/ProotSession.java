@@ -111,12 +111,22 @@ public final class ProotSession {
         });
     }
 
+    public boolean isRunning() {
+        return isRunning && process != null && process.isAlive();
+    }
+
+    public synchronized void restart() {
+        close();
+        start();
+    }
+
     public synchronized void close() {
         isRunning = false;
         if (process != null) {
-            process.destroy();
+            try {
+                process.destroyForcibly();
+            } catch (Throwable ignored) {}
             process = null;
         }
-        executor.shutdownNow();
     }
 }

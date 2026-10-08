@@ -540,212 +540,180 @@
         </ScrollView>
 
         <!-- ================= 页面 2: Pi-Web 工作台 (WebUI) ================= -->
-        <LinearLayout
+        <FrameLayout
             android:id="@+id/viewPiWeb"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 网页加载进度条 -->
+            <!-- 页面内容主体：WebView 沉浸撑满整屏 -->
+            <WebView
+                android:id="@+id/piWebWebView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- 极简微型网页加载进度条 (不占空间) -->
             <ProgressBar
                 android:id="@+id/piWebProgressBar"
                 style="?android:attr/progressBarStyleHorizontal"
                 android:layout_width="match_parent"
                 android:layout_height="2.5dp"
+                android:layout_gravity="top"
                 android:max="100"
                 android:visibility="gone" />
 
-            <!-- 增强控制顶栏 (WebUI Toolbar Plus) -->
+            <!-- 离线未启动友好引导卡片 -->
             <LinearLayout
-                android:id="@+id/piWebToolbar"
+                android:id="@+id/piWebOfflineCard"
                 android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:background="#161B22"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp">
-
-                <View
-                    android:id="@+id/piWebStatusDot"
-                    android:layout_width="8dp"
-                    android:layout_height="8dp"
-                    android:background="@drawable/bg_status_dot_gray" />
-
-                <!-- 前进 / 后退 -->
-                <TextView
-                    android:id="@+id/btnWebBack"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:layout_marginStart="4dp"
-                    android:gravity="center"
-                    android:text="◀"
-                    android:textColor="#8B949E"
-                    android:textSize="11sp" />
+                android:layout_height="match_parent"
+                android:background="#0D1117"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:visibility="gone">
 
                 <TextView
-                    android:id="@+id/btnWebForward"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:gravity="center"
-                    android:text="▶"
-                    android:textColor="#8B949E"
-                    android:textSize="11sp" />
-
-                <TextView
-                    android:id="@+id/piWebTitleTv"
-                    android:layout_width="0dp"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:layout_weight="1"
-                    android:ellipsize="middle"
-                    android:singleLine="true"
-                    android:text="http://127.0.0.1:30141"
+                    android:text="🌐"
+                    android:textSize="48sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="Pi-Web 服务未在运行"
+                    android:textColor="#F0F6FC"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/piWebOfflineSubTv"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center"
+                    android:text="端口 30141 尚未启动监听，请先启动服务。"
                     android:textColor="#8B949E"
-                    android:textSize="11sp" />
+                    android:textSize="12sp" />
 
-                <!-- 刷新 -->
                 <TextView
-                    android:id="@+id/piWebReloadBtn"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:gravity="center"
-                    android:text="🔄"
-                    android:textSize="13sp" />
-
-                <!-- 文字缩放调节 -->
-                <TextView
-                    android:id="@+id/btnWebZoom"
+                    android:id="@+id/piWebWakeBtn"
                     android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:background="@drawable/bg_btn_secondary"
+                    android:layout_height="40dp"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/bg_btn_success"
                     android:gravity="center"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
-                    android:text="100%"
-                    android:textColor="#C9D1D9"
-                    android:textSize="10.5sp" />
-
-                <!-- 全屏沉浸式切换 -->
-                <TextView
-                    android:id="@+id/btnWebFullscreen"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:layout_marginStart="2dp"
-                    android:gravity="center"
-                    android:text="⛶"
-                    android:textColor="#C9D1D9"
-                    android:textSize="14sp" />
-
-                <!-- 外部打开 -->
-                <TextView
-                    android:id="@+id/piWebBrowserBtn"
-                    android:layout_width="28dp"
-                    android:layout_height="28dp"
-                    android:gravity="center"
-                    android:text="↗"
-                    android:textColor="#C9D1D9"
-                    android:textSize="14sp" />
-
-                <!-- 右上角极速切终端入口 -->
-                <TextView
-                    android:id="@+id/btnWebQuickTerminal"
-                    android:layout_width="wrap_content"
-                    android:layout_height="26dp"
-                    android:layout_marginStart="4dp"
-                    android:background="@drawable/bg_btn_primary"
-                    android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="💻 终端"
+                    android:paddingStart="20dp"
+                    android:paddingEnd="20dp"
+                    android:text="🚀 一键启动 Pi-Web"
                     android:textColor="#FFFFFF"
-                    android:textSize="11sp" />
+                    android:textSize="14sp" />
             </LinearLayout>
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="#21262D" />
-
+            <!-- 可自由移动悬浮组件容器 (全屏及日常操作，完全不挡内容) -->
             <FrameLayout
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1">
+                android:id="@+id/floatingMenuContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_marginTop="80dp"
+                android:layout_marginEnd="16dp">
 
-                <WebView
-                    android:id="@+id/piWebWebView"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
-
-                <!-- 全屏模式下浮动退出按钮 -->
-                <TextView
-                    android:id="@+id/btnExitFullscreen"
-                    android:layout_width="wrap_content"
-                    android:layout_height="32dp"
-                    android:layout_gravity="top|end"
-                    android:layout_marginTop="12dp"
-                    android:layout_marginEnd="12dp"
-                    android:background="@drawable/bg_floating_btn"
-                    android:gravity="center"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
-                    android:text="退出全屏 ✕"
-                    android:textColor="#58A6FF"
-                    android:textSize="12sp"
-                    android:visibility="gone" />
-
-                <!-- 离线未启动友好引导卡片 -->
                 <LinearLayout
-                    android:id="@+id/piWebOfflineCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:background="#0D1117"
-                    android:gravity="center"
-                    android:orientation="vertical"
-                    android:padding="24dp"
-                    android:visibility="gone">
+                    android:id="@+id/floatingLayout"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical">
 
-                    <TextView
-                        android:layout_width="wrap_content"
+                    <!-- 垂直展开的功能菜单 (竖向显示功能) -->
+                    <LinearLayout
+                        android:id="@+id/floatingMenuVertical"
+                        android:layout_width="50dp"
                         android:layout_height="wrap_content"
-                        android:text="🌐"
-                        android:textSize="48sp" />
+                        android:layout_marginBottom="8dp"
+                        android:background="@drawable/bg_floating_menu"
+                        android:gravity="center_horizontal"
+                        android:orientation="vertical"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp"
+                        android:visibility="gone">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp"
-                        android:text="Pi-Web 服务未在运行"
-                        android:textColor="#F0F6FC"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
+                        <!-- ⛶ 全屏 / 退出全屏 -->
+                        <TextView
+                            android:id="@+id/btnFloatFullscreen"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="⛶"
+                            android:textColor="#58A6FF"
+                            android:textSize="16sp" />
 
+                        <!-- 💻 切换终端 -->
+                        <TextView
+                            android:id="@+id/btnFloatTerminal"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="💻"
+                            android:textSize="15sp" />
+
+                        <!-- 🔄 刷新网页 -->
+                        <TextView
+                            android:id="@+id/btnFloatReload"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="🔄"
+                            android:textSize="14sp" />
+
+                        <!-- 🔍 网页文字缩放 -->
+                        <TextView
+                            android:id="@+id/btnFloatZoom"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="100%"
+                            android:textColor="#C9D1D9"
+                            android:textSize="10.5sp" />
+
+                        <!-- ↗ 外部浏览器打开 -->
+                        <TextView
+                            android:id="@+id/btnFloatBrowser"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="↗"
+                            android:textColor="#C9D1D9"
+                            android:textSize="15sp" />
+
+                        <!-- ✕ 收起菜单 -->
+                        <TextView
+                            android:id="@+id/btnFloatClose"
+                            android:layout_width="40dp"
+                            android:layout_height="28dp"
+                            android:gravity="center"
+                            android:text="✕"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <!-- 可拖拽移动的微型主悬浮球 -->
                     <TextView
-                        android:id="@+id/piWebOfflineSubTv"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:id="@+id/floatingBall"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="@drawable/bg_floating_ball"
+                        android:elevation="6dp"
                         android:gravity="center"
-                        android:text="端口 30141 尚未启动监听，请先启动服务。"
-                        android:textColor="#8B949E"
-                        android:textSize="12sp" />
-
-                    <TextView
-                        android:id="@+id/piWebWakeBtn"
-                        android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:layout_marginTop="16dp"
-                        android:background="@drawable/bg_btn_success"
-                        android:gravity="center"
-                        android:paddingStart="20dp"
-                        android:paddingEnd="20dp"
-                        android:text="🚀 一键启动 Pi-Web"
-                        android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:text="⚡"
+                        android:textColor="#58A6FF"
+                        android:textSize="18sp" />
                 </LinearLayout>
             </FrameLayout>
-        </LinearLayout>
+        </FrameLayout>
 
         <!-- ================= 页面 3: PRoot 终端 (Terminal) ================= -->
         <LinearLayout
@@ -796,6 +764,19 @@
                     android:text="A+"
                     android:textColor="#C9D1D9"
                     android:textSize="10sp" />
+
+                <TextView
+                    android:id="@+id/btnTermReconnect"
+                    android:layout_width="wrap_content"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="🔄 重连"
+                    android:textColor="#58A6FF"
+                    android:textSize="11sp" />
 
                 <TextView
                     android:id="@+id/btnClear"
@@ -1428,14 +1409,34 @@
                         android:textColorHint="#484F58"
                         android:textSize="13sp" />
 
-                    <!-- 默认模型名称 -->
-                    <TextView
-                        android:layout_width="wrap_content"
+                    <!-- 默认模型名称与在线获取按钮 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
-                        android:text="默认模型 ID (Model Name)"
-                        android:textColor="#C9D1D9"
-                        android:textSize="12sp" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="默认模型 ID (Model Name)"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnFetchAiModels"
+                            android:layout_width="wrap_content"
+                            android:layout_height="26dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:text="🔍 自动获取模型"
+                            android:textColor="#58A6FF"
+                            android:textSize="11sp" />
+                    </LinearLayout>
 
                     <EditText
                         android:id="@+id/inputAiModel"

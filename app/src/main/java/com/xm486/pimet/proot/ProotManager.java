@@ -3,6 +3,7 @@ package com.xm486.pimet.proot;
 import android.content.Context;
 import android.os.Build;
 import android.util.Log;
+import android.util.Pair;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
@@ -19,6 +20,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -35,11 +37,15 @@ public final class ProotManager {
     // 官方与镜像 Rootfs 线路
     private static final String[] ROOTFS_URLS_ARM64 = {
             "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
+            "https://ghproxy.net/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
+            "https://mirror.ghproxy.com/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
             "https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz"
     };
 
     private static final String[] ROOTFS_URLS_X86_64 = {
             "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            "https://ghproxy.net/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            "https://mirror.ghproxy.com/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
             "https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz"
     };
 
@@ -185,7 +191,11 @@ public final class ProotManager {
                         break;
                     }
                 }
-                String[] urls = isX86 ? ROOTFS_URLS_X86_64 : ROOTFS_URLS_ARM64;
+                String[] rawUrls = isX86 ? ROOTFS_URLS_X86_64 : ROOTFS_URLS_ARM64;
+                if (callback != null) callback.onProgress("⚡ 正在测速优选下载镜像线路...", 3);
+                String[] urls = testAndSortCandidateUrls(rawUrls, msg -> {
+                    if (callback != null) callback.onProgress(msg, 5);
+                });
                 File targetTarball = new File(tmpDir, "rootfs.tar.gz");
 
                 boolean downloadSuccess = false;
@@ -254,6 +264,55 @@ public final class ProotManager {
         ensureContainerGroups(context);
     }
 
+    public interface SpeedLogCallback {
+        void onLog(String message);
+    }
+
+    public static String[] testAndSortCandidateUrls(String[] urls, SpeedLogCallback logCallback) {
+        if (urls == null || urls.length <= 1) return urls;
+
+        List<Pair<String, Long>> results = new ArrayList<>();
+        for (String u : urls) {
+            long latency = testUrlLatency(u);
+            results.add(new Pair<>(u, latency >= 0 ? latency : 999999L));
+        }
+
+        Collections.sort(results, (a, b) -> Long.compare(a.second, b.second));
+        String[] sorted = new String[urls.length];
+        for (int i = 0; i < results.size(); i++) {
+            sorted[i] = results.get(i).first;
+        }
+        if (logCallback != null && results.get(0).second < 999999L) {
+            logCallback.onLog("⚡ 优选最快镜像: " + results.get(0).first + " (" + results.get(0).second + "ms)");
+        }
+        return sorted;
+    }
+
+    public static long testUrlLatency(String urlStr) {
+        HttpURLConnection conn = null;
+        try {
+            long start = System.currentTimeMillis();
+            URL u = new URL(urlStr);
+            conn = (HttpURLConnection) u.openConnection();
+            conn.setRequestMethod("HEAD");
+            conn.setConnectTimeout(1800);
+            conn.setReadTimeout(1800);
+            conn.setInstanceFollowRedirects(true);
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 400) {
+                return System.currentTimeMillis() - start;
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.disconnect();
+                } catch (Throwable ignored) {}
+            }
+        }
+        return -1;
+    }
+
     private static void copyExec(File src, File dst) {
         if (!src.isFile()) return;
         if (dst.isFile() && dst.length() == src.length()) return;
@@ -272,20 +331,53 @@ public final class ProotManager {
         }
     }
 
-    private static void ensureContainerDns(Context context) {
+    public static void ensureContainerDns(Context context) {
         try {
             File rootfs = getRootfsDir(context);
             File etc = new File(rootfs, "etc");
             if (!etc.isDirectory()) return;
 
             File rc = new File(etc, "resolv.conf");
-            if (!rc.exists() || rc.length() == 0) {
-                try (FileOutputStream fos = new FileOutputStream(rc)) {
-                    fos.write(("nameserver 223.5.5.5\n" +
-                               "nameserver 119.29.29.29\n" +
-                               "nameserver 8.8.8.8\n" +
-                               "nameserver 1.1.1.1\n").getBytes(StandardCharsets.UTF_8));
+            // 必须先删除旧的软链接或残留文件，防止在 guest 模式下软链接穿透或写失败
+            try {
+                if (rc.exists() || !rc.isFile()) {
+                    rc.delete();
                 }
+            } catch (Throwable ignored) {}
+
+            StringBuilder dnsContent = new StringBuilder();
+            dnsContent.append("# Generated by PiMet - DNS & IPv4 Compatibility\n");
+            // 解决 Node/Glibc 在国内网络环境下 IPv6 AAAA 查询超时与 ECONNABORTED 问题 (参考 DSHA ResolverConfig)
+            dnsContent.append("options timeout:2 attempts:3 single-request-reopen no-aaaa\n");
+
+            // 优先写入 Android 宿主当前 Wi-Fi/移动网络分配的物理 DNS
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    android.net.Network active = cm.getActiveNetwork();
+                    if (active != null) {
+                        android.net.LinkProperties lp = cm.getLinkProperties(active);
+                        if (lp != null) {
+                            for (java.net.InetAddress addr : lp.getDnsServers()) {
+                                String host = addr.getHostAddress();
+                                if (host != null && !host.contains(":")) {
+                                    dnsContent.append("nameserver ").append(host).append("\n");
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // 极速公共 DNS 兜底
+            dnsContent.append("nameserver 223.5.5.5\n");
+            dnsContent.append("nameserver 119.29.29.29\n");
+            dnsContent.append("nameserver 180.76.76.76\n");
+            dnsContent.append("nameserver 8.8.8.8\n");
+            dnsContent.append("nameserver 1.1.1.1\n");
+
+            try (FileOutputStream fos = new FileOutputStream(rc)) {
+                fos.write(dnsContent.toString().getBytes(StandardCharsets.UTF_8));
             }
 
             File hosts = new File(etc, "hosts");
@@ -297,6 +389,42 @@ public final class ProotManager {
             }
         } catch (Throwable t) {
             Log.w(TAG, "ensureContainerDns failed", t);
+        }
+    }
+
+    /**
+     * 在容器内生成强锁定的 .npmrc 配置，杜绝任何阶段回退到外网 registry.npmjs.org
+     */
+    public static void ensureNpmConfig(Context context, String registry) {
+        try {
+            File rootfs = getRootfsDir(context);
+            File rootHome = new File(rootfs, "root");
+            rootHome.mkdirs();
+            File npmrc = new File(rootHome, ".npmrc");
+
+            String normalizedRegistry = registry.endsWith("/") ? registry : (registry + "/");
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("registry=").append(normalizedRegistry).append("\n");
+            sb.append("@earendil-works:registry=").append(normalizedRegistry).append("\n");
+            sb.append("@agegr:registry=").append(normalizedRegistry).append("\n");
+            sb.append("disturl=https://npmmirror.com/mirrors/node\n");
+            sb.append("sass_binary_site=https://npmmirror.com/mirrors/node-sass\n");
+            sb.append("electron_mirror=https://npmmirror.com/mirrors/electron/\n");
+            sb.append("puppeteer_download_host=https://npmmirror.com/mirrors\n");
+            sb.append("fetch-retries=5\n");
+            sb.append("fetch-retry-mintimeout=20000\n");
+            sb.append("fetch-retry-maxtimeout=120000\n");
+            sb.append("fetch-timeout=300000\n");
+            sb.append("audit=false\n");
+            sb.append("fund=false\n");
+            sb.append("progress=true\n");
+
+            try (FileOutputStream fos = new FileOutputStream(npmrc)) {
+                fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ensureNpmConfig failed", t);
         }
     }
 

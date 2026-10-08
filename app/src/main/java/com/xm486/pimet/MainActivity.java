@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -19,6 +20,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -32,6 +34,19 @@ import com.xm486.pimet.proot.PiWebManager;
 import com.xm486.pimet.proot.ProotManager;
 import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import java.io.File;
 
@@ -104,6 +119,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnTermFontDec;
     private TextView btnTermFontInc;
     private View btnTermQuickWeb;
+    private View btnTermReconnect;
     private TextView tabTermSession1;
     private TextView tabTermSession2;
     private View btnTermNewSession;
@@ -113,14 +129,21 @@ public class MainActivity extends AppCompatActivity {
     private View appBar;
     private View bottomNavBar;
     private ProgressBar piWebProgressBar;
-    private View piWebToolbar;
-    private TextView btnWebBack;
-    private TextView btnWebForward;
-    private TextView btnWebZoom;
-    private View btnWebFullscreen;
-    private View btnWebQuickTerminal;
-    private View btnExitFullscreen;
+    private FrameLayout floatingMenuContainer;
+    private View floatingMenuVertical;
+    private TextView floatingBall;
+    private TextView btnFloatFullscreen;
+    private View btnFloatTerminal;
+    private View btnFloatReload;
+    private TextView btnFloatZoom;
+    private View btnFloatBrowser;
+    private View btnFloatClose;
     private boolean isFullscreen = false;
+
+    // 拖拽手势状态
+    private float floatDownRawX, floatDownRawY;
+    private float floatInitialX, floatInitialY;
+    private boolean isFloatDragging = false;
 
     // 设置视图组件
     private TextView chipProviderDeepSeek;
@@ -133,6 +156,7 @@ public class MainActivity extends AppCompatActivity {
     private EditText inputAiBaseUrl;
     private EditText inputAiModel;
     private View btnSaveAiConfig;
+    private View btnFetchAiModels;
     private String selectedProvider = PiMetConfig.PROVIDER_DEEPSEEK;
     private boolean isApiKeyVisible = false;
 
@@ -241,26 +265,26 @@ public class MainActivity extends AppCompatActivity {
 
         // Pi-Web 组件
         piWebProgressBar = findViewById(R.id.piWebProgressBar);
-        piWebToolbar = findViewById(R.id.piWebToolbar);
-        piWebStatusDot = findViewById(R.id.piWebStatusDot);
-        piWebTitleTv = findViewById(R.id.piWebTitleTv);
-        btnWebBack = findViewById(R.id.btnWebBack);
-        btnWebForward = findViewById(R.id.btnWebForward);
-        piWebReloadBtn = findViewById(R.id.piWebReloadBtn);
-        btnWebZoom = findViewById(R.id.btnWebZoom);
-        btnWebFullscreen = findViewById(R.id.btnWebFullscreen);
-        piWebBrowserBtn = findViewById(R.id.piWebBrowserBtn);
-        btnWebQuickTerminal = findViewById(R.id.btnWebQuickTerminal);
-        btnExitFullscreen = findViewById(R.id.btnExitFullscreen);
         piWebWebView = findViewById(R.id.piWebWebView);
         piWebOfflineCard = findViewById(R.id.piWebOfflineCard);
         piWebOfflineSubTv = findViewById(R.id.piWebOfflineSubTv);
         piWebWakeBtn = findViewById(R.id.piWebWakeBtn);
 
+        floatingMenuContainer = findViewById(R.id.floatingMenuContainer);
+        floatingMenuVertical = findViewById(R.id.floatingMenuVertical);
+        floatingBall = findViewById(R.id.floatingBall);
+        btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
+        btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
+        btnFloatReload = findViewById(R.id.btnFloatReload);
+        btnFloatZoom = findViewById(R.id.btnFloatZoom);
+        btnFloatBrowser = findViewById(R.id.btnFloatBrowser);
+        btnFloatClose = findViewById(R.id.btnFloatClose);
+
         // Terminal 组件
         termTitleTv = findViewById(R.id.termTitleTv);
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
+        btnTermReconnect = findViewById(R.id.btnTermReconnect);
         btnClear = findViewById(R.id.btnClear);
         btnCtrlC = findViewById(R.id.btnCtrlC);
         btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
@@ -283,6 +307,7 @@ public class MainActivity extends AppCompatActivity {
         inputAiBaseUrl = findViewById(R.id.inputAiBaseUrl);
         inputAiModel = findViewById(R.id.inputAiModel);
         btnSaveAiConfig = findViewById(R.id.btnSaveAiConfig);
+        btnFetchAiModels = findViewById(R.id.btnFetchAiModels);
 
         settingsPortInput = findViewById(R.id.settingsPortInput);
         btnSavePort = findViewById(R.id.btnSavePort);
@@ -438,13 +463,18 @@ public class MainActivity extends AppCompatActivity {
         PiWebManager.startOrDeploy(this, new PiWebManager.StateListener() {
             @Override
             public void onLog(String log) {
+                appendLaunchLog(log);
                 appendTerminalLog(log);
             }
 
             @Override
             public void onProgress(String message, int percent) {
                 mainHandler.post(() -> {
-                    launchSubtitleTv.setText(message + " (" + percent + "%)");
+                    if (percent >= 0) {
+                        launchSubtitleTv.setText(message + " (" + percent + "%)");
+                    } else {
+                        launchSubtitleTv.setText(message);
+                    }
                 });
             }
 
@@ -469,17 +499,30 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void restartPiWebService() {
-        Toast.makeText(this, "正在重启 Pi-Web...", Toast.LENGTH_SHORT).show();
-        PiWebManager.stopPiWeb();
-        mainHandler.postDelayed(this::startPiWebService, 1000);
+        Toast.makeText(this, "正在安全重启 Pi-Web...", Toast.LENGTH_SHORT).show();
+        launchProgressBar.setVisibility(View.VISIBLE);
+        launchStateTv.setText("正在终止旧服务并释放端口...");
+        launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
+
+        PiWebManager.stopPiWeb(this, () -> {
+            isPiWebAlive = false;
+            updateLaunchStatusUI(false);
+            startPiWebService();
+        });
     }
 
     private void stopPiWebService() {
-        PiWebManager.stopPiWeb();
-        isPiWebAlive = false;
-        updateLaunchStatusUI(false);
-        Toast.makeText(this, "Pi-Web 服务已停止", Toast.LENGTH_SHORT).show();
-        refreshLaunchLog();
+        launchProgressBar.setVisibility(View.VISIBLE);
+        launchStateTv.setText("正在停止服务...");
+        launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
+
+        PiWebManager.stopPiWeb(this, () -> {
+            isPiWebAlive = false;
+            launchProgressBar.setVisibility(View.GONE);
+            updateLaunchStatusUI(false);
+            Toast.makeText(this, "Pi-Web 服务已成功停止", Toast.LENGTH_SHORT).show();
+            refreshLaunchLog();
+        });
     }
 
     private void triggerFullDeploy() {
@@ -507,6 +550,15 @@ public class MainActivity extends AppCompatActivity {
                         appendLaunchLog("\u001B[32m✔ Linux 根系统部署完成！\u001B[0m\n");
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
+                        // 重置终端会话状态，允许进入时立即启动 Bash
+                        for (TermSessionHolder holder : termSessions) {
+                            if (holder != null) {
+                                holder.started = false;
+                                if (holder.session != null) {
+                                    holder.session.close();
+                                }
+                            }
+                        }
                         startPiWebService();
                     });
                 }
@@ -528,7 +580,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ================= Pi-Web 工作台 =================
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void initPiWebView() {
         WebSettings webSettings = piWebWebView.getSettings();
         webSettings.setJavaScriptEnabled(true);
@@ -543,25 +595,7 @@ public class MainActivity extends AppCompatActivity {
         // 初始化网页缩放
         int savedZoom = PiMetConfig.getWebZoom(this);
         webSettings.setTextZoom(savedZoom);
-        btnWebZoom.setText(savedZoom + "%");
-        btnWebZoom.setOnClickListener(v -> cycleWebZoom());
-
-        // 导航按钮
-        btnWebBack.setOnClickListener(v -> {
-            if (piWebWebView.canGoBack()) {
-                piWebWebView.goBack();
-            } else {
-                Toast.makeText(this, "已经是第一页", Toast.LENGTH_SHORT).show();
-            }
-        });
-
-        btnWebForward.setOnClickListener(v -> {
-            if (piWebWebView.canGoForward()) {
-                piWebWebView.goForward();
-            } else {
-                Toast.makeText(this, "已经是最新页", Toast.LENGTH_SHORT).show();
-            }
-        });
+        btnFloatZoom.setText(savedZoom + "%");
 
         piWebWebView.setWebViewClient(new WebViewClient() {
             @Override
@@ -584,22 +618,67 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // 全屏沉浸模式与浮动退出
-        btnWebFullscreen.setOnClickListener(v -> toggleFullscreen(true));
-        btnExitFullscreen.setOnClickListener(v -> toggleFullscreen(false));
+        // 悬浮球自由拖拽与点击手势 (任意移动，不挡界面)
+        floatingBall.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    floatDownRawX = event.getRawX();
+                    floatDownRawY = event.getRawY();
+                    floatInitialX = floatingMenuContainer.getTranslationX();
+                    floatInitialY = floatingMenuContainer.getTranslationY();
+                    isFloatDragging = false;
+                    return true;
 
-        // 右上角极速切终端
-        btnWebQuickTerminal.setOnClickListener(v -> switchTab(2));
+                case MotionEvent.ACTION_MOVE:
+                    float dx = event.getRawX() - floatDownRawX;
+                    float dy = event.getRawY() - floatDownRawY;
+                    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+                        isFloatDragging = true;
+                        floatingMenuContainer.setTranslationX(floatInitialX + dx);
+                        floatingMenuContainer.setTranslationY(floatInitialY + dy);
+                    }
+                    return true;
 
-        piWebReloadBtn.setOnClickListener(v -> {
+                case MotionEvent.ACTION_UP:
+                    if (!isFloatDragging) {
+                        toggleFloatingMenu();
+                    }
+                    return true;
+            }
+            return false;
+        });
+
+        btnFloatClose.setOnClickListener(v -> floatingMenuVertical.setVisibility(View.GONE));
+        btnFloatFullscreen.setOnClickListener(v -> {
+            toggleFullscreen(!isFullscreen);
+            floatingMenuVertical.setVisibility(View.GONE);
+        });
+        btnFloatTerminal.setOnClickListener(v -> {
+            floatingMenuVertical.setVisibility(View.GONE);
+            switchTab(2);
+        });
+        btnFloatReload.setOnClickListener(v -> {
+            floatingMenuVertical.setVisibility(View.GONE);
             if (isPiWebAlive) {
                 piWebWebView.reload();
             } else {
                 updatePiWebDisplay();
             }
         });
-        piWebBrowserBtn.setOnClickListener(v -> openExternalBrowser());
+        btnFloatZoom.setOnClickListener(v -> cycleWebZoom());
+        btnFloatBrowser.setOnClickListener(v -> {
+            floatingMenuVertical.setVisibility(View.GONE);
+            openExternalBrowser();
+        });
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
+    }
+
+    private void toggleFloatingMenu() {
+        if (floatingMenuVertical.getVisibility() == View.VISIBLE) {
+            floatingMenuVertical.setVisibility(View.GONE);
+        } else {
+            floatingMenuVertical.setVisibility(View.VISIBLE);
+        }
     }
 
     private void cycleWebZoom() {
@@ -612,7 +691,7 @@ public class MainActivity extends AppCompatActivity {
 
         PiMetConfig.setWebZoom(this, nextZoom);
         piWebWebView.getSettings().setTextZoom(nextZoom);
-        btnWebZoom.setText(nextZoom + "%");
+        btnFloatZoom.setText(nextZoom + "%");
         Toast.makeText(this, "工作台文字缩放: " + nextZoom + "%", Toast.LENGTH_SHORT).show();
     }
 
@@ -620,14 +699,13 @@ public class MainActivity extends AppCompatActivity {
         isFullscreen = fullscreen;
         appBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
         bottomNavBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
-        piWebToolbar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
-        btnExitFullscreen.setVisibility(fullscreen ? View.VISIBLE : View.GONE);
+        btnFloatFullscreen.setText(fullscreen ? "✕" : "⛶");
+        Toast.makeText(this, fullscreen ? "已进入沉浸模式 (可拖拽悬浮球随时切换)" : "已退出全屏", Toast.LENGTH_SHORT).show();
     }
 
     private void updatePiWebDisplay() {
         int port = PiMetConfig.getWebPort(this);
         String url = getPiWebUrl();
-        piWebTitleTv.setText(url);
 
         new Thread(() -> {
             boolean alive = ProotManager.isPiWebPortAlive(port);
@@ -635,7 +713,6 @@ public class MainActivity extends AppCompatActivity {
                 isPiWebAlive = alive;
                 if (alive) {
                     showPiWebOffline(false);
-                    piWebStatusDot.setBackgroundResource(R.drawable.bg_status_dot_green);
                     if (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port)) {
                         piWebWebView.loadUrl(url);
                     } else {
@@ -643,7 +720,6 @@ public class MainActivity extends AppCompatActivity {
                     }
                 } else {
                     showPiWebOffline(true);
-                    piWebStatusDot.setBackgroundResource(R.drawable.bg_status_dot_gray);
                 }
             });
         }).start();
@@ -670,7 +746,16 @@ public class MainActivity extends AppCompatActivity {
         btnTermFontDec.setOnClickListener(v -> adjustTermFontSize(-1.0f));
         btnTermFontInc.setOnClickListener(v -> adjustTermFontSize(1.0f));
 
-        // 右上角快速切回工作台
+        // 右上角快速重连与切回工作台
+        btnTermReconnect.setOnClickListener(v -> {
+            TermSessionHolder cur = termSessions[activeSessionIdx];
+            if (cur.session != null) {
+                cur.session.close();
+            }
+            cur.started = false;
+            startSession(activeSessionIdx);
+            Toast.makeText(this, "正在重新连接终端...", Toast.LENGTH_SHORT).show();
+        });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
         // 多会话 Tab 切换
@@ -729,7 +814,8 @@ public class MainActivity extends AppCompatActivity {
     private void selectSession(int idx) {
         if (idx < 0 || idx >= termSessions.length) return;
         activeSessionIdx = idx;
-        if (!termSessions[idx].started) {
+        TermSessionHolder cur = termSessions[idx];
+        if (!cur.started || cur.session == null || !cur.session.isRunning()) {
             startSession(idx);
         }
         updateSessionTabUi();
@@ -767,8 +853,25 @@ public class MainActivity extends AppCompatActivity {
 
     private void startSession(int idx) {
         TermSessionHolder holder = termSessions[idx];
-        if (holder.started && holder.session != null) return;
+        if (holder.session != null && holder.session.isRunning()) return;
+
+        if (!ProotManager.isRootfsInstalled(this)) {
+            holder.started = false;
+            holder.buffer.clear();
+            holder.ansi.reset();
+            holder.buffer.append("\u001B[33m• Linux 容器系统尚未部署，请先在【控制中心】点击一键部署！\u001B[0m\r\n");
+            if (activeSessionIdx == idx) {
+                terminalOutput.setText(holder.buffer);
+            }
+            return;
+        }
+
+        holder.buffer.clear();
+        holder.ansi.reset();
         holder.started = true;
+        if (holder.session != null) {
+            holder.session.close();
+        }
         holder.session = new ProotSession(this, new ProotSession.OutputListener() {
             @Override
             public void onOutput(String text) {
@@ -777,7 +880,8 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onExit(int code) {
-                appendTerminalLog(idx, "\n\u001B[33m[会话 " + (idx + 1) + " 已结束, 退出码: " + code + "]\u001B[0m\n");
+                holder.started = false;
+                appendTerminalLog(idx, "\n\u001B[33m[会话 " + (idx + 1) + " 已退出, 退出码: " + code + ", 点击右上角重连]\u001B[0m\n");
             }
         });
         holder.session.start();
@@ -851,6 +955,8 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "✔ AI 凭据已保存并同步至 PRoot 容器！", Toast.LENGTH_SHORT).show();
         });
 
+        btnFetchAiModels.setOnClickListener(v -> fetchAiModels());
+
         int currentPort = PiMetConfig.getWebPort(this);
         settingsPortInput.setText(String.valueOf(currentPort));
 
@@ -913,6 +1019,120 @@ public class MainActivity extends AppCompatActivity {
         });
 
         refreshStorageSize();
+    }
+
+    private void fetchAiModels() {
+        String apiKey = inputAiApiKey.getText().toString().trim();
+        String baseUrl = inputAiBaseUrl.getText().toString().trim();
+
+        if (TextUtils.isEmpty(baseUrl)) {
+            Toast.makeText(this, "⚠️ 请先填写 API Base URL (接口地址)", Toast.LENGTH_SHORT).show();
+            inputAiBaseUrl.requestFocus();
+            return;
+        }
+
+        if (TextUtils.isEmpty(apiKey)) {
+            Toast.makeText(this, "⚠️ 请先填写 API Key (密钥)", Toast.LENGTH_SHORT).show();
+            inputAiApiKey.requestFocus();
+            return;
+        }
+
+        Toast.makeText(this, "🔍 正在连接接口自动获取在线模型...", Toast.LENGTH_SHORT).show();
+
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                String cleanUrl = baseUrl.replaceAll("/+$", "");
+                String requestUrl;
+                if (cleanUrl.endsWith("/v1")) {
+                    requestUrl = cleanUrl + "/models";
+                } else {
+                    requestUrl = cleanUrl + "/v1/models";
+                }
+
+                conn = (HttpURLConnection) new URL(requestUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(12000);
+                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                conn.setRequestProperty("Content-Type", "application/json");
+
+                int code = conn.getResponseCode();
+                InputStream in = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
+
+                StringBuilder resp = new StringBuilder();
+                if (in != null) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            resp.append(line);
+                        }
+                    }
+                }
+
+                if (code >= 200 && code < 400) {
+                    List<String> modelList = parseModelsFromJson(resp.toString());
+                    if (modelList.isEmpty()) {
+                        mainHandler.post(() -> Toast.makeText(this, "接口返回成功，但未解析到模型", Toast.LENGTH_LONG).show());
+                        return;
+                    }
+                    mainHandler.post(() -> showModelSelectDialog(modelList));
+                } else {
+                    String errorMsg = "HTTP " + code + ": " + (resp.length() > 80 ? resp.substring(0, 80) : resp.toString());
+                    mainHandler.post(() -> Toast.makeText(this, "获取模型失败: " + errorMsg, Toast.LENGTH_LONG).show());
+                }
+
+            } catch (Throwable t) {
+                Log.e(TAG, "fetchAiModels error", t);
+                mainHandler.post(() -> Toast.makeText(this, "网络请求异常: " + t.getMessage(), Toast.LENGTH_LONG).show());
+            } finally {
+                if (conn != null) {
+                    try { conn.disconnect(); } catch (Throwable ignored) {}
+                }
+            }
+        }).start();
+    }
+
+    private List<String> parseModelsFromJson(String json) {
+        List<String> list = new ArrayList<>();
+        try {
+            JSONObject obj = new JSONObject(json);
+            if (obj.has("data")) {
+                JSONArray data = obj.getJSONArray("data");
+                for (int i = 0; i < data.length(); i++) {
+                    JSONObject m = data.getJSONObject(i);
+                    if (m.has("id")) {
+                        list.add(m.getString("id"));
+                    }
+                }
+            } else if (obj.has("models")) {
+                JSONArray models = obj.getJSONArray("models");
+                for (int i = 0; i < models.length(); i++) {
+                    JSONObject m = models.getJSONObject(i);
+                    if (m.has("name")) {
+                        list.add(m.getString("name"));
+                    } else if (m.has("model")) {
+                        list.add(m.getString("model"));
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        Collections.sort(list);
+        return list;
+    }
+
+    private void showModelSelectDialog(List<String> models) {
+        String[] modelArray = models.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+                .setTitle("在线获取成功 (共 " + models.size() + " 个模型)")
+                .setItems(modelArray, (dialog, which) -> {
+                    String chosen = modelArray[which];
+                    inputAiModel.setText(chosen);
+                    btnSaveAiConfig.performClick();
+                    Toast.makeText(this, "🎉 已设定并同步模型: " + chosen, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void selectProvider(String provider, String defaultBaseUrl, String defaultModel) {
@@ -986,6 +1206,10 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
+        if (floatingMenuVertical != null && floatingMenuVertical.getVisibility() == View.VISIBLE) {
+            floatingMenuVertical.setVisibility(View.GONE);
+            return;
+        }
         if (isFullscreen) {
             toggleFullscreen(false);
             return;

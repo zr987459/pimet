@@ -78,6 +78,8 @@ public final class PiWebManager {
                 }
 
                 String registry = PiMetConfig.getNpmRegistry(context);
+                ProotManager.ensureContainerDns(context);
+                ProotManager.ensureNpmConfig(context, registry);
 
                 // 如果未安装 pi-web，在标准 Linux 容器内执行 npm install
                 if (!ProotManager.isPiWebInstalled(context)) {
@@ -85,21 +87,53 @@ public final class PiWebManager {
                         if (listener != null) listener.onLog("\u001B[33m• 正在从镜像源安装 Pi-Web 与 Pi 核心套件 (" + registry + ")...\u001B[0m\n");
                     });
 
+                    String normalizedRegistry = registry.endsWith("/") ? registry : (registry + "/");
+
                     List<String> installCmd = Arrays.asList(
                             "/bin/bash", "-c",
-                            "npm install -g --ignore-scripts --no-audit --no-fund --registry=" + registry + " @earendil-works/pi-coding-agent@1.0.0 @agegr/pi-web"
+                            "export npm_config_registry=\"" + normalizedRegistry + "\" && " +
+                            "export npm_config_fetch_retries=5 && " +
+                            "export npm_config_fetch_timeout=300000 && " +
+                            "npm config set registry \"" + normalizedRegistry + "\" --global 2>/dev/null || true; " +
+                            "npm install -g --loglevel=info --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent @agegr/pi-web"
                     );
 
                     ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", installCmd);
                     pb.redirectErrorStream(true);
                     Process process = pb.start();
 
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            final String l = line;
+                    try (InputStream in = process.getInputStream()) {
+                        byte[] buffer = new byte[1024];
+                        int read;
+                        StringBuilder lineBuf = new StringBuilder();
+                        while ((read = in.read(buffer)) != -1) {
+                            String chunk = new String(buffer, 0, read, StandardCharsets.UTF_8);
+                            for (int i = 0; i < chunk.length(); i++) {
+                                char c = chunk.charAt(i);
+                                if (c == '\n' || c == '\r') {
+                                    if (lineBuf.length() > 0) {
+                                        final String line = lineBuf.toString();
+                                        lineBuf.setLength(0);
+                                        mainHandler.post(() -> {
+                                            if (listener != null) {
+                                                listener.onLog(line + "\n");
+                                                if (line.contains("http fetch") || line.contains("reify") || line.contains("idealTree")) {
+                                                    String clean = line.replace("npm ", "").trim();
+                                                    if (clean.length() > 50) clean = clean.substring(0, 50) + "...";
+                                                    listener.onProgress(clean, -1);
+                                                }
+                                            }
+                                        });
+                                    }
+                                } else {
+                                    lineBuf.append(c);
+                                }
+                            }
+                        }
+                        if (lineBuf.length() > 0) {
+                            final String remaining = lineBuf.toString();
                             mainHandler.post(() -> {
-                                if (listener != null) listener.onLog(l + "\n");
+                                if (listener != null) listener.onLog(remaining + "\n");
                             });
                         }
                     }
@@ -123,7 +157,7 @@ public final class PiWebManager {
                         "export PORT=" + port + "; if command -v pi-web >/dev/null 2>&1; then exec pi-web; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js; fi"
                 );
 
-                stopPiWeb();
+                stopPiWebSync(context);
                 ProcessBuilder pbStart = ProotManager.buildProotProcess(context, "/root", startCmd);
                 File logFile = new File(ProotManager.getRootfsDir(context), "root/pi-web.log");
                 logFile.getParentFile().mkdirs();
@@ -166,10 +200,55 @@ public final class PiWebManager {
         }).start();
     }
 
+    /**
+     * 强力终止 Pi-Web 服务（同步版本，用于重新拉起前彻底清场）
+     */
+    public static void stopPiWebSync(Context context) {
+        if (daemonProcess != null) {
+            try {
+                daemonProcess.destroyForcibly();
+            } catch (Throwable ignored) {}
+            daemonProcess = null;
+        }
+
+        try {
+            int port = PiMetConfig.getWebPort(context);
+            // 杀死容器内残留的 pi-web 与 Node 监听实例
+            List<String> killCmd = Arrays.asList(
+                    "/bin/bash", "-c",
+                    "pkill -9 -f pi-web 2>/dev/null; " +
+                    "pkill -9 -f 'node.*pi-web' 2>/dev/null; " +
+                    "fuser -k -9 " + port + "/tcp 2>/dev/null; " +
+                    "kill -9 $(lsof -t -i:" + port + " 2>/dev/null) 2>/dev/null || true"
+            );
+            ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", killCmd);
+            Process p = pb.start();
+            p.waitFor();
+
+            // 等待端口彻底释放
+            for (int i = 0; i < 6; i++) {
+                if (!ProotManager.isPiWebPortAlive(port)) break;
+                Thread.sleep(300);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 强力终止 Pi-Web 服务（异步版本，不阻塞 UI 线程）
+     */
+    public static void stopPiWeb(Context context, Runnable callback) {
+        new Thread(() -> {
+            stopPiWebSync(context);
+            if (callback != null) {
+                mainHandler.post(callback);
+            }
+        }).start();
+    }
+
     public static synchronized void stopPiWeb() {
         if (daemonProcess != null) {
             try {
-                daemonProcess.destroy();
+                daemonProcess.destroyForcibly();
             } catch (Throwable ignored) {}
             daemonProcess = null;
         }
