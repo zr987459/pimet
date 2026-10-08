@@ -167,7 +167,9 @@ public class DevicePrivilegeManager {
             return "Error: Shizuku not authorized";
         }
         try {
-            Process p = Shizuku.newProcess(new String[]{"sh", "-c", cmd}, null, null);
+            java.lang.reflect.Method method = Shizuku.class.getDeclaredMethod("newProcess", String[].class, String[].class, String.class);
+            method.setAccessible(true);
+            Process p = (Process) method.invoke(null, new String[]{"sh", "-c", cmd}, null, null);
             StringBuilder sb = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 String line;
