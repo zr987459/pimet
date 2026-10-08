@@ -37,6 +37,7 @@ import com.xm486.pimet.terminal.AnsiParser;
  */
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "MainActivity";
     private static final String PI_WEB_URL = "http://127.0.0.1:30141";
 
     // 页面与导航
@@ -52,9 +53,9 @@ public class MainActivity extends AppCompatActivity {
     // Pi-Web 相关视图
     private View piWebStatusDot;
     private TextView piWebTitleTv;
-    private Button piWebReloadBtn;
-    private Button piWebBrowserBtn;
-    private Button piWebTerminalBtn;
+    private View piWebReloadBtn;
+    private View piWebBrowserBtn;
+    private View piWebTerminalBtn;
     private WebView piWebWebView;
     private View piWebOfflineCard;
     private Button piWebLaunchBtn;
@@ -87,7 +88,11 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         initViews();
-        setupWebView();
+        try {
+            setupWebView();
+        } catch (Throwable t) {
+            android.util.Log.e(TAG, "Failed to setup WebView", t);
+        }
         setupTerminal();
         setupExtraKeys();
         setupTabs();
@@ -214,11 +219,13 @@ public class MainActivity extends AppCompatActivity {
     private void setupExtraKeys() {
         String[] keys = {"Ctrl+C", "Tab", "node -v", "pi --version", "ps", "clear"};
         for (String k : keys) {
-            Button btn = new Button(this);
+            TextView btn = new TextView(this);
             btn.setText(k);
             btn.setTextColor(Color.parseColor("#58A6FF"));
             btn.setBackgroundResource(R.drawable.bg_tab_normal);
             btn.setTextSize(11f);
+            btn.setGravity(android.view.Gravity.CENTER);
+            btn.setPadding(dpToPx(8), 0, dpToPx(8), 0);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     dpToPx(28)
