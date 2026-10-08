@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.text.Editable;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
@@ -256,6 +257,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsStorageTv;
     private View btnClearNpmCache;
     private View btnResetContainer;
+    private View btnBatteryIgnoreOpt;
+    private View btnAutoStartSettings;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isPiWebAlive = false;
@@ -267,6 +270,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         checkStoragePermissions();
+        checkBatteryOptimizationPermission();
         initViews();
         initNavigation();
         initLaunchPanel();
@@ -391,6 +395,8 @@ public class MainActivity extends AppCompatActivity {
         settingsStorageTv = findViewById(R.id.settingsStorageTv);
         btnClearNpmCache = findViewById(R.id.btnClearNpmCache);
         btnResetContainer = findViewById(R.id.btnResetContainer);
+        btnBatteryIgnoreOpt = findViewById(R.id.btnBatteryIgnoreOpt);
+        btnAutoStartSettings = findViewById(R.id.btnAutoStartSettings);
 
         // 终端多窗口 Tab 容器与新建按钮
         termTabsContainer = findViewById(R.id.termTabsContainer);
@@ -531,6 +537,7 @@ public class MainActivity extends AppCompatActivity {
         launchCopyUrlDescTv.setText(getPiWebUrl());
 
         if (alive) {
+            PiMetService.start(this);
             launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_green);
             launchStateTv.setText("服务运行中");
             launchStateTv.setTextColor(0xFF3FB950);
@@ -577,6 +584,7 @@ public class MainActivity extends AppCompatActivity {
             public void onStarted() {
                 launchProgressBar.setVisibility(View.GONE);
                 isPiWebAlive = true;
+                PiMetService.start(MainActivity.this);
                 updateLaunchStatusUI(true);
                 Toast.makeText(MainActivity.this, "🎉 Pi-Web 服务已成功启动！", Toast.LENGTH_SHORT).show();
                 refreshLaunchLog();
@@ -613,6 +621,7 @@ public class MainActivity extends AppCompatActivity {
 
         PiWebManager.stopPiWeb(this, () -> {
             isPiWebAlive = false;
+            PiMetService.stop(this);
             launchProgressBar.setVisibility(View.GONE);
             updateLaunchStatusUI(false);
             Toast.makeText(this, "Pi-Web 服务已成功停止", Toast.LENGTH_SHORT).show();
@@ -924,10 +933,23 @@ public class MainActivity extends AppCompatActivity {
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
-        // 🤖 AI 终端快捷对话: 直接在当前终端启动原版 pi 命令行交互会话
+        // 🤖 AI 终端快捷对话: 检测到未安装时自动高速安装并拉起，已就绪则秒级拉起
         btnTermAiChat.setOnClickListener(v -> {
-            executeCommand("if command -v pi >/dev/null 2>&1; then pi; else echo -e \"\\033[33m• pi 命令行核心未就绪，请前往【控制中心】点击【一键部署】安装核心套件\\033[0m\"; fi\n");
-            Toast.makeText(this, "正在启动 AI 命令行会话...", Toast.LENGTH_SHORT).show();
+            boolean installed = ProotManager.isPiInstalled(this);
+            if (installed) {
+                executeCommand("pi\n");
+                Toast.makeText(this, "正在启动 AI 命令行交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "未检测到 pi 核心，正在通过高速镜像源自动安装并启动...", Toast.LENGTH_LONG).show();
+                String installCmd = "echo -e \"\\033[1;36m====================================================\\033[0m\" && " +
+                        "echo -e \"\\033[1;33m• 正在从高速镜像源安装 Pi 官方命令行核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && " +
+                        "echo -e \"\\033[90m• 提示: 正在拉取依赖与可执行软链，完成后将自动拉起交互会话...\\033[0m\" && " +
+                        "npm install -g @earendil-works/pi-coding-agent --registry=https://registry.npmmirror.com && " +
+                        "ln -sf $(which pi 2>/dev/null || find /usr -name pi -type f 2>/dev/null | head -n 1) /usr/local/bin/pi 2>/dev/null || true; " +
+                        "echo -e \"\\033[1;32m✔ Pi 命令行核心安装成功！正在启动...\\033[0m\" && " +
+                        "pi\n";
+                executeCommand(installCmd);
+            }
         });
 
         // ⚙️ 快捷键自定义与注释管理
@@ -1742,7 +1764,61 @@ public class MainActivity extends AppCompatActivity {
                     .show();
         });
 
+        // 后台高保活与应用权限设置
+        btnBatteryIgnoreOpt.setOnClickListener(v -> requestBatteryOptimizationExemption());
+        btnAutoStartSettings.setOnClickListener(v -> openAppDetailSettings());
+
         refreshStorageSize();
+    }
+
+    private void checkBatteryOptimizationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                    new AlertDialog.Builder(this)
+                            .setTitle("⚡ 开启后台高保活模式")
+                            .setMessage("检测到系统尚未为 PiMet 开启电池白名单。\n\n为保证在外部浏览器使用 Pi-Web 或息屏时后台服务不被系统冻结杀掉，建议允许忽略电池优化。")
+                            .setPositiveButton("立即开启", (dialog, which) -> requestBatteryOptimizationExemption())
+                            .setNegativeButton("稍后再说", null)
+                            .show();
+                }
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                    Toast.makeText(this, "✔ 已获得电池优化豁免，后台运行不受限制", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                Intent intent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            } catch (Throwable t) {
+                try {
+                    Intent intent = new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                    startActivity(intent);
+                } catch (Throwable ex) {
+                    Toast.makeText(this, "无法打开系统电池优化界面: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        } else {
+            Toast.makeText(this, "当前 Android 版本无需配置电池优化", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void openAppDetailSettings() {
+        try {
+            Intent intent = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        } catch (Throwable e) {
+            Toast.makeText(this, "打开应用设置失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void fetchAiModels() {
@@ -2038,6 +2114,9 @@ public class MainActivity extends AppCompatActivity {
                 }
                 if (checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                     needed.add(Manifest.permission.READ_MEDIA_AUDIO);
+                }
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    needed.add(Manifest.permission.POST_NOTIFICATIONS);
                 }
             } else {
                 if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
