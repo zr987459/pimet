@@ -547,15 +547,25 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 极简控制顶栏 -->
+            <!-- 网页加载进度条 -->
+            <ProgressBar
+                android:id="@+id/piWebProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="2.5dp"
+                android:max="100"
+                android:visibility="gone" />
+
+            <!-- 增强控制顶栏 (WebUI Toolbar Plus) -->
             <LinearLayout
+                android:id="@+id/piWebToolbar"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:background="#161B22"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp">
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp">
 
                 <View
                     android:id="@+id/piWebStatusDot"
@@ -563,32 +573,94 @@
                     android:layout_height="8dp"
                     android:background="@drawable/bg_status_dot_gray" />
 
+                <!-- 前进 / 后退 -->
+                <TextView
+                    android:id="@+id/btnWebBack"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="4dp"
+                    android:gravity="center"
+                    android:text="◀"
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/btnWebForward"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:gravity="center"
+                    android:text="▶"
+                    android:textColor="#8B949E"
+                    android:textSize="11sp" />
+
                 <TextView
                     android:id="@+id/piWebTitleTv"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="4dp"
                     android:layout_weight="1"
+                    android:ellipsize="middle"
                     android:singleLine="true"
                     android:text="http://127.0.0.1:30141"
                     android:textColor="#8B949E"
-                    android:textSize="12sp" />
+                    android:textSize="11sp" />
 
+                <!-- 刷新 -->
                 <TextView
                     android:id="@+id/piWebReloadBtn"
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
                     android:gravity="center"
                     android:text="🔄"
+                    android:textSize="13sp" />
+
+                <!-- 文字缩放调节 -->
+                <TextView
+                    android:id="@+id/btnWebZoom"
+                    android:layout_width="wrap_content"
+                    android:layout_height="26dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:text="100%"
+                    android:textColor="#C9D1D9"
+                    android:textSize="10.5sp" />
+
+                <!-- 全屏沉浸式切换 -->
+                <TextView
+                    android:id="@+id/btnWebFullscreen"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="2dp"
+                    android:gravity="center"
+                    android:text="⛶"
+                    android:textColor="#C9D1D9"
                     android:textSize="14sp" />
 
+                <!-- 外部打开 -->
                 <TextView
                     android:id="@+id/piWebBrowserBtn"
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
                     android:gravity="center"
                     android:text="↗"
+                    android:textColor="#C9D1D9"
                     android:textSize="14sp" />
+
+                <!-- 右上角极速切终端入口 -->
+                <TextView
+                    android:id="@+id/btnWebQuickTerminal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:gravity="center"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="💻 终端"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
             </LinearLayout>
 
             <View
@@ -605,6 +677,23 @@
                     android:id="@+id/piWebWebView"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />
+
+                <!-- 全屏模式下浮动退出按钮 -->
+                <TextView
+                    android:id="@+id/btnExitFullscreen"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_gravity="top|end"
+                    android:layout_marginTop="12dp"
+                    android:layout_marginEnd="12dp"
+                    android:background="@drawable/bg_floating_btn"
+                    android:gravity="center"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:text="退出全屏 ✕"
+                    android:textColor="#58A6FF"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
 
                 <!-- 离线未启动友好引导卡片 -->
                 <LinearLayout
@@ -666,49 +755,47 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- 终端顶部操作栏 -->
+            <!-- 终端顶部操作栏 (带字号控制与快速切工作台) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:background="#161B22"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp">
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
 
                 <TextView
+                    android:id="@+id/termTitleTv"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="💻 PRoot Linux 终端"
+                    android:text="💻 PRoot 终端"
                     android:textColor="#58A6FF"
                     android:textSize="12sp"
                     android:textStyle="bold" />
 
+                <!-- 字体调小 / 调大 -->
                 <TextView
-                    android:id="@+id/btnDeploy"
-                    android:layout_width="wrap_content"
+                    android:id="@+id/btnTermFontDec"
+                    android:layout_width="26dp"
                     android:layout_height="26dp"
                     android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="⚡ 部署"
-                    android:textColor="#58A6FF"
-                    android:textSize="11sp" />
+                    android:text="A-"
+                    android:textColor="#C9D1D9"
+                    android:textSize="10sp" />
 
                 <TextView
-                    android:id="@+id/btnViewLog"
-                    android:layout_width="wrap_content"
+                    android:id="@+id/btnTermFontInc"
+                    android:layout_width="26dp"
                     android:layout_height="26dp"
-                    android:layout_marginStart="6dp"
+                    android:layout_marginStart="4dp"
                     android:background="@drawable/bg_btn_secondary"
                     android:gravity="center"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:text="📜 日志"
+                    android:text="A+"
                     android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    android:textSize="10sp" />
 
                 <TextView
                     android:id="@+id/btnClear"
@@ -735,7 +822,81 @@
                     android:text="⛔ Ctrl+C"
                     android:textColor="#FCA5A5"
                     android:textSize="11sp" />
+
+                <!-- 右上角极速切回工作台入口 -->
+                <TextView
+                    android:id="@+id/btnTermQuickWeb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:gravity="center"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="🌐 工作台"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
             </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#21262D" />
+
+            <!-- 多窗口 / 多会话 Tab 栏 (DSHA Terminal Tabs) -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:background="#11151C"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp">
+
+                    <TextView
+                        android:id="@+id/tabTermSession1"
+                        android:layout_width="wrap_content"
+                        android:layout_height="24dp"
+                        android:background="@drawable/bg_btn_primary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="终端 1 (主会话)"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/tabTermSession2"
+                        android:layout_width="wrap_content"
+                        android:layout_height="24dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="终端 2"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnTermNewSession"
+                        android:layout_width="wrap_content"
+                        android:layout_height="24dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="+ 监控"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </HorizontalScrollView>
 
             <View
                 android:layout_width="match_parent"
@@ -758,10 +919,10 @@
                     android:layout_height="wrap_content"
                     android:fontFamily="monospace"
                     android:lineSpacingExtra="2dp"
-                    android:text="正在初始化 PRoot 环境..."
+                    android:text="正在初始化 PRoot 终端环境..."
                     android:textColor="#3FB950"
                     android:textIsSelectable="true"
-                    android:textSize="11.5sp" />
+                    android:textSize="12sp" />
             </ScrollView>
 
             <View
@@ -769,7 +930,7 @@
                 android:layout_height="1dp"
                 android:background="#21262D" />
 
-            <!-- 横向滚动常用按键栏 -->
+            <!-- 横向滚动全面快捷键栏 (专为 pi 与终端优化) -->
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="34dp"
@@ -797,6 +958,32 @@
                         android:textSize="11sp" />
 
                     <TextView
+                        android:id="@+id/keyCtrlD"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="Ctrl+D"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyCtrlL"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="Ctrl+L"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
                         android:id="@+id/keyTab"
                         android:layout_width="wrap_content"
                         android:layout_height="26dp"
@@ -820,6 +1007,58 @@
                         android:paddingEnd="8dp"
                         android:text="ESC"
                         android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyPi"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_primary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="pi"
+                        android:textColor="#FFFFFF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyPiHelp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="pi -h"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyPiModel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="/model"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyPiLogin"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="/login"
+                        android:textColor="#58A6FF"
                         android:textSize="11sp" />
 
                     <TextView
@@ -875,6 +1114,32 @@
                         android:textSize="11sp" />
 
                     <TextView
+                        android:id="@+id/keyGt"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text=">"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyAmp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="&amp;"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
                         android:id="@+id/keyNodeV"
                         android:layout_width="wrap_content"
                         android:layout_height="26dp"
@@ -901,7 +1166,7 @@
                         android:textSize="11sp" />
 
                     <TextView
-                        android:id="@+id/keyPi"
+                        android:id="@+id/keyPs"
                         android:layout_width="wrap_content"
                         android:layout_height="26dp"
                         android:layout_marginStart="4dp"
@@ -909,7 +1174,20 @@
                         android:gravity="center"
                         android:paddingStart="8dp"
                         android:paddingEnd="8dp"
-                        android:text="pi"
+                        android:text="ps -ef"
+                        android:textColor="#C9D1D9"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/keyTop"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:text="top"
                         android:textColor="#C9D1D9"
                         android:textSize="11sp" />
 

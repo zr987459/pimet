@@ -100,8 +100,27 @@ public class MainActivity extends AppCompatActivity {
     private View btnSend;
     private View btnClear;
     private View btnCtrlC;
-    private View btnDeploy;
-    private View btnViewLog;
+    private TextView termTitleTv;
+    private TextView btnTermFontDec;
+    private TextView btnTermFontInc;
+    private View btnTermQuickWeb;
+    private TextView tabTermSession1;
+    private TextView tabTermSession2;
+    private View btnTermNewSession;
+    private float currentTermFontSize = 12.0f;
+
+    // 布局全屏与增强组件
+    private View appBar;
+    private View bottomNavBar;
+    private ProgressBar piWebProgressBar;
+    private View piWebToolbar;
+    private TextView btnWebBack;
+    private TextView btnWebForward;
+    private TextView btnWebZoom;
+    private View btnWebFullscreen;
+    private View btnWebQuickTerminal;
+    private View btnExitFullscreen;
+    private boolean isFullscreen = false;
 
     // 设置视图组件
     private TextView chipProviderDeepSeek;
@@ -125,11 +144,26 @@ public class MainActivity extends AppCompatActivity {
     private View btnClearNpmCache;
     private View btnResetContainer;
 
-    // 后台与状态调度
-    private ProotSession prootSession;
+    // 多终端会话管理 (Multi-Session Terminal)
+    private static class TermSessionHolder {
+        ProotSession session;
+        final SpannableStringBuilder buffer = new SpannableStringBuilder();
+        final AnsiParser ansi = new AnsiParser();
+        boolean started = false;
+        final String name;
+
+        TermSessionHolder(String name) {
+            this.name = name;
+        }
+    }
+
+    private final TermSessionHolder[] termSessions = new TermSessionHolder[]{
+            new TermSessionHolder("终端 1 (主会话)"),
+            new TermSessionHolder("终端 2")
+    };
+    private int activeSessionIdx = 0;
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final SpannableStringBuilder termBuffer = new SpannableStringBuilder();
-    private final AnsiParser ansiParser = new AnsiParser();
     private boolean isPiWebAlive = false;
     private boolean isDeploying = false;
 
@@ -145,8 +179,8 @@ public class MainActivity extends AppCompatActivity {
         initTerminalPanel();
         initSettingsPanel();
 
-        // 启动终端 Session
-        startTerminalSession();
+        // 启动主终端会话
+        startSession(0);
 
         // 首次状态自检
         checkServiceStatus();
@@ -175,6 +209,10 @@ public class MainActivity extends AppCompatActivity {
         tabTerminalText = findViewById(R.id.tabTerminalText);
         tabSettingsText = findViewById(R.id.tabSettingsText);
 
+        // 顶栏与底栏
+        appBar = findViewById(R.id.appBar);
+        bottomNavBar = findViewById(R.id.bottomNavBar);
+
         // 顶栏
         btnTopBrowser = findViewById(R.id.btnTopBrowser);
         btnTopBrowser.setOnClickListener(v -> openExternalBrowser());
@@ -202,24 +240,37 @@ public class MainActivity extends AppCompatActivity {
         launchLogTv = findViewById(R.id.launchLogTv);
 
         // Pi-Web 组件
+        piWebProgressBar = findViewById(R.id.piWebProgressBar);
+        piWebToolbar = findViewById(R.id.piWebToolbar);
         piWebStatusDot = findViewById(R.id.piWebStatusDot);
         piWebTitleTv = findViewById(R.id.piWebTitleTv);
+        btnWebBack = findViewById(R.id.btnWebBack);
+        btnWebForward = findViewById(R.id.btnWebForward);
         piWebReloadBtn = findViewById(R.id.piWebReloadBtn);
+        btnWebZoom = findViewById(R.id.btnWebZoom);
+        btnWebFullscreen = findViewById(R.id.btnWebFullscreen);
         piWebBrowserBtn = findViewById(R.id.piWebBrowserBtn);
+        btnWebQuickTerminal = findViewById(R.id.btnWebQuickTerminal);
+        btnExitFullscreen = findViewById(R.id.btnExitFullscreen);
         piWebWebView = findViewById(R.id.piWebWebView);
         piWebOfflineCard = findViewById(R.id.piWebOfflineCard);
         piWebOfflineSubTv = findViewById(R.id.piWebOfflineSubTv);
         piWebWakeBtn = findViewById(R.id.piWebWakeBtn);
 
         // Terminal 组件
+        termTitleTv = findViewById(R.id.termTitleTv);
+        btnTermFontDec = findViewById(R.id.btnTermFontDec);
+        btnTermFontInc = findViewById(R.id.btnTermFontInc);
+        btnClear = findViewById(R.id.btnClear);
+        btnCtrlC = findViewById(R.id.btnCtrlC);
+        btnTermQuickWeb = findViewById(R.id.btnTermQuickWeb);
+        tabTermSession1 = findViewById(R.id.tabTermSession1);
+        tabTermSession2 = findViewById(R.id.tabTermSession2);
+        btnTermNewSession = findViewById(R.id.btnTermNewSession);
         terminalOutput = findViewById(R.id.terminalOutput);
         terminalScrollView = findViewById(R.id.terminalScrollView);
         commandInput = findViewById(R.id.commandInput);
         btnSend = findViewById(R.id.btnSend);
-        btnClear = findViewById(R.id.btnClear);
-        btnCtrlC = findViewById(R.id.btnCtrlC);
-        btnDeploy = findViewById(R.id.btnDeploy);
-        btnViewLog = findViewById(R.id.btnViewLog);
 
         // Settings 组件
         chipProviderDeepSeek = findViewById(R.id.chipProviderDeepSeek);
@@ -426,24 +477,22 @@ public class MainActivity extends AppCompatActivity {
         }
         isDeploying = true;
         launchProgressBar.setVisibility(View.VISIBLE);
-        switchTab(2); // 自动切到终端查看实时输出
+        updateLaunchHero();
 
-        appendTerminalLog("\u001B[33m🚀 开始执行一键部署流水线...\u001B[0m\n");
+        appendLaunchLog("\u001B[33m🚀 开始执行一键部署流水线...\u001B[0m\n");
 
         if (!ProotManager.isRootfsInstalled(this)) {
-            appendTerminalLog("\u001B[36m• 正在从镜像源提取 Linux 根文件系统...\u001B[0m\n");
+            appendLaunchLog("\u001B[36m• 正在从镜像源提取 Linux 根文件系统...\u001B[0m\n");
             ProotManager.installRootfs(this, new ProotManager.InstallCallback() {
                 @Override
                 public void onProgress(String message, int percent) {
-                    mainHandler.post(() -> {
-                        appendTerminalLog("• " + message + " " + percent + "%\n");
-                    });
+                    mainHandler.post(() -> appendLaunchLog("• " + message + " " + percent + "%\n"));
                 }
 
                 @Override
                 public void onSuccess() {
                     mainHandler.post(() -> {
-                        appendTerminalLog("\u001B[32m✔ Linux 根系统部署完成！\u001B[0m\n");
+                        appendLaunchLog("\u001B[32m✔ Linux 根系统部署完成！\u001B[0m\n");
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
                         startPiWebService();
@@ -455,7 +504,8 @@ public class MainActivity extends AppCompatActivity {
                     mainHandler.post(() -> {
                         isDeploying = false;
                         launchProgressBar.setVisibility(View.GONE);
-                        appendTerminalLog("\u001B[31m❌ 根系统部署失败: " + error + "\u001B[0m\n");
+                        appendLaunchLog("\u001B[31m❌ 根系统部署失败: " + error + "\u001B[0m\n");
+                        updateLaunchHero();
                     });
                 }
             });
@@ -478,6 +528,29 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
 
+        // 初始化网页缩放
+        int savedZoom = PiMetConfig.getWebZoom(this);
+        webSettings.setTextZoom(savedZoom);
+        btnWebZoom.setText(savedZoom + "%");
+        btnWebZoom.setOnClickListener(v -> cycleWebZoom());
+
+        // 导航按钮
+        btnWebBack.setOnClickListener(v -> {
+            if (piWebWebView.canGoBack()) {
+                piWebWebView.goBack();
+            } else {
+                Toast.makeText(this, "已经是第一页", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        btnWebForward.setOnClickListener(v -> {
+            if (piWebWebView.canGoForward()) {
+                piWebWebView.goForward();
+            } else {
+                Toast.makeText(this, "已经是最新页", Toast.LENGTH_SHORT).show();
+            }
+        });
+
         piWebWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -487,11 +560,56 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        piWebWebView.setWebChromeClient(new WebChromeClient());
+        piWebWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                if (newProgress < 100) {
+                    piWebProgressBar.setVisibility(View.VISIBLE);
+                    piWebProgressBar.setProgress(newProgress);
+                } else {
+                    piWebProgressBar.setVisibility(View.GONE);
+                }
+            }
+        });
 
-        piWebReloadBtn.setOnClickListener(v -> updatePiWebDisplay());
+        // 全屏沉浸模式与浮动退出
+        btnWebFullscreen.setOnClickListener(v -> toggleFullscreen(true));
+        btnExitFullscreen.setOnClickListener(v -> toggleFullscreen(false));
+
+        // 右上角极速切终端
+        btnWebQuickTerminal.setOnClickListener(v -> switchTab(2));
+
+        piWebReloadBtn.setOnClickListener(v -> {
+            if (isPiWebAlive) {
+                piWebWebView.reload();
+            } else {
+                updatePiWebDisplay();
+            }
+        });
         piWebBrowserBtn.setOnClickListener(v -> openExternalBrowser());
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
+    }
+
+    private void cycleWebZoom() {
+        int zoom = PiMetConfig.getWebZoom(this);
+        int nextZoom;
+        if (zoom < 100) nextZoom = 100;
+        else if (zoom < 120) nextZoom = 120;
+        else if (zoom < 140) nextZoom = 140;
+        else nextZoom = 80;
+
+        PiMetConfig.setWebZoom(this, nextZoom);
+        piWebWebView.getSettings().setTextZoom(nextZoom);
+        btnWebZoom.setText(nextZoom + "%");
+        Toast.makeText(this, "工作台文字缩放: " + nextZoom + "%", Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleFullscreen(boolean fullscreen) {
+        isFullscreen = fullscreen;
+        appBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
+        bottomNavBar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
+        piWebToolbar.setVisibility(fullscreen ? View.GONE : View.VISIBLE);
+        btnExitFullscreen.setVisibility(fullscreen ? View.VISIBLE : View.GONE);
     }
 
     private void updatePiWebDisplay() {
@@ -526,7 +644,7 @@ public class MainActivity extends AppCompatActivity {
         piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
     }
 
-    // ================= PRoot 终端 =================
+    // ================= PRoot 终端 (多窗口 / 专业快捷键) =================
     private void initTerminalPanel() {
         btnSend.setOnClickListener(v -> sendCommand());
         commandInput.setOnEditorActionListener((v, actionId, event) -> {
@@ -534,82 +652,145 @@ public class MainActivity extends AppCompatActivity {
             return true;
         });
 
+        // 字体缩放控制
+        currentTermFontSize = PiMetConfig.getTermFontSize(this);
+        terminalOutput.setTextSize(currentTermFontSize);
+        btnTermFontDec.setOnClickListener(v -> adjustTermFontSize(-1.0f));
+        btnTermFontInc.setOnClickListener(v -> adjustTermFontSize(1.0f));
+
+        // 右上角快速切回工作台
+        btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
+
+        // 多会话 Tab 切换
+        tabTermSession1.setOnClickListener(v -> selectSession(0));
+        tabTermSession2.setOnClickListener(v -> selectSession(1));
+        btnTermNewSession.setOnClickListener(v -> selectSession(1));
+
         btnClear.setOnClickListener(v -> {
-            termBuffer.clear();
-            ansiParser.reset();
+            TermSessionHolder cur = termSessions[activeSessionIdx];
+            cur.buffer.clear();
+            cur.ansi.reset();
             terminalOutput.setText("");
         });
 
         btnCtrlC.setOnClickListener(v -> {
-            if (prootSession != null) {
-                prootSession.sendCtrlC();
-                Toast.makeText(this, "已发送 Ctrl+C 中断信号", Toast.LENGTH_SHORT).show();
+            TermSessionHolder cur = termSessions[activeSessionIdx];
+            if (cur.session != null) {
+                cur.session.sendCtrlC();
+                Toast.makeText(this, "已向终端 " + (activeSessionIdx + 1) + " 发送 Ctrl+C", Toast.LENGTH_SHORT).show();
             }
-        });
-
-        btnDeploy.setOnClickListener(v -> triggerFullDeploy());
-        btnViewLog.setOnClickListener(v -> {
-            String log = PiWebManager.readLastLog(this);
-            appendTerminalLog("\n\u001B[33m--- /root/pi-web.log 最新日志 ---\u001B[0m\n" + log + "\n");
         });
 
         // 快捷键栏绑定
         setupKeyButton(R.id.keyCtrlC, "\u0003");
+        setupKeyButton(R.id.keyCtrlD, "\u0004");
+        setupKeyButton(R.id.keyCtrlL, "\u000C");
         setupKeyButton(R.id.keyTab, "\t");
         setupKeyButton(R.id.keyEsc, "\u001B");
+        setupKeyButton(R.id.keyPi, "pi\n");
+        setupKeyButton(R.id.keyPiHelp, "pi -h\n");
+        setupKeyButton(R.id.keyPiModel, "/model\n");
+        setupKeyButton(R.id.keyPiLogin, "/login\n");
         setupKeyButton(R.id.keyTilde, "~");
         setupKeyButton(R.id.keySlash, "/");
         setupKeyButton(R.id.keyDash, "-");
         setupKeyButton(R.id.keyPipe, "|");
+        setupKeyButton(R.id.keyGt, ">");
+        setupKeyButton(R.id.keyAmp, "&");
         setupKeyButton(R.id.keyNodeV, "node -v\n");
         setupKeyButton(R.id.keyNpmV, "npm -v\n");
-        setupKeyButton(R.id.keyPi, "pi --help\n");
+        setupKeyButton(R.id.keyPs, "ps -ef\n");
+        setupKeyButton(R.id.keyTop, "top\n");
         setupKeyButton(R.id.keyClear, "clear\n");
+    }
+
+    private void adjustTermFontSize(float delta) {
+        float newSize = currentTermFontSize + delta;
+        if (newSize >= 8.0f && newSize <= 22.0f) {
+            currentTermFontSize = newSize;
+            terminalOutput.setTextSize(currentTermFontSize);
+            PiMetConfig.setTermFontSize(this, currentTermFontSize);
+            Toast.makeText(this, "终端字体: " + (int) currentTermFontSize + "sp", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void selectSession(int idx) {
+        if (idx < 0 || idx >= termSessions.length) return;
+        activeSessionIdx = idx;
+        if (!termSessions[idx].started) {
+            startSession(idx);
+        }
+        updateSessionTabUi();
+        terminalOutput.setText(termSessions[idx].buffer);
+        terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+    }
+
+    private void updateSessionTabUi() {
+        if (activeSessionIdx == 0) {
+            tabTermSession1.setBackgroundResource(R.drawable.bg_btn_primary);
+            tabTermSession1.setTextColor(0xFFFFFFFF);
+            tabTermSession2.setBackgroundResource(R.drawable.bg_btn_secondary);
+            tabTermSession2.setTextColor(0xFF8B949E);
+            termTitleTv.setText("💻 PRoot 终端 (会话 1)");
+        } else {
+            tabTermSession1.setBackgroundResource(R.drawable.bg_btn_secondary);
+            tabTermSession1.setTextColor(0xFF8B949E);
+            tabTermSession2.setBackgroundResource(R.drawable.bg_btn_primary);
+            tabTermSession2.setTextColor(0xFFFFFFFF);
+            termTitleTv.setText("💻 PRoot 终端 (会话 2)");
+        }
     }
 
     private void setupKeyButton(int viewId, String keySequence) {
         View v = findViewById(viewId);
         if (v != null) {
             v.setOnClickListener(view -> {
-                if (prootSession != null) {
-                    prootSession.write(keySequence);
+                TermSessionHolder cur = termSessions[activeSessionIdx];
+                if (cur != null && cur.session != null) {
+                    cur.session.write(keySequence);
                 }
             });
         }
     }
 
-    private void startTerminalSession() {
-        prootSession = new ProotSession(this, new ProotSession.OutputListener() {
+    private void startSession(int idx) {
+        TermSessionHolder holder = termSessions[idx];
+        if (holder.started && holder.session != null) return;
+        holder.started = true;
+        holder.session = new ProotSession(this, new ProotSession.OutputListener() {
             @Override
             public void onOutput(String text) {
-                appendTerminalLog(text);
+                appendTerminalLog(idx, text);
             }
 
             @Override
             public void onExit(int code) {
-                appendTerminalLog("\n\u001B[33m[会话已结束, 退出码: " + code + "]\u001B[0m\n");
+                appendTerminalLog(idx, "\n\u001B[33m[会话 " + (idx + 1) + " 已结束, 退出码: " + code + "]\u001B[0m\n");
             }
         });
-        prootSession.start();
+        holder.session.start();
     }
 
-    private void appendTerminalLog(String text) {
+    private void appendTerminalLog(int sessionIdx, String text) {
         if (text == null) return;
         mainHandler.post(() -> {
-            ansiParser.appendAnsiText(termBuffer, text);
-            // 终端显示最多保留 25000 字符，避免 OOM
-            if (termBuffer.length() > 25000) {
-                termBuffer.delete(0, 5000);
+            TermSessionHolder holder = termSessions[sessionIdx];
+            holder.ansi.appendAnsiText(holder.buffer, text);
+            if (holder.buffer.length() > 30000) {
+                holder.buffer.delete(0, 6000);
             }
-            terminalOutput.setText(termBuffer);
-            terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+            if (activeSessionIdx == sessionIdx) {
+                terminalOutput.setText(holder.buffer);
+                terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+            }
         });
     }
 
     private void sendCommand() {
         String cmd = commandInput.getText().toString();
-        if (prootSession != null && !TextUtils.isEmpty(cmd)) {
-            prootSession.write(cmd + "\n");
+        TermSessionHolder cur = termSessions[activeSessionIdx];
+        if (cur != null && cur.session != null && !TextUtils.isEmpty(cmd)) {
+            cur.session.write(cmd + "\n");
             commandInput.setText("");
         }
     }
@@ -687,8 +868,9 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnClearNpmCache.setOnClickListener(v -> {
-            if (prootSession != null) {
-                prootSession.write("npm cache clean --force\n");
+            TermSessionHolder cur = termSessions[activeSessionIdx];
+            if (cur != null && cur.session != null) {
+                cur.session.write("npm cache clean --force\n");
                 Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
                 switchTab(2);
             }
@@ -787,10 +969,25 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (isFullscreen) {
+            toggleFullscreen(false);
+            return;
+        }
+        if (viewPiWeb.getVisibility() == View.VISIBLE && piWebWebView.canGoBack()) {
+            piWebWebView.goBack();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (prootSession != null) {
-            prootSession.close();
+        for (TermSessionHolder holder : termSessions) {
+            if (holder != null && holder.session != null) {
+                holder.session.close();
+            }
         }
     }
 }

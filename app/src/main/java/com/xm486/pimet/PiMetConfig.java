@@ -20,6 +20,8 @@ public final class PiMetConfig {
     public static final String KEY_NPM_REGISTRY = "npm_registry";
     public static final String KEY_ROOTFS_MIRROR = "rootfs_mirror";
     public static final String KEY_KEEP_ALIVE = "keep_alive";
+    public static final String KEY_WEB_ZOOM = "web_zoom";
+    public static final String KEY_TERM_FONT_SIZE = "term_font_size";
 
     // AI 模型与 API Key 配置键
     public static final String KEY_AI_PROVIDER = "ai_provider";
@@ -50,6 +52,22 @@ public final class PiMetConfig {
 
     public static void setAutoStartWeb(Context context, boolean autoStart) {
         getPrefs(context).edit().putBoolean(KEY_AUTO_START, autoStart).apply();
+    }
+
+    public static int getWebZoom(Context context) {
+        return getPrefs(context).getInt(KEY_WEB_ZOOM, 100);
+    }
+
+    public static void setWebZoom(Context context, int zoom) {
+        getPrefs(context).edit().putInt(KEY_WEB_ZOOM, zoom).apply();
+    }
+
+    public static float getTermFontSize(Context context) {
+        return getPrefs(context).getFloat(KEY_TERM_FONT_SIZE, 12.0f);
+    }
+
+    public static void setTermFontSize(Context context, float size) {
+        getPrefs(context).edit().putFloat(KEY_TERM_FONT_SIZE, size).apply();
     }
 
     public static int getWebPort(Context context) {
