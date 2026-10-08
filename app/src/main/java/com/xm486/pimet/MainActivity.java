@@ -60,6 +60,7 @@ import java.util.Collections;
 import java.util.List;
 
 import java.io.File;
+import java.io.FileOutputStream;
 
 /**
  * PiMet 主界面：深度融合 PRoot 独立 Linux 容器、全功能 Web 控制台、交互终端与系统设置
@@ -259,6 +260,12 @@ public class MainActivity extends AppCompatActivity {
     private View btnResetContainer;
     private View btnBatteryIgnoreOpt;
     private View btnAutoStartSettings;
+    private TextView btnPrivilegeRoot;
+    private TextView btnPrivilegeShizuku;
+    private TextView btnPrivilegeAllFiles;
+    private TextView btnSyncClipboard;
+    private View btnTermClipboard;
+    private View btnFloatClipboard;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isPiWebAlive = false;
@@ -397,6 +404,12 @@ public class MainActivity extends AppCompatActivity {
         btnResetContainer = findViewById(R.id.btnResetContainer);
         btnBatteryIgnoreOpt = findViewById(R.id.btnBatteryIgnoreOpt);
         btnAutoStartSettings = findViewById(R.id.btnAutoStartSettings);
+        btnPrivilegeRoot = findViewById(R.id.btnPrivilegeRoot);
+        btnPrivilegeShizuku = findViewById(R.id.btnPrivilegeShizuku);
+        btnPrivilegeAllFiles = findViewById(R.id.btnPrivilegeAllFiles);
+        btnSyncClipboard = findViewById(R.id.btnSyncClipboard);
+        btnTermClipboard = findViewById(R.id.btnTermClipboard);
+        btnFloatClipboard = findViewById(R.id.btnFloatClipboard);
 
         // 终端多窗口 Tab 容器与新建按钮
         termTabsContainer = findViewById(R.id.termTabsContainer);
@@ -449,6 +462,7 @@ public class MainActivity extends AppCompatActivity {
             terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
         } else if (index == 3) {
             refreshStorageSize();
+            refreshPrivilegeStatus();
         }
     }
 
@@ -851,6 +865,10 @@ public class MainActivity extends AppCompatActivity {
             floatingMenuVertical.setVisibility(View.GONE);
             openExternalBrowser();
         });
+        btnFloatClipboard.setOnClickListener(v -> {
+            floatingMenuVertical.setVisibility(View.GONE);
+            showClipboardActionsDialog();
+        });
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
     }
 
@@ -933,30 +951,17 @@ public class MainActivity extends AppCompatActivity {
         });
         btnTermQuickWeb.setOnClickListener(v -> switchTab(1));
 
-        // 🤖 AI 终端快捷对话: 检测到未安装时自动高速安装并拉起，已就绪则秒级拉起
-        btnTermAiChat.setOnClickListener(v -> {
-            boolean installed = ProotManager.isPiInstalled(this);
-            if (installed) {
-                executeCommand("pi\n");
-                Toast.makeText(this, "正在启动 AI 命令行交互会话 (退出请按 Ctrl+C 或输入 exit)...", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "未检测到 pi 核心，正在通过高速镜像源自动安装并启动...", Toast.LENGTH_LONG).show();
-                String installCmd = "echo -e \"\\033[1;36m====================================================\\033[0m\" && " +
-                        "echo -e \"\\033[1;33m• 正在从高速镜像源安装 Pi 官方命令行核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && " +
-                        "echo -e \"\\033[90m• 提示: 正在拉取依赖与可执行软链，完成后将自动拉起交互会话...\\033[0m\" && " +
-                        "npm install -g @earendil-works/pi-coding-agent --registry=https://registry.npmmirror.com && " +
-                        "ln -sf $(which pi 2>/dev/null || find /usr -name pi -type f 2>/dev/null | head -n 1) /usr/local/bin/pi 2>/dev/null || true; " +
-                        "echo -e \"\\033[1;32m✔ Pi 命令行核心安装成功！正在启动...\\033[0m\" && " +
-                        "pi\n";
-                executeCommand(installCmd);
-            }
-        });
+        // 🤖 AI 终端快捷对话: 连续交互终端、快捷单次提问与工作台直达
+        btnTermAiChat.setOnClickListener(v -> handleAiChatClick());
 
         // ⚙️ 快捷键自定义与注释管理
         btnTermCustomKey.setOnClickListener(v -> showCustomShortcutsManagerDialog());
 
         // 📁 从手机导入文件/图片至 PRoot 容器
         btnTermImportFile.setOnClickListener(v -> launchFilePickerForContainer());
+
+        // 📋 剪贴板快速操作
+        btnTermClipboard.setOnClickListener(v -> showClipboardActionsDialog());
 
         btnClear.setOnClickListener(v -> {
             TerminalTab tab = getActiveTab();
@@ -1014,6 +1019,8 @@ public class MainActivity extends AppCompatActivity {
         shortcutKeys.add(new ShortcutKey("amp", "&", "&", "后台运行或条件连接符号 (&)", false, true));
 
         // 核心指令按键 (统一样式，无过度高亮)
+        shortcutKeys.add(new ShortcutKey("pi_chat", "pi-chat", "pi-chat\n", "启动 Pi AI 终端多轮交互对话模式", true, true));
+        shortcutKeys.add(new ShortcutKey("clip", "clip", "CLIP_ACTION", "呼出剪贴板菜单 (提问/粘贴/同步)", false, true));
         shortcutKeys.add(new ShortcutKey("pi", "pi", "pi\n", "启动 Pi 官方命令行 AI 编程助手", true, true));
         shortcutKeys.add(new ShortcutKey("pi_model", "/model", "/model\n", "查看与切换当前配置的 AI 模型", true, true));
         shortcutKeys.add(new ShortcutKey("pi_login", "/login", "/login\n", "登录配置 AI 服务提供商凭证", true, true));
@@ -1098,6 +1105,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleShortcutKeyClick(ShortcutKey key) {
+        if ("clip".equals(key.id) || "CLIP_ACTION".equals(key.command)) {
+            showClipboardActionsDialog();
+            return;
+        }
         if ("key_up".equals(key.id)) {
             handleHistoryKey(true);
             return;
@@ -1768,7 +1779,62 @@ public class MainActivity extends AppCompatActivity {
         btnBatteryIgnoreOpt.setOnClickListener(v -> requestBatteryOptimizationExemption());
         btnAutoStartSettings.setOnClickListener(v -> openAppDetailSettings());
 
+        // Root 提权
+        btnPrivilegeRoot.setOnClickListener(v -> {
+            Toast.makeText(this, "正在检测并申请 Root 权限...", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                boolean hasRoot = DevicePrivilegeManager.requestRootAccess();
+                mainHandler.post(() -> {
+                    if (hasRoot) {
+                        btnPrivilegeRoot.setText("🛡️ 已获得 Root 权限 (uid=0)");
+                        btnPrivilegeRoot.setTextColor(0xFF3FB950);
+                        Toast.makeText(this, "🎉 成功获得系统 Root (uid=0) 权限！已开启宿主提权代理", Toast.LENGTH_LONG).show();
+                        PiMetConfig.syncToContainer(this);
+                    } else {
+                        Toast.makeText(this, "未获得 Root 权限 (设备未 Root 或授权被拒绝)", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }).start();
+        });
+
+        // Shizuku 特权
+        btnPrivilegeShizuku.setOnClickListener(v -> {
+            if (DevicePrivilegeManager.isShizukuInstalled(this)) {
+                boolean opened = DevicePrivilegeManager.openShizukuApp(this);
+                if (opened) {
+                    Toast.makeText(this, "正在打开 Shizuku 管理器，请确保服务已启动...", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "无法启动 Shizuku", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                new AlertDialog.Builder(this)
+                        .setTitle("⚡ Shizuku 特权未安装")
+                        .setMessage("Shizuku 可通过无线调试 (ADB) 免 Root 为应用赋予系统级 ADB 权限。\n\n是否打开 Shizuku 官方主页下载？")
+                        .setPositiveButton("前往下载", (dialog, which) -> {
+                            try {
+                                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/"));
+                                startActivity(intent);
+                            } catch (Throwable ignored) {}
+                        })
+                        .setNegativeButton("取消", null)
+                        .show();
+            }
+        });
+
+        // 全盘文件管理
+        btnPrivilegeAllFiles.setOnClickListener(v -> {
+            if (DevicePrivilegeManager.isAllFilesAccessGranted()) {
+                Toast.makeText(this, "✔ 已拥有全盘所有文件读写权限", Toast.LENGTH_SHORT).show();
+            } else {
+                DevicePrivilegeManager.requestAllFilesAccess(this);
+            }
+        });
+
+        // 剪贴板即时同步
+        btnSyncClipboard.setOnClickListener(v -> syncClipboardToContainer(true));
+
         refreshStorageSize();
+        refreshPrivilegeStatus();
     }
 
     private void checkBatteryOptimizationPermission() {
@@ -1819,6 +1885,202 @@ public class MainActivity extends AppCompatActivity {
         } catch (Throwable e) {
             Toast.makeText(this, "打开应用设置失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void refreshPrivilegeStatus() {
+        if (btnPrivilegeRoot != null) {
+            if (DevicePrivilegeManager.isRootBinaryPresent()) {
+                btnPrivilegeRoot.setText("🛡️ 申请 Root 提权 (已检测到 su)");
+            }
+        }
+        if (btnPrivilegeAllFiles != null) {
+            if (DevicePrivilegeManager.isAllFilesAccessGranted()) {
+                btnPrivilegeAllFiles.setText("📂 全盘文件权限: 已授权");
+                btnPrivilegeAllFiles.setTextColor(0xFF3FB950);
+            } else {
+                btnPrivilegeAllFiles.setText("📂 申请全盘文件权限");
+                btnPrivilegeAllFiles.setTextColor(0xFF58A6FF);
+            }
+        }
+        if (btnPrivilegeShizuku != null) {
+            if (DevicePrivilegeManager.isShizukuInstalled(this)) {
+                btnPrivilegeShizuku.setText("⚡ Shizuku: 已安装 (点击打开)");
+                btnPrivilegeShizuku.setTextColor(0xFF3FB950);
+            } else {
+                btnPrivilegeShizuku.setText("⚡ Shizuku 特权");
+                btnPrivilegeShizuku.setTextColor(0xFFC9D1D9);
+            }
+        }
+        if (btnBatteryIgnoreOpt != null) {
+            if (DevicePrivilegeManager.isIgnoringBatteryOptimizations(this)) {
+                btnBatteryIgnoreOpt.setText("🔋 电池白名单: 已豁免");
+                btnBatteryIgnoreOpt.setTextColor(0xFF3FB950);
+            } else {
+                btnBatteryIgnoreOpt.setText("🔋 申请电池白名单");
+                btnBatteryIgnoreOpt.setTextColor(0xFF58A6FF);
+            }
+        }
+    }
+
+    private void handleAiChatClick() {
+        PiMetConfig.syncToContainer(this);
+
+        String apiKey = PiMetConfig.getAiApiKey(this);
+        if (TextUtils.isEmpty(apiKey)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("⚠️ 请先配置 AI 密钥")
+                    .setMessage("尚未检测到 AI 密钥 (如 DeepSeek、OpenAI、Claude 等)。\n\n请前往【设置】面板配置 API Key，保存后即可在终端与 AI 连续对话！")
+                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(3))
+                    .setNegativeButton("稍后再说", null)
+                    .show();
+            return;
+        }
+
+        if (!ProotManager.isPiInstalled(this)) {
+            Toast.makeText(this, "正在自动安装 Pi 命令行核心...", Toast.LENGTH_LONG).show();
+            String installCmd = "echo -e \"\\033[1;36m====================================================\\033[0m\" && " +
+                    "echo -e \"\\033[1;33m• 正在从高速镜像源安装 Pi 官方命令行核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && " +
+                    "echo -e \"\\033[90m• 提示: 正在拉取依赖与可执行软链，完成后将自动拉起交互会话...\\033[0m\" && " +
+                    "npm install -g @earendil-works/pi-coding-agent --registry=https://registry.npmmirror.com && " +
+                    "ln -sf $(which pi 2>/dev/null || find /usr -name pi -type f 2>/dev/null | head -n 1) /usr/local/bin/pi 2>/dev/null || true; " +
+                    "echo -e \"\\033[1;32m✔ Pi 命令行核心安装成功！正在启动交互会话...\\033[0m\" && " +
+                    "/usr/local/bin/pi-chat\n";
+            executeCommand(installCmd);
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("🤖 Pi AI 交互对话")
+                .setItems(new String[]{
+                        "💬 进入连续交互对话 (终端交互模式)",
+                        "⚡ 快速单次提问 (弹出输入框)",
+                        "🌐 打开 Pi-Web 网页工作台",
+                        "⚙️ 查看 / 更换 AI 模型与配置"
+                }, (dialog, which) -> {
+                    switch (which) {
+                        case 0:
+                            executeCommand("if [ -f /usr/local/bin/pi-chat ]; then /usr/local/bin/pi-chat; else pi-chat; fi\n");
+                            break;
+                        case 1:
+                            showAiQuickPromptDialog();
+                            break;
+                        case 2:
+                            switchTab(1);
+                            break;
+                        case 3:
+                            switchTab(3);
+                            break;
+                    }
+                })
+                .show();
+    }
+
+    private void showAiQuickPromptDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("⚡ 快速向 Pi 提问");
+
+        final EditText input = new EditText(this);
+        input.setHint("输入你的代码需求或问题...");
+        input.setMinLines(3);
+        input.setMaxLines(8);
+        input.setTextColor(0xFFF0F6FC);
+        input.setHintTextColor(0xFF8B949E);
+        input.setBackgroundColor(0xFF0D1117);
+        input.setPadding(32, 24, 32, 24);
+
+        builder.setView(input);
+        builder.setPositiveButton("发送给 AI", (dialog, which) -> {
+            String text = input.getText().toString().trim();
+            if (!TextUtils.isEmpty(text)) {
+                String escaped = text.replace("'", "'\\''");
+                executeCommand("pi -p --continue '" + escaped + "'\n");
+                Toast.makeText(this, "已发送至终端...", Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNeutralButton("📋 粘贴剪贴板", null);
+        builder.setNegativeButton("取消", null);
+
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(d -> {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                String clip = getClipboardText();
+                if (!TextUtils.isEmpty(clip)) {
+                    input.append(clip);
+                    Toast.makeText(this, "已粘贴剪贴板内容", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "剪贴板为空", Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
+        dialog.show();
+    }
+
+    private void showClipboardActionsDialog() {
+        String clip = getClipboardText();
+        String preview = TextUtils.isEmpty(clip) ? "（剪贴板为空）" : (clip.length() > 60 ? clip.substring(0, 60) + "..." : clip);
+
+        new AlertDialog.Builder(this)
+                .setTitle("📋 剪贴板操作")
+                .setMessage("当前剪贴板内容：\n" + preview)
+                .setItems(new String[]{
+                        "💬 作为提问直接发送给 AI",
+                        "⌨️ 粘贴到终端命令行",
+                        "💾 保存至容器 (/root/.clipboard.txt)"
+                }, (dialog, which) -> {
+                    if (TextUtils.isEmpty(clip)) {
+                        Toast.makeText(this, "剪贴板为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    switch (which) {
+                        case 0:
+                            String escaped = clip.replace("'", "'\\''");
+                            executeCommand("pi -p --continue '" + escaped + "'\n");
+                            Toast.makeText(this, "已作为提问发送给 AI", Toast.LENGTH_SHORT).show();
+                            break;
+                        case 1:
+                            terminalInput.append(clip);
+                            terminalInput.requestFocus();
+                            break;
+                        case 2:
+                            syncClipboardToContainer(true);
+                            break;
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private String getClipboardText() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
+                CharSequence text = cm.getPrimaryClip().getItemAt(0).getText();
+                if (text != null) return text.toString();
+            }
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
+    private void syncClipboardToContainer(boolean showToast) {
+        new Thread(() -> {
+            String clip = getClipboardText();
+            try {
+                File rootfs = ProotManager.getRootfsDir(this);
+                File clipFile = new File(rootfs, "root/.clipboard.txt");
+                try (FileOutputStream fos = new FileOutputStream(clipFile, false)) {
+                    fos.write(clip.getBytes(StandardCharsets.UTF_8));
+                }
+                mainHandler.post(() -> {
+                    if (showToast) {
+                        Toast.makeText(this, "✔ 剪贴板内容已同步至 /root/.clipboard.txt", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            } catch (Throwable t) {
+                if (showToast) {
+                    mainHandler.post(() -> Toast.makeText(this, "同步失败: " + t.getMessage(), Toast.LENGTH_SHORT).show());
+                }
+            }
+        }).start();
     }
 
     private void fetchAiModels() {

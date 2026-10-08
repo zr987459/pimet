@@ -221,6 +221,8 @@ public final class PiMetConfig {
                 StringBuilder bashContent = new StringBuilder();
                 bashContent.append("# PiMet Auto-Generated AI Credentials\n");
                 bashContent.append("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n");
+                bashContent.append("export TERM=xterm-256color\n");
+                bashContent.append("export PI_CODING_AGENT_DIR=/root/.pi/agent\n");
                 if (!TextUtils.isEmpty(apiKey)) {
                     if (PROVIDER_DEEPSEEK.equals(provider)) {
                         bashContent.append("export DEEPSEEK_API_KEY=\"").append(apiKey).append("\"\n");
@@ -243,18 +245,93 @@ public final class PiMetConfig {
                     fos.write(bashContent.toString().getBytes(StandardCharsets.UTF_8));
                 }
 
-                // 2. 写入 /root/.pi/agent/auth.json
+                // 2. 写入 /root/.pi/agent/auth.json (遵循标准 Pi auth 格式)
                 File agentDir = new File(rootHome, ".pi/agent");
                 agentDir.mkdirs();
                 File authJson = new File(agentDir, "auth.json");
                 StringBuilder authContent = new StringBuilder("{\n");
                 if (!TextUtils.isEmpty(apiKey)) {
-                    authContent.append("  \"").append(provider).append("\": \"").append(apiKey).append("\"\n");
+                    String actualProvider = provider;
+                    if (PROVIDER_CLAUDE.equals(provider)) actualProvider = "anthropic";
+                    authContent.append("  \"").append(actualProvider).append("\": {\n");
+                    authContent.append("    \"type\": \"api_key\",\n");
+                    authContent.append("    \"key\": \"").append(apiKey).append("\"\n");
+                    authContent.append("  }\n");
                 }
                 authContent.append("}\n");
 
                 try (FileOutputStream fos = new FileOutputStream(authJson, false)) {
                     fos.write(authContent.toString().getBytes(StandardCharsets.UTF_8));
+                }
+
+                // 3. 写入 /root/.pi/agent/settings.json
+                File settingsJson = new File(agentDir, "settings.json");
+                StringBuilder settingsContent = new StringBuilder("{\n");
+                if (!TextUtils.isEmpty(provider)) {
+                    String actualProvider = provider;
+                    if (PROVIDER_CLAUDE.equals(provider)) actualProvider = "anthropic";
+                    settingsContent.append("  \"defaultProvider\": \"").append(actualProvider).append("\"");
+                    if (!TextUtils.isEmpty(model)) {
+                        settingsContent.append(",\n  \"defaultModel\": \"").append(model).append("\"\n");
+                    } else {
+                        settingsContent.append("\n");
+                    }
+                }
+                settingsContent.append("}\n");
+
+                try (FileOutputStream fos = new FileOutputStream(settingsJson, false)) {
+                    fos.write(settingsContent.toString().getBytes(StandardCharsets.UTF_8));
+                }
+
+                // 4. 写入 /usr/local/bin/pi-chat 智能交互终端会话脚本
+                File binDir = new File(rootfs, "usr/local/bin");
+                binDir.mkdirs();
+                File piChatScript = new File(binDir, "pi-chat");
+                StringBuilder chatScript = new StringBuilder();
+                chatScript.append("#!/bin/bash\n");
+                chatScript.append("export TERM=xterm-256color\n");
+                chatScript.append("export PI_CODING_AGENT_DIR=/root/.pi/agent\n\n");
+                chatScript.append("echo -e \"\\033[1;36m╔══════════════════════════════════════════════════════╗\\033[0m\"\n");
+                chatScript.append("echo -e \"\\033[1;36m║\\033[0m  \\033[1;32m🤖 Pi AI 交互对话终端模式已启动\\033[0m                    \\033[1;36m║\\033[0m\"\n");
+                chatScript.append("echo -e \"\\033[1;36m║\\033[0m  \\033[90m• 输入你的问题或代码需求，按回车直接发送\\033[0m            \\033[1;36m║\\033[0m\"\n");
+                chatScript.append("echo -e \"\\033[1;36m║\\033[0m  \\033[90m• 连续对话已开启，支持上下文多轮追问\\033[0m                \\033[1;36m║\\033[0m\"\n");
+                chatScript.append("echo -e \"\\033[1;36m║\\033[0m  \\033[90m• 输入 'exit'、'quit' 或按 Ctrl+C 退出对话模式\\033[0m      \\033[1;36m║\\033[0m\"\n");
+                chatScript.append("echo -e \"\\033[1;36m╚══════════════════════════════════════════════════════╝\\033[0m\"\n");
+                chatScript.append("echo \"\"\n\n");
+                chatScript.append("is_first=1\n");
+                chatScript.append("while true; do\n");
+                chatScript.append("    echo -en \"\\033[1;35mAI> \\033[0m\"\n");
+                chatScript.append("    read -r userInput || break\n");
+                chatScript.append("    if [[ \"$userInput\" == \"exit\" || \"$userInput\" == \"quit\" || \"$userInput\" == \"q\" ]]; then\n");
+                chatScript.append("        echo -e \"\\033[33m已安全退出 AI 对话，返回 Linux 控制台。\\033[0m\"\n");
+                chatScript.append("        break\n");
+                chatScript.append("    fi\n");
+                chatScript.append("    if [[ -z \"$userInput\" ]]; then\n");
+                chatScript.append("        continue\n");
+                chatScript.append("    fi\n");
+                chatScript.append("    echo -e \"\\033[90m• 正在思考中...\\033[0m\"\n");
+                chatScript.append("    if [[ $is_first -eq 1 ]]; then\n");
+                chatScript.append("        pi -p \"$userInput\"\n");
+                chatScript.append("        is_first=0\n");
+                chatScript.append("    else\n");
+                chatScript.append("        pi -p --continue \"$userInput\"\n");
+                chatScript.append("    fi\n");
+                chatScript.append("    echo \"\"\n");
+                chatScript.append("done\n");
+
+                try (FileOutputStream fos = new FileOutputStream(piChatScript, false)) {
+                    fos.write(chatScript.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                piChatScript.setExecutable(true, false);
+
+                // 5. 若设备存在 Root 二进制文件，写入 /usr/local/bin/su-exec 宿主提权代理
+                if (DevicePrivilegeManager.isRootBinaryPresent()) {
+                    File suExecScript = new File(binDir, "su-exec");
+                    String suContent = "#!/bin/bash\n/system/bin/su -c \"$@\"\n";
+                    try (FileOutputStream fos = new FileOutputStream(suExecScript, false)) {
+                        fos.write(suContent.getBytes(StandardCharsets.UTF_8));
+                    }
+                    suExecScript.setExecutable(true, false);
                 }
             } catch (Throwable ignored) {}
         }).start();
