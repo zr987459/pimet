@@ -165,12 +165,12 @@
             <!-- 终端顶部控制栏 -->
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="40dp"
+                android:layout_height="42dp"
                 android:background="#161B22"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp">
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp">
 
                 <TextView
                     android:id="@+id/termStatusTv"
@@ -180,54 +180,67 @@
                     android:text="🟢 空闲"
                     android:textColor="#7EE787"
                     android:textSize="12sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:singleLine="true" />
 
-                <Button
+                <TextView
                     android:id="@+id/termDeployBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="28dp"
                     android:background="@drawable/bg_tab_selected"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
                     android:text="🚀 部署"
                     android:textColor="@color/brand_on_primary_container"
-                    android:textSize="11sp" />
+                    android:textSize="11.5sp"
+                    android:clickable="true"
+                    android:focusable="true" />
 
-                <Button
+                <TextView
                     android:id="@+id/termLogBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="28dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_marginStart="5dp"
                     android:background="@drawable/bg_tab_normal"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
                     android:text="📜 日志"
                     android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    android:textSize="11.5sp"
+                    android:clickable="true"
+                    android:focusable="true" />
 
-                <Button
+                <TextView
                     android:id="@+id/termClearBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="28dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_marginStart="5dp"
                     android:background="@drawable/bg_tab_normal"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
                     android:text="清屏"
                     android:textColor="#C9D1D9"
-                    android:textSize="11sp" />
+                    android:textSize="11.5sp"
+                    android:clickable="true"
+                    android:focusable="true" />
 
-                <Button
+                <TextView
                     android:id="@+id/termKillBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="28dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_marginStart="5dp"
                     android:background="@drawable/bg_tab_normal"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
                     android:text="Ctrl+C"
                     android:textColor="#F85149"
-                    android:textSize="11sp" />
+                    android:textSize="11.5sp"
+                    android:clickable="true"
+                    android:focusable="true" />
             </LinearLayout>
 
             <!-- 多窗口标签栏 -->
@@ -254,17 +267,20 @@
                         android:orientation="horizontal" />
                 </HorizontalScrollView>
 
-                <Button
+                <TextView
                     android:id="@+id/termNewWindowBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="24dp"
                     android:layout_marginStart="4dp"
+                    android:gravity="center"
                     android:background="?attr/selectableItemBackground"
                     android:paddingStart="6dp"
                     android:paddingEnd="6dp"
                     android:text="+ 新增窗口"
                     android:textColor="#58A6FF"
-                    android:textSize="10.5sp" />
+                    android:textSize="10.5sp"
+                    android:clickable="true"
+                    android:focusable="true" />
             </LinearLayout>
 
             <!-- 终端文本输出区 -->
@@ -329,16 +345,21 @@
                     android:textColorHint="#484F58"
                     android:textSize="12sp" />
 
-                <Button
+                <TextView
                     android:id="@+id/termSendBtn"
                     android:layout_width="wrap_content"
                     android:layout_height="34dp"
                     android:layout_marginStart="6dp"
+                    android:gravity="center"
                     android:background="@drawable/bg_tab_selected"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
                     android:text="发送"
                     android:textColor="@color/brand_on_primary_container"
                     android:textSize="12sp"
-                    android:textStyle="bold" />
+                    android:textStyle="bold"
+                    android:clickable="true"
+                    android:focusable="true" />
             </LinearLayout>
         </LinearLayout>
 

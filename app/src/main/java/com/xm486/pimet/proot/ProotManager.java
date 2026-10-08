@@ -5,13 +5,18 @@ import android.os.Build;
 import android.util.Log;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -95,9 +100,13 @@ public final class ProotManager {
      */
     public static boolean isPiWebInstalled(Context context) {
         File rootfs = getRootfsDir(context);
-        File piWebJs = new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js");
-        File piWebBin = new File(rootfs, "usr/local/bin/pi-web");
-        return (piWebJs.exists() && piWebJs.length() > 50) || (piWebBin.exists());
+        File piWebJs1 = new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js");
+        File piWebJs2 = new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js");
+        File piWebBin1 = new File(rootfs, "usr/local/bin/pi-web");
+        File piWebBin2 = new File(rootfs, "usr/bin/pi-web");
+        return (piWebJs1.exists() && piWebJs1.length() > 50) ||
+               (piWebJs2.exists() && piWebJs2.length() > 50) ||
+               piWebBin1.exists() || piWebBin2.exists();
     }
 
     /**
@@ -185,10 +194,132 @@ public final class ProotManager {
     }
 
     /**
+     * 复制并准备 PRoot 所需动态链接库与环境配置 (参考 DSH-Folk ensureRuntimeFiles)
+     */
+    public static synchronized void ensureRuntimeFiles(Context context) {
+        File nativeLibDir = getNativeLibDir(context);
+        File libDir = new File(context.getFilesDir(), "lib");
+        libDir.mkdirs();
+        getTmpDir(context).mkdirs();
+
+        // Android APK 中只能打包 lib*.so 形式的文件名，
+        // 而 proot 按照 ELF SONAME "libtalloc.so.2" 与 "libandroid-shmem.so" 进行动态绑定，
+        // 必须在运行时将 nativeLibraryDir 的 .so 复制并映射为对应 SONAME。
+        copyExec(new File(nativeLibDir, "libtalloc.so"), new File(libDir, "libtalloc.so.2"));
+        copyExec(new File(nativeLibDir, "libandroidshmem.so"), new File(libDir, "libandroid-shmem.so"));
+
+        ensureContainerDns(context);
+        ensureContainerGroups(context);
+    }
+
+    private static void copyExec(File src, File dst) {
+        if (!src.isFile()) return;
+        if (dst.isFile() && dst.length() == src.length()) return;
+        try (InputStream in = new FileInputStream(src);
+             OutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = in.read(buf)) != -1) {
+                out.write(buf, 0, r);
+            }
+            out.flush();
+            dst.setReadable(true, false);
+            dst.setExecutable(true, false);
+        } catch (Throwable t) {
+            Log.e(TAG, "copyExec failed: " + src + " -> " + dst, t);
+        }
+    }
+
+    private static void ensureContainerDns(Context context) {
+        try {
+            File rootfs = getRootfsDir(context);
+            File etc = new File(rootfs, "etc");
+            if (!etc.isDirectory()) return;
+
+            File rc = new File(etc, "resolv.conf");
+            if (!rc.exists() || rc.length() == 0) {
+                try (FileOutputStream fos = new FileOutputStream(rc)) {
+                    fos.write(("nameserver 223.5.5.5\n" +
+                               "nameserver 119.29.29.29\n" +
+                               "nameserver 8.8.8.8\n" +
+                               "nameserver 1.1.1.1\n").getBytes(StandardCharsets.UTF_8));
+                }
+            }
+
+            File hosts = new File(etc, "hosts");
+            if (!hosts.exists() || hosts.length() == 0) {
+                try (FileOutputStream fos = new FileOutputStream(hosts)) {
+                    fos.write(("127.0.0.1\tlocalhost\n" +
+                               "::1\tlocalhost ip6-localhost ip6-loopback\n").getBytes(StandardCharsets.UTF_8));
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ensureContainerDns failed", t);
+        }
+    }
+
+    private static void ensureContainerGroups(Context context) {
+        try {
+            File rootfs = getRootfsDir(context);
+            File groupFile = new File(rootfs, "etc/group");
+            if (!groupFile.exists() || groupFile.length() == 0) return;
+
+            File procStatus = new File("/proc/self/status");
+            if (!procStatus.exists()) return;
+
+            String content = readFileToString(procStatus);
+            String groupsLine = null;
+            for (String line : content.split("\n")) {
+                if (line.startsWith("Groups:")) {
+                    groupsLine = line.substring(7).trim();
+                    break;
+                }
+            }
+            if (groupsLine == null || groupsLine.isEmpty()) return;
+
+            String groupContent = readFileToString(groupFile);
+            StringBuilder sb = new StringBuilder();
+            for (String gidStr : groupsLine.split("\\s+")) {
+                gidStr = gidStr.trim();
+                if (gidStr.isEmpty()) continue;
+                if (!groupContent.contains(":" + gidStr + ":")) {
+                    String name = "3003".equals(gidStr) ? "inet" : "aid_" + gidStr;
+                    sb.append(name).append(":x:").append(gidStr).append(":\n");
+                }
+            }
+
+            if (sb.length() > 0) {
+                try (FileOutputStream fos = new FileOutputStream(groupFile, true)) {
+                    if (!groupContent.endsWith("\n")) {
+                        fos.write("\n".getBytes(StandardCharsets.UTF_8));
+                    }
+                    fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static String readFileToString(File file) {
+        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /**
      * 组装进入 PRoot 容器的标准执行进程 ProcessBuilder
      */
     public static ProcessBuilder buildProotProcess(Context context, String workDir, List<String> guestCmd) {
+        ensureRuntimeFiles(context);
+
         File nativeLibDir = getNativeLibDir(context);
+        File libDir = new File(context.getFilesDir(), "lib");
         File rootfsDir = getRootfsDir(context);
         File tmpDir = getTmpDir(context);
 
@@ -236,7 +367,7 @@ public final class ProotManager {
         env.put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
         if (prootLoader.exists()) env.put("PROOT_LOADER", prootLoader.getAbsolutePath());
         if (prootLoader32.exists()) env.put("PROOT_LOADER_32", prootLoader32.getAbsolutePath());
-        env.put("LD_LIBRARY_PATH", nativeLibDir.getAbsolutePath());
+        env.put("LD_LIBRARY_PATH", libDir.getAbsolutePath() + ":" + nativeLibDir.getAbsolutePath());
 
         // Guest 环境
         env.put("HOME", "/root");
@@ -245,6 +376,8 @@ public final class ProotManager {
         env.put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
         env.put("TERM", "xterm-256color");
         env.put("LANG", "C.UTF-8");
+        env.put("TMPDIR", "/tmp");
+        env.put("DEBIAN_FRONTEND", "noninteractive");
         env.put("PORT", String.valueOf(PI_WEB_PORT));
 
         return pb;

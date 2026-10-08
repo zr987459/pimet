@@ -18,6 +18,7 @@ import java.util.List;
 public final class PiWebManager {
 
     private static final String TAG = "PiWebManager";
+    private static volatile Process daemonProcess;
 
     public interface StateListener {
         void onLog(String log);
@@ -114,12 +115,16 @@ public final class PiWebManager {
 
                 List<String> startCmd = Arrays.asList(
                         "/bin/bash", "-c",
-                        "PORT=30141 nohup node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js > /root/pi-web.log 2>&1 &"
+                        "export PORT=30141; if command -v pi-web >/dev/null 2>&1; then exec pi-web; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js; fi"
                 );
 
+                stopPiWeb();
                 ProcessBuilder pbStart = ProotManager.buildProotProcess(context, "/root", startCmd);
-                Process p = pbStart.start();
-                p.waitFor();
+                File logFile = new File(ProotManager.getRootfsDir(context), "root/pi-web.log");
+                logFile.getParentFile().mkdirs();
+                pbStart.redirectOutput(ProcessBuilder.Redirect.appendTo(logFile));
+                pbStart.redirectError(ProcessBuilder.Redirect.appendTo(logFile));
+                daemonProcess = pbStart.start();
 
                 // 端口健康轮询 (最多 15 秒)
                 boolean alive = false;
@@ -154,6 +159,15 @@ public final class PiWebManager {
                 });
             }
         }).start();
+    }
+
+    public static synchronized void stopPiWeb() {
+        if (daemonProcess != null) {
+            try {
+                daemonProcess.destroy();
+            } catch (Throwable ignored) {}
+            daemonProcess = null;
+        }
     }
 
     /**

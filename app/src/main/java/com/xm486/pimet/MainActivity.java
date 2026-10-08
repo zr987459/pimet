@@ -63,15 +63,15 @@ public class MainActivity extends AppCompatActivity {
 
     // 终端相关视图
     private TextView termStatusTv;
-    private Button termDeployBtn;
-    private Button termLogBtn;
-    private Button termClearBtn;
-    private Button termKillBtn;
+    private View termDeployBtn;
+    private View termLogBtn;
+    private View termClearBtn;
+    private View termKillBtn;
     private ScrollView termScrollView;
     private TextView termConsoleTv;
     private LinearLayout termExtraKeysContainer;
     private EditText termCommandInput;
-    private Button termSendBtn;
+    private View termSendBtn;
 
     // 运行时会话与解析器
     private ProotSession prootSession;
@@ -217,15 +217,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupExtraKeys() {
-        String[] keys = {"Ctrl+C", "Tab", "node -v", "pi --version", "ps", "clear"};
+        String[] keys = {"Ctrl+C", "Tab", "ESC", "~", "/", "-", "|", ">", "node -v", "npm -v", "pi", "ps", "clear"};
         for (String k : keys) {
             TextView btn = new TextView(this);
             btn.setText(k);
             btn.setTextColor(Color.parseColor("#58A6FF"));
             btn.setBackgroundResource(R.drawable.bg_tab_normal);
             btn.setTextSize(11f);
+            btn.setSingleLine(true);
+            btn.setIncludeFontPadding(false);
             btn.setGravity(android.view.Gravity.CENTER);
-            btn.setPadding(dpToPx(8), 0, dpToPx(8), 0);
+            btn.setPadding(dpToPx(10), 0, dpToPx(10), 0);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     dpToPx(28)
@@ -238,6 +240,8 @@ public class MainActivity extends AppCompatActivity {
                     if (prootSession != null) prootSession.sendCtrlC();
                 } else if ("Tab".equals(k)) {
                     if (prootSession != null) prootSession.write("\t");
+                } else if ("ESC".equals(k)) {
+                    if (prootSession != null) prootSession.write("\u001B");
                 } else if ("clear".equals(k)) {
                     termBuffer.clear();
                     ansiParser.reset();
