@@ -333,6 +333,9 @@ public final class PiMetConfig {
                     }
                     suExecScript.setExecutable(true, false);
                 }
+
+                // 6. 同步 Pi-Web 适配插件生态 (android-bridge, skills, MCP, subagents)
+                PluginManager.syncAllPresets(context);
             } catch (Throwable ignored) {}
         }).start();
     }

@@ -1,5 +1,6 @@
 package com.xm486.pimet;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -9,6 +10,9 @@ import android.os.Environment;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
+import android.widget.Toast;
+
+import rikka.shizuku.Shizuku;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -21,6 +25,7 @@ import java.io.InputStreamReader;
 public class DevicePrivilegeManager {
     private static final String TAG = "DevicePrivilegeManager";
     public static final String SHIZUKU_PACKAGE = "moe.shizuku.privileged.api";
+    public static final int SHIZUKU_REQUEST_CODE = 9527;
 
     // 常见 su 路径探测
     private static final String[] SU_PATHS = {
@@ -102,6 +107,79 @@ public class DevicePrivilegeManager {
             }
         } catch (Throwable ignored) {}
         return false;
+    }
+
+    /**
+     * 检测 Shizuku 服务端 Binder 是否正在运行
+     */
+    public static boolean isShizukuRunning() {
+        try {
+            return Shizuku.pingBinder();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 检测是否已获得 Shizuku 授权 (ADB 级特权)
+     */
+    public static boolean isShizukuPermissionGranted() {
+        if (!isShizukuRunning()) return false;
+        try {
+            return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 正式向 Shizuku 申请特权授权 (唤起系统/Shizuku授权对话框)
+     */
+    public static void requestShizukuPermission(Activity activity) {
+        if (!isShizukuRunning()) {
+            if (isShizukuInstalled(activity)) {
+                openShizukuApp(activity);
+                Toast.makeText(activity, "Shizuku 服务未运行，已为您打开 Shizuku，请先通过无线调试或 Root 启动服务", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(activity, "未检测到 Shizuku 应用，请先安装并启动 Shizuku", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+
+        try {
+            if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(activity, "✔ 当前已拥有 Shizuku 授权！", Toast.LENGTH_SHORT).show();
+            } else if (Shizuku.shouldShowRequestPermissionRationale()) {
+                Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
+            } else {
+                Shizuku.requestPermission(SHIZUKU_REQUEST_CODE);
+            }
+        } catch (Throwable t) {
+            Toast.makeText(activity, "申请 Shizuku 权限失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * 通过 Shizuku 执行 ADB Shell 级别命令 (需要 Shizuku 授权)
+     */
+    public static String execShizukuCommand(String cmd) {
+        if (!isShizukuPermissionGranted()) {
+            return "Error: Shizuku not authorized";
+        }
+        try {
+            Process p = Shizuku.newProcess(new String[]{"sh", "-c", cmd}, null, null);
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+            }
+            p.waitFor();
+            return sb.toString().trim();
+        } catch (Throwable t) {
+            return "Error: " + t.getMessage();
+        }
     }
 
     /**

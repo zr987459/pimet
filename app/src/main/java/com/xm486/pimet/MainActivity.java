@@ -41,6 +41,8 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
+import rikka.shizuku.Shizuku;
+
 import com.xm486.pimet.proot.PiWebManager;
 import com.xm486.pimet.proot.ProotManager;
 import com.xm486.pimet.proot.ProotSession;
@@ -72,18 +74,39 @@ public class MainActivity extends AppCompatActivity {
     // 页面与导航 Tab
     private View viewLaunch;
     private View viewPiWeb;
+    private View viewPlugins;
     private View viewTerminal;
     private View viewSettings;
 
     private LinearLayout tabLaunch;
     private LinearLayout tabPiWeb;
+    private LinearLayout tabPlugins;
     private LinearLayout tabTerminal;
     private LinearLayout tabSettings;
 
     private TextView tabLaunchText;
     private TextView tabPiWebText;
+    private TextView tabPluginsText;
     private TextView tabTerminalText;
     private TextView tabSettingsText;
+
+    // 插件面板组件
+    private View btnSyncPluginsAll;
+    private TextView chipCatExtensions;
+    private TextView chipCatSkills;
+    private TextView chipCatMcp;
+    private TextView chipCatSubagents;
+    private View containerCatExtensions;
+    private View containerCatSkills;
+    private View containerCatMcp;
+    private View containerCatSubagents;
+    private View btnDeployBridge;
+    private EditText inputCustomPlugin;
+    private View btnInstallCustomPlugin;
+    private View btnDeployAllSkills;
+    private View btnDeployAllMcp;
+    private View btnDeployAllSubagents;
+    private TextView settingsShizukuStatusTv;
 
     // Launch (启动/仪表盘) 视图组件
     private View launchStatusDot;
@@ -278,12 +301,19 @@ public class MainActivity extends AppCompatActivity {
 
         checkStoragePermissions();
         checkBatteryOptimizationPermission();
+        try {
+            Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
+        } catch (Throwable ignored) {}
         initViews();
         initNavigation();
         initLaunchPanel();
         initPiWebView();
+        initPluginsPanel();
         initTerminalPanel();
         initSettingsPanel();
+
+        // 异步全量同步 Pi-Web 适配扩展、技能与子代理生态
+        PluginManager.syncAllPresets(this);
 
         // 启动主终端会话
         if (ProotManager.isRootfsInstalled(this)) {
@@ -300,20 +330,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initViews() {
-        // 四个主视图
+        // 四个主视图 -> 五个主视图
         viewLaunch = findViewById(R.id.viewLaunch);
         viewPiWeb = findViewById(R.id.viewPiWeb);
+        viewPlugins = findViewById(R.id.viewPlugins);
         viewTerminal = findViewById(R.id.viewTerminal);
         viewSettings = findViewById(R.id.viewSettings);
 
         // 底栏 Tab
         tabLaunch = findViewById(R.id.tabLaunch);
         tabPiWeb = findViewById(R.id.tabPiWeb);
+        tabPlugins = findViewById(R.id.tabPlugins);
         tabTerminal = findViewById(R.id.tabTerminal);
         tabSettings = findViewById(R.id.tabSettings);
 
         tabLaunchText = findViewById(R.id.tabLaunchText);
         tabPiWebText = findViewById(R.id.tabPiWebText);
+        tabPluginsText = findViewById(R.id.tabPluginsText);
         tabTerminalText = findViewById(R.id.tabTerminalText);
         tabSettingsText = findViewById(R.id.tabSettingsText);
 
@@ -406,6 +439,7 @@ public class MainActivity extends AppCompatActivity {
         btnAutoStartSettings = findViewById(R.id.btnAutoStartSettings);
         btnPrivilegeRoot = findViewById(R.id.btnPrivilegeRoot);
         btnPrivilegeShizuku = findViewById(R.id.btnPrivilegeShizuku);
+        settingsShizukuStatusTv = findViewById(R.id.settingsShizukuStatusTv);
         btnPrivilegeAllFiles = findViewById(R.id.btnPrivilegeAllFiles);
         btnSyncClipboard = findViewById(R.id.btnSyncClipboard);
         btnTermClipboard = findViewById(R.id.btnTermClipboard);
@@ -422,15 +456,17 @@ public class MainActivity extends AppCompatActivity {
     private void initNavigation() {
         tabLaunch.setOnClickListener(v -> switchTab(0));
         tabPiWeb.setOnClickListener(v -> switchTab(1));
-        tabTerminal.setOnClickListener(v -> switchTab(2));
-        tabSettings.setOnClickListener(v -> switchTab(3));
+        if (tabPlugins != null) tabPlugins.setOnClickListener(v -> switchTab(2));
+        tabTerminal.setOnClickListener(v -> switchTab(3));
+        tabSettings.setOnClickListener(v -> switchTab(4));
     }
 
     private void switchTab(int index) {
         viewLaunch.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
-        viewTerminal.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
-        viewSettings.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+        if (viewPlugins != null) viewPlugins.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
+        viewTerminal.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+        viewSettings.setVisibility(index == 4 ? View.VISIBLE : View.GONE);
 
         // 更新底栏颜色
         int activeColor = 0xFF58A6FF;
@@ -438,8 +474,9 @@ public class MainActivity extends AppCompatActivity {
 
         tabLaunchText.setTextColor(index == 0 ? activeColor : normalColor);
         tabPiWebText.setTextColor(index == 1 ? activeColor : normalColor);
-        tabTerminalText.setTextColor(index == 2 ? activeColor : normalColor);
-        tabSettingsText.setTextColor(index == 3 ? activeColor : normalColor);
+        if (tabPluginsText != null) tabPluginsText.setTextColor(index == 2 ? activeColor : normalColor);
+        tabTerminalText.setTextColor(index == 3 ? activeColor : normalColor);
+        tabSettingsText.setTextColor(index == 4 ? activeColor : normalColor);
 
         if (index == 0) {
             checkServiceStatus();
@@ -447,6 +484,8 @@ public class MainActivity extends AppCompatActivity {
         } else if (index == 1) {
             updatePiWebDisplay();
         } else if (index == 2) {
+            // 插件与生态中心
+        } else if (index == 3) {
             if (terminalTabs.isEmpty()) {
                 createTab(true);
             } else {
@@ -460,7 +499,7 @@ public class MainActivity extends AppCompatActivity {
             }
             refreshTabsUi();
             terminalScrollView.post(() -> terminalScrollView.fullScroll(ScrollView.FOCUS_DOWN));
-        } else if (index == 3) {
+        } else if (index == 4) {
             refreshStorageSize();
             refreshPrivilegeStatus();
         }
@@ -488,7 +527,7 @@ public class MainActivity extends AppCompatActivity {
 
         btnActionCopyUrl.setOnClickListener(v -> copyTextToClipboard(getPiWebUrl(), "访问地址已复制到剪切板"));
         btnActionOpenBrowser.setOnClickListener(v -> openExternalBrowser());
-        btnActionModelConfig.setOnClickListener(v -> switchTab(3));
+        btnActionModelConfig.setOnClickListener(v -> switchTab(4));
 
         updateLaunchModelDesc();
 
@@ -846,7 +885,7 @@ public class MainActivity extends AppCompatActivity {
         });
         btnFloatTerminal.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
-            switchTab(2);
+            switchTab(3);
         });
         btnFloatReload.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
@@ -1745,7 +1784,7 @@ public class MainActivity extends AppCompatActivity {
         btnClearNpmCache.setOnClickListener(v -> {
             executeCommand("npm cache clean --force\n");
             Toast.makeText(this, "已在容器内发送 npm 缓存清理指令", Toast.LENGTH_SHORT).show();
-            switchTab(2);
+            switchTab(3);
         });
 
         btnResetContainer.setOnClickListener(v -> {
@@ -1799,12 +1838,16 @@ public class MainActivity extends AppCompatActivity {
 
         // Shizuku 特权
         btnPrivilegeShizuku.setOnClickListener(v -> {
-            if (DevicePrivilegeManager.isShizukuInstalled(this)) {
+            if (DevicePrivilegeManager.isShizukuPermissionGranted()) {
+                Toast.makeText(this, "✔ 已获得 Shizuku 特权授权！", Toast.LENGTH_SHORT).show();
+            } else if (DevicePrivilegeManager.isShizukuRunning()) {
+                DevicePrivilegeManager.requestShizukuPermission(this);
+            } else if (DevicePrivilegeManager.isShizukuInstalled(this)) {
                 boolean opened = DevicePrivilegeManager.openShizukuApp(this);
                 if (opened) {
-                    Toast.makeText(this, "正在打开 Shizuku 管理器，请确保服务已启动...", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "正在打开 Shizuku 管理器，请启动服务后再点击申请授权...", Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(this, "无法启动 Shizuku", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "打开 Shizuku 失败", Toast.LENGTH_SHORT).show();
                 }
             } else {
                 new AlertDialog.Builder(this)
@@ -1903,12 +1946,33 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         if (btnPrivilegeShizuku != null) {
-            if (DevicePrivilegeManager.isShizukuInstalled(this)) {
-                btnPrivilegeShizuku.setText("⚡ Shizuku: 已安装 (点击打开)");
+            if (DevicePrivilegeManager.isShizukuPermissionGranted()) {
+                btnPrivilegeShizuku.setText("⚡ Shizuku: 已授权 (ADB)");
                 btnPrivilegeShizuku.setTextColor(0xFF3FB950);
+            } else if (DevicePrivilegeManager.isShizukuRunning()) {
+                btnPrivilegeShizuku.setText("⚡ 申请 Shizuku 授权");
+                btnPrivilegeShizuku.setTextColor(0xFF58A6FF);
+            } else if (DevicePrivilegeManager.isShizukuInstalled(this)) {
+                btnPrivilegeShizuku.setText("⚡ Shizuku: 启动服务");
+                btnPrivilegeShizuku.setTextColor(0xFFD29922);
             } else {
                 btnPrivilegeShizuku.setText("⚡ Shizuku 特权");
                 btnPrivilegeShizuku.setTextColor(0xFFC9D1D9);
+            }
+        }
+        if (settingsShizukuStatusTv != null) {
+            if (DevicePrivilegeManager.isShizukuPermissionGranted()) {
+                settingsShizukuStatusTv.setText("Shizuku 状态: ✔ 已获得特权授权 (ADB 级免 Root 权限)");
+                settingsShizukuStatusTv.setTextColor(0xFF3FB950);
+            } else if (DevicePrivilegeManager.isShizukuRunning()) {
+                settingsShizukuStatusTv.setText("Shizuku 状态: ⚡ 服务运行中 (点击按钮立即授权)");
+                settingsShizukuStatusTv.setTextColor(0xFF58A6FF);
+            } else if (DevicePrivilegeManager.isShizukuInstalled(this)) {
+                settingsShizukuStatusTv.setText("Shizuku 状态: ⚠️ 已安装管理器但服务未启动");
+                settingsShizukuStatusTv.setTextColor(0xFFD29922);
+            } else {
+                settingsShizukuStatusTv.setText("Shizuku 状态: ✕ 未安装 Shizuku 管理器");
+                settingsShizukuStatusTv.setTextColor(0xFF8B949E);
             }
         }
         if (btnBatteryIgnoreOpt != null) {
@@ -1930,7 +1994,7 @@ public class MainActivity extends AppCompatActivity {
             new AlertDialog.Builder(this)
                     .setTitle("⚠️ 请先配置 AI 密钥")
                     .setMessage("尚未检测到 AI 密钥 (如 DeepSeek、OpenAI、Claude 等)。\n\n请前往【设置】面板配置 API Key，保存后即可在终端与 AI 连续对话！")
-                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(3))
+                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(4))
                     .setNegativeButton("稍后再说", null)
                     .show();
             return;
@@ -1968,7 +2032,7 @@ public class MainActivity extends AppCompatActivity {
                             switchTab(1);
                             break;
                         case 3:
-                            switchTab(3);
+                            switchTab(4);
                             break;
                     }
                 })
@@ -2391,9 +2455,134 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private final Shizuku.OnRequestPermissionResultListener shizukuPermissionListener =
+            (requestCode, grantResult) -> {
+                if (requestCode == DevicePrivilegeManager.SHIZUKU_REQUEST_CODE) {
+                    if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(this, "🎉 Shizuku 特权授权成功！", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(this, "❌ Shizuku 授权被拒绝", Toast.LENGTH_SHORT).show();
+                    }
+                    refreshPrivilegeStatus();
+                }
+            };
+
+    private void initPluginsPanel() {
+        btnSyncPluginsAll = findViewById(R.id.btnSyncPluginsAll);
+        chipCatExtensions = findViewById(R.id.chipCatExtensions);
+        chipCatSkills = findViewById(R.id.chipCatSkills);
+        chipCatMcp = findViewById(R.id.chipCatMcp);
+        chipCatSubagents = findViewById(R.id.chipCatSubagents);
+        containerCatExtensions = findViewById(R.id.containerCatExtensions);
+        containerCatSkills = findViewById(R.id.containerCatSkills);
+        containerCatMcp = findViewById(R.id.containerCatMcp);
+        containerCatSubagents = findViewById(R.id.containerCatSubagents);
+        btnDeployBridge = findViewById(R.id.btnDeployBridge);
+        inputCustomPlugin = findViewById(R.id.inputCustomPlugin);
+        btnInstallCustomPlugin = findViewById(R.id.btnInstallCustomPlugin);
+        btnDeployAllSkills = findViewById(R.id.btnDeployAllSkills);
+        btnDeployAllMcp = findViewById(R.id.btnDeployAllMcp);
+        btnDeployAllSubagents = findViewById(R.id.btnDeployAllSubagents);
+
+        // 分类切换点击
+        if (chipCatExtensions != null) chipCatExtensions.setOnClickListener(v -> selectPluginCategory(0));
+        if (chipCatSkills != null) chipCatSkills.setOnClickListener(v -> selectPluginCategory(1));
+        if (chipCatMcp != null) chipCatMcp.setOnClickListener(v -> selectPluginCategory(2));
+        if (chipCatSubagents != null) chipCatSubagents.setOnClickListener(v -> selectPluginCategory(3));
+
+        // 一键全量同步
+        if (btnSyncPluginsAll != null) {
+            btnSyncPluginsAll.setOnClickListener(v -> {
+                PluginManager.syncAllPresets(this);
+                Toast.makeText(this, "🎉 扩展、技能、MCP与子代理已全量同步至 Pi-Web！", Toast.LENGTH_LONG).show();
+            });
+        }
+
+        // 部署 Android 桥接插件
+        if (btnDeployBridge != null) {
+            btnDeployBridge.setOnClickListener(v -> {
+                PluginManager.syncAllPresets(this);
+                Toast.makeText(this, "✔ android-bridge 插件已部署，已注入 Shizuku/Root/剪贴板原生工具", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 部署技能
+        if (btnDeployAllSkills != null) {
+            btnDeployAllSkills.setOnClickListener(v -> {
+                PluginManager.syncAllPresets(this);
+                Toast.makeText(this, "✔ 预置 4 项专家技能 (android-dev, linux-ops 等) 已写入 Pi-Web！", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 部署 MCP
+        if (btnDeployAllMcp != null) {
+            btnDeployAllMcp.setOnClickListener(v -> {
+                PluginManager.syncAllPresets(this);
+                Toast.makeText(this, "✔ MCP 文件系统与记忆服务配置已生效！", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 部署子代理
+        if (btnDeployAllSubagents != null) {
+            btnDeployAllSubagents.setOnClickListener(v -> {
+                PluginManager.syncAllPresets(this);
+                Toast.makeText(this, "✔ 代码审查员与系统架构师子代理已就绪！", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        // 安装自定义 npm / 插件
+        if (btnInstallCustomPlugin != null) {
+            btnInstallCustomPlugin.setOnClickListener(v -> {
+                String pkg = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
+                if (pkg.isEmpty()) {
+                    Toast.makeText(this, "请输入需要安装的 npm 包名或插件名称", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                switchTab(3); // 切换至终端
+                TerminalTab active = getActiveTab();
+                if (active != null && active.session != null) {
+                    active.session.write("npm install -g " + pkg + " --registry=" + PiMetConfig.getNpmRegistry(this) + "\n");
+                    Toast.makeText(this, "正在终端中拉取安装: " + pkg, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+    }
+
+    private void selectPluginCategory(int index) {
+        if (containerCatExtensions != null) containerCatExtensions.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
+        if (containerCatSkills != null) containerCatSkills.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
+        if (containerCatMcp != null) containerCatMcp.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
+        if (containerCatSubagents != null) containerCatSubagents.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+
+        int activeBg = R.drawable.bg_btn_primary;
+        int normalBg = R.drawable.bg_btn_secondary;
+        int activeText = 0xFFFFFFFF;
+        int normalText = 0xFFC9D1D9;
+
+        if (chipCatExtensions != null) {
+            chipCatExtensions.setBackgroundResource(index == 0 ? activeBg : normalBg);
+            chipCatExtensions.setTextColor(index == 0 ? activeText : normalText);
+        }
+        if (chipCatSkills != null) {
+            chipCatSkills.setBackgroundResource(index == 1 ? activeBg : normalBg);
+            chipCatSkills.setTextColor(index == 1 ? activeText : normalText);
+        }
+        if (chipCatMcp != null) {
+            chipCatMcp.setBackgroundResource(index == 2 ? activeBg : normalBg);
+            chipCatMcp.setTextColor(index == 2 ? activeText : normalText);
+        }
+        if (chipCatSubagents != null) {
+            chipCatSubagents.setBackgroundResource(index == 3 ? activeBg : normalBg);
+            chipCatSubagents.setTextColor(index == 3 ? activeText : normalText);
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        try {
+            Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
+        } catch (Throwable ignored) {}
         for (TerminalTab tab : terminalTabs) {
             if (tab.session != null) {
                 tab.session.close();
