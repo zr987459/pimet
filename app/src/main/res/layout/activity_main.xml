@@ -820,7 +820,7 @@
                                 android:id="@+id/badgeBridgeStatus"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:background="@drawable/bg_badge_port"
+                                android:background="@drawable/bg_badge_info"
                                 android:paddingStart="8dp"
                                 android:paddingTop="2dp"
                                 android:paddingEnd="8dp"
