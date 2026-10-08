@@ -780,7 +780,8 @@ public class MainActivity extends AppCompatActivity {
                     os.write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 }
 
-                if (conn.getResponseCode() == 200) {
+                int respCode = conn.getResponseCode();
+                if (respCode == 200) {
                     try (java.io.InputStream is = conn.getInputStream();
                          java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
                         byte[] buf = new byte[2048];
@@ -798,7 +799,7 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
                 } else {
-                    mainHandler.post(() -> showPetBubble("唔……网络请求遇到点问题: HTTP " + conn.getResponseCode()));
+                    mainHandler.post(() -> showPetBubble("唔……网络请求遇到点问题: HTTP " + respCode));
                 }
             } catch (Throwable t) {
                 mainHandler.post(() -> showPetBubble("思考出错了: " + t.getMessage()));
