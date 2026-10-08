@@ -49,6 +49,8 @@ import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
 import com.xm486.pimet.pet.PetRegistry;
 import com.xm486.pimet.pet.SpritePetView;
+import com.xm486.pimet.pet.PetAgentState;
+import com.xm486.pimet.pet.PiWebMonitor;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -99,10 +101,13 @@ public class MainActivity extends AppCompatActivity {
     private SpritePetView floatingPetView;
     private LinearLayout petBubbleLayout;
     private TextView petBubbleTv;
+    private TextView btnFloatPetChat;
     private TextView btnFloatPetSwitch;
     private TextView tvCurrentPetName;
     private TextView btnTogglePetEnabled;
     private TextView btnSelectPet;
+    private PiWebMonitor piWebMonitor;
+    private PetAgentState.Snapshot lastPetSnapshot = new PetAgentState.Snapshot();
     private final Handler petBubbleHandler = new Handler(Looper.getMainLooper());
     private final Runnable petBubbleDismissRunnable = () -> {
         if (petBubbleLayout != null) {
@@ -407,6 +412,7 @@ public class MainActivity extends AppCompatActivity {
         floatingPetView = findViewById(R.id.floatingPetView);
         petBubbleLayout = findViewById(R.id.petBubbleLayout);
         petBubbleTv = findViewById(R.id.petBubbleTv);
+        btnFloatPetChat = findViewById(R.id.btnFloatPetChat);
         btnFloatPetSwitch = findViewById(R.id.btnFloatPetSwitch);
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
         btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
@@ -607,6 +613,197 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    private void initPetMonitor() {
+        int port = PiMetConfig.getWebPort(this);
+        if (piWebMonitor != null) {
+            piWebMonitor.stop();
+        }
+        piWebMonitor = new PiWebMonitor(this, port, new PiWebMonitor.Listener() {
+            @Override
+            public void onSnapshot(PetAgentState.Snapshot snapshot) {
+                lastPetSnapshot = snapshot;
+                if (!PetRegistry.isPetEnabled(MainActivity.this) && !isFullscreen) {
+                    return;
+                }
+                switch (snapshot.state) {
+                    case THINKING:
+                        if (floatingPetView != null) {
+                            floatingPetView.setMoveDirection(0);
+                            floatingPetView.playOneShot("waiting");
+                        }
+                        showPetBubble("🤔 Agent 正在深度思考中...");
+                        break;
+                    case TOOL_RUNNING:
+                        if (floatingPetView != null) {
+                            floatingPetView.setMoveDirection(1);
+                        }
+                        String tool = TextUtils.isEmpty(snapshot.lastTool) ? "指令执行" : snapshot.lastTool;
+                        showPetBubble("🔧 正在调用工具: " + tool);
+                        break;
+                    case RESPONDING:
+                        if (floatingPetView != null) {
+                            floatingPetView.setMoveDirection(0);
+                        }
+                        showPetBubble("💬 Agent 正在组织回复...");
+                        break;
+                    case IDLE:
+                        if (floatingPetView != null) {
+                            floatingPetView.setMoveDirection(0);
+                            floatingPetView.playOneShot("jumping");
+                        }
+                        showPetBubble("🎉 任务完成！随时待命");
+                        break;
+                    case ERROR:
+                        if (floatingPetView != null) {
+                            floatingPetView.playOneShot("failed");
+                        }
+                        showPetBubble("😱 任务出错啦: " + snapshot.lastTool);
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            @Override
+            public void onError(String message) {}
+        });
+        piWebMonitor.start();
+    }
+
+    private void showPetChatDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(42, 24, 42, 16);
+
+        TextView tvStatus = new TextView(this);
+        tvStatus.setTextColor(0xFF58A6FF);
+        tvStatus.setTextSize(13);
+        String stateStr = (lastPetSnapshot != null && lastPetSnapshot.state != null)
+                ? lastPetSnapshot.state.getEmoji() + " " + lastPetSnapshot.state.getLabel()
+                : "😴 空闲";
+        String lastTool = (lastPetSnapshot != null && !TextUtils.isEmpty(lastPetSnapshot.lastTool))
+                ? " (工具: " + lastPetSnapshot.lastTool + ")" : "";
+        tvStatus.setText("🎯 监控状态: " + stateStr + lastTool + " | 端口: " + PiMetConfig.getWebPort(this));
+        layout.addView(tvStatus);
+
+        if (lastPetSnapshot != null && lastPetSnapshot.recentEvents != null && !lastPetSnapshot.recentEvents.isEmpty()) {
+            TextView tvEvents = new TextView(this);
+            tvEvents.setTextColor(0xFF8B949E);
+            tvEvents.setTextSize(11);
+            tvEvents.setPadding(0, 8, 0, 8);
+            StringBuilder sb = new StringBuilder("最近动态:\n");
+            int count = 0;
+            for (int i = lastPetSnapshot.recentEvents.size() - 1; i >= 0 && count < 3; i--, count++) {
+                sb.append("• ").append(lastPetSnapshot.recentEvents.get(i)).append("\n");
+            }
+            tvEvents.setText(sb.toString().trim());
+            layout.addView(tvEvents);
+        }
+
+        EditText inputEt = new EditText(this);
+        inputEt.setHint("对桌宠说点什么或提问 (如: 检查容器环境、写个脚本)...");
+        inputEt.setTextColor(0xFFF0F6FC);
+        inputEt.setHintTextColor(0xFF8B949E);
+        inputEt.setTextSize(13);
+        layout.addView(inputEt);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🐾 桌宠智能监控与对话")
+                .setView(layout)
+                .setPositiveButton("发送给桌宠", null)
+                .setNeutralButton("🚀 唤出终端", (d, w) -> openTerminalInWorkbench())
+                .setNegativeButton("关闭", null)
+                .create();
+
+        dialog.setOnShowListener(di -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String question = inputEt.getText().toString().trim();
+                if (question.isEmpty()) {
+                    Toast.makeText(this, "请输入要对桌宠说的话", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                dialog.dismiss();
+                sendPetChatMessage(question);
+            });
+        });
+
+        dialog.show();
+    }
+
+    private void sendPetChatMessage(String question) {
+        if (floatingPetView != null) {
+            floatingPetView.playOneShot("waving");
+        }
+        showPetBubble("收到啦！正在思考回答中...");
+
+        String apiKey = PiMetConfig.getAiApiKey(this);
+        if (TextUtils.isEmpty(apiKey)) {
+            showPetBubble("主人还没配置 AI Key 哦~ 可以去设置面板填入！");
+            return;
+        }
+
+        String baseUrl = PiMetConfig.getAiBaseUrl(this);
+        String model = PiMetConfig.getAiModel(this);
+
+        new Thread(() -> {
+            try {
+                String urlStr = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
+                java.net.URL url = new java.net.URL(urlStr);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(15000);
+                conn.setDoOutput(true);
+
+                JSONObject body = new JSONObject();
+                body.put("model", model);
+                JSONArray messages = new JSONArray();
+
+                JSONObject sysMsg = new JSONObject();
+                sysMsg.put("role", "system");
+                sysMsg.put("content", "你是 Android PiMet 内置的桌面萌宠伴侣助手，性格活泼可爱、忠诚，说话简短精炼、带有可爱的语气词。回答主人关于 Linux 容器、脚本开发与日常提问，字数控制在 50 字以内。");
+                messages.put(sysMsg);
+
+                JSONObject userMsg = new JSONObject();
+                userMsg.put("role", "user");
+                userMsg.put("content", question);
+                messages.put(userMsg);
+
+                body.put("messages", messages);
+                body.put("max_tokens", 256);
+
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    os.write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+
+                if (conn.getResponseCode() == 200) {
+                    try (java.io.InputStream is = conn.getInputStream();
+                         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+                        byte[] buf = new byte[2048];
+                        int n;
+                        while ((n = is.read(buf)) != -1) bos.write(buf, 0, n);
+                        String respStr = bos.toString("UTF-8");
+                        JSONObject respObj = new JSONObject(respStr);
+                        JSONArray choices = respObj.optJSONArray("choices");
+                        if (choices != null && choices.length() > 0) {
+                            String answer = choices.getJSONObject(0).optJSONObject("message").optString("content", "");
+                            mainHandler.post(() -> {
+                                if (floatingPetView != null) floatingPetView.playOneShot("jumping");
+                                showPetBubble(answer);
+                            });
+                        }
+                    }
+                } else {
+                    mainHandler.post(() -> showPetBubble("唔……网络请求遇到点问题: HTTP " + conn.getResponseCode()));
+                }
+            } catch (Throwable t) {
+                mainHandler.post(() -> showPetBubble("思考出错了: " + t.getMessage()));
+            }
+        }).start();
     }
 
     private void initLaunchPanel() {
@@ -1053,6 +1250,16 @@ public class MainActivity extends AppCompatActivity {
         }
 
         updatePetDisplay(PetRegistry.isPetEnabled(this));
+
+        if (btnFloatPetChat != null) {
+            btnFloatPetChat.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                showPetChatDialog();
+            });
+        }
+        if (petBubbleLayout != null) {
+            petBubbleLayout.setOnClickListener(v -> showPetChatDialog());
+        }
 
         btnFloatClose.setOnClickListener(v -> floatingMenuVertical.setVisibility(View.GONE));
         btnFloatFullscreen.setOnClickListener(v -> {
@@ -2801,8 +3008,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        initPetMonitor();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (piWebMonitor != null) {
+            piWebMonitor.stop();
+        }
         try {
             Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         } catch (Throwable ignored) {}

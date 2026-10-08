@@ -1021,6 +1021,16 @@
                         android:paddingBottom="6dp"
                         android:visibility="gone">
 
+                        <!-- 💬 萌宠对话与 Agent 实时监控卡片 -->
+                        <TextView
+                            android:id="@+id/btnFloatPetChat"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="💬"
+                            android:textColor="#58A6FF"
+                            android:textSize="15sp" />
+
                         <!-- 🐾 切换桌宠角色与动作互动 -->
                         <TextView
                             android:id="@+id/btnFloatPetSwitch"
