@@ -78,7 +78,6 @@ public final class PiWebManager {
                 }
 
                 String registry = PiMetConfig.getNpmRegistry(context);
-                int port = PiMetConfig.getWebPort(context);
 
                 // 如果未安装 pi-web，在标准 Linux 容器内执行 npm install
                 if (!ProotManager.isPiWebInstalled(context)) {
