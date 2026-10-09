@@ -43,6 +43,7 @@ public final class PluginManager {
         public String version = "";
         public String latestVersion = "";
         public boolean hasUpdate = false;
+        public String chineseDesc = "";
 
         public PluginItem(int type, String name, String path, String description) {
             this(type, name, path, description, name);
@@ -84,6 +85,9 @@ public final class PluginManager {
     public static List<PluginItem> getInstalledPlugins(Context context) {
         List<PluginItem> list = new ArrayList<>();
         Set<String> addedPaths = new HashSet<>();
+
+        // 优先触发双向同步：外部文件的安装/卸载与内部配置互相同步
+        syncPlugins(context);
 
         try {
             File rootfs = ProotManager.getRootfsDir(context);
@@ -268,6 +272,14 @@ public final class PluginManager {
         } catch (Throwable t) {
             Log.e(TAG, "Failed to get installed plugins", t);
         }
+
+        // 自动注入中文注释与描述
+        for (PluginItem item : list) {
+            if (item.chineseDesc == null || item.chineseDesc.isEmpty()) {
+                item.chineseDesc = getChineseAnnotation(item.name, item.description, item.type);
+            }
+        }
+
         return list;
     }
 
@@ -635,10 +647,11 @@ public final class PluginManager {
                         if (servers != null && servers.has(item.name)) {
                             servers.remove(item.name);
                             writeFile(mcpFile, root.toString(2));
-                            return true;
                         }
                     }
                 }
+                syncPlugins(context);
+                return true;
             } else if (item.type == PluginItem.TYPE_EXTENSION) {
                 String pkg = item.rawPkgName != null ? item.rawPkgName : item.name;
                 if (pkg.contains(" (v")) {
@@ -650,18 +663,519 @@ public final class PluginManager {
                 } else {
                     ProotManager.executeCommandSync(context, "cd /root/.pi/agent/npm && npm uninstall " + pkg);
                 }
+
+                // 若在 extensions/ 目录下存在同名文件或文件夹，一并移除
+                File target = new File(item.path);
+                if (target.exists()) {
+                    deleteRecursively(target);
+                }
+
+                // 从 settings.json 中移除该扩展
+                removeExtensionFromSettings(context, item.name, item.rawPkgName, item.path);
+                syncPlugins(context);
                 return true;
             } else {
                 File target = new File(item.path);
                 if (target.exists()) {
                     deleteRecursively(target);
-                    return true;
                 }
+                removeExtensionFromSettings(context, item.name, item.rawPkgName, item.path);
+                syncPlugins(context);
+                return true;
             }
         } catch (Throwable t) {
             Log.e(TAG, "Failed to delete plugin: " + item.name, t);
         }
         return false;
+    }
+
+    private static void removeExtensionFromSettings(Context context, String name, String rawPkgName, String path) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            File settingsJson = new File(rootfs, "root/.pi/agent/settings.json");
+            if (!settingsJson.exists()) return;
+            String c = readFile(settingsJson);
+            if (c == null || c.trim().isEmpty()) return;
+            JSONObject obj = new JSONObject(c);
+            JSONArray exts = obj.optJSONArray("extensions");
+            if (exts == null) return;
+            JSONArray newExts = new JSONArray();
+            for (int i = 0; i < exts.length(); i++) {
+                String e = exts.optString(i, "");
+                boolean match = e.equals(name) || (rawPkgName != null && e.equals(rawPkgName))
+                        || (path != null && (e.equals(path) || path.endsWith(e)));
+                if (!match) {
+                    newExts.put(e);
+                }
+            }
+            obj.put("extensions", newExts);
+            writeFile(settingsJson, obj.toString(2));
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 自动双向同步插件列表：
+     * 1. 扫描磁盘上安装的扩展，将外面装好的自动同步写入 settings.json
+     * 2. 清理 settings.json 中已被外部删除/卸载的不存在扩展
+     * 3. 确保 mcp.json 结构合法与状态一致
+     */
+    public static void syncPlugins(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            if (!rootfs.exists()) return;
+            File piAgentDir = new File(rootfs, "root/.pi/agent");
+            if (!piAgentDir.exists()) piAgentDir.mkdirs();
+
+            File settingsJson = new File(piAgentDir, "settings.json");
+            JSONObject settingsObj = new JSONObject();
+            if (settingsJson.exists()) {
+                String c = readFile(settingsJson);
+                if (c != null && !c.trim().isEmpty()) {
+                    try { settingsObj = new JSONObject(c); } catch (Throwable ignored) {}
+                }
+            }
+
+            JSONArray currentExts = settingsObj.optJSONArray("extensions");
+            if (currentExts == null) {
+                currentExts = new JSONArray();
+                settingsObj.put("extensions", currentExts);
+            }
+
+            // 收集现有配置中的扩展
+            Set<String> configuredExts = new HashSet<>();
+            for (int i = 0; i < currentExts.length(); i++) {
+                String item = currentExts.optString(i, "").trim();
+                if (!item.isEmpty()) configuredExts.add(item);
+            }
+
+            // 扫描磁盘上实际存在的扩展
+            Set<String> actualDiskExts = new HashSet<>();
+            File extDir = new File(piAgentDir, "extensions");
+            if (extDir.exists() && extDir.isDirectory()) {
+                File[] extFiles = extDir.listFiles();
+                if (extFiles != null) {
+                    for (File ef : extFiles) {
+                        String name = ef.getName();
+                        if (ef.isFile() && (name.endsWith(".ts") || name.endsWith(".js"))) {
+                            actualDiskExts.add("extensions/" + name);
+                            actualDiskExts.add(ef.getAbsolutePath());
+                        } else if (ef.isDirectory()) {
+                            actualDiskExts.add("extensions/" + name);
+                            actualDiskExts.add(ef.getAbsolutePath());
+                        }
+                    }
+                }
+            }
+
+            File npmDir = new File(piAgentDir, "npm");
+            File npmPkgJson = new File(npmDir, "package.json");
+            File npmNodeModules = new File(npmDir, "node_modules");
+            if (npmPkgJson.exists()) {
+                String pkgContent = readFile(npmPkgJson);
+                if (pkgContent != null) {
+                    try {
+                        JSONObject rootPkg = new JSONObject(pkgContent);
+                        JSONObject deps = rootPkg.optJSONObject("dependencies");
+                        if (deps != null) {
+                            Iterator<String> depKeys = deps.keys();
+                            while (depKeys.hasNext()) {
+                                String pkgName = depKeys.next();
+                                actualDiskExts.add(pkgName);
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+            if (npmNodeModules.exists() && npmNodeModules.isDirectory()) {
+                File[] mods = npmNodeModules.listFiles();
+                if (mods != null) {
+                    for (File m : mods) {
+                        if (m.getName().startsWith("@")) {
+                            File[] subMods = m.listFiles();
+                            if (subMods != null) {
+                                for (File sm : subMods) {
+                                    actualDiskExts.add(m.getName() + "/" + sm.getName());
+                                }
+                            }
+                        } else {
+                            actualDiskExts.add(m.getName());
+                        }
+                    }
+                }
+            }
+
+            // 1. 同步外面的卸载到里面：移除 settings.json 中磁盘上已不存在的插件
+            JSONArray newExts = new JSONArray();
+            boolean changed = false;
+            for (int i = 0; i < currentExts.length(); i++) {
+                String ext = currentExts.optString(i, "").trim();
+                if (ext.isEmpty()) continue;
+                boolean exists = false;
+                if (actualDiskExts.contains(ext)) {
+                    exists = true;
+                } else if (ext.startsWith("/") && new File(ext).exists()) {
+                    exists = true;
+                } else if (new File(piAgentDir, ext).exists()) {
+                    exists = true;
+                } else if (new File(npmNodeModules, ext).exists()) {
+                    exists = true;
+                } else if (new File(extDir, ext).exists()) {
+                    exists = true;
+                }
+                if (exists) {
+                    newExts.put(ext);
+                } else {
+                    changed = true;
+                    Log.i(TAG, "Sync: removed uninstalled extension from settings.json: " + ext);
+                }
+            }
+
+            // 2. 同步外面的安装到里面：若本地 extensions 目录或 npm package.json 中有新插件，自动加入 settings.json
+            for (String diskExt : actualDiskExts) {
+                if (diskExt.startsWith("extensions/") || diskExt.equals("oh-my-pi") || diskExt.startsWith("@bacnh85/")) {
+                    boolean alreadyIn = false;
+                    for (int i = 0; i < newExts.length(); i++) {
+                        String e = newExts.optString(i, "");
+                        if (e.equals(diskExt) || (diskExt.startsWith("extensions/") && e.endsWith(diskExt))) {
+                            alreadyIn = true;
+                            break;
+                        }
+                    }
+                    if (!alreadyIn) {
+                        newExts.put(diskExt);
+                        changed = true;
+                        Log.i(TAG, "Sync: added newly installed extension to settings.json: " + diskExt);
+                    }
+                }
+            }
+
+            if (changed) {
+                settingsObj.put("extensions", newExts);
+                writeFile(settingsJson, settingsObj.toString(2));
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "syncPlugins error", t);
+        }
+    }
+
+    /**
+     * 智能识别并安装多类型扩展、NPM包、MCP服务、Skill或命令
+     */
+    public static class SmartInstallResult {
+        public boolean success;
+        public String detectedType = "未知类型";
+        public String message = "";
+        public String targetName = "";
+    }
+
+    public static SmartInstallResult smartInstall(Context context, String rawInput) {
+        SmartInstallResult res = new SmartInstallResult();
+        if (rawInput == null || rawInput.trim().isEmpty()) {
+            res.success = false;
+            res.message = "输入内容为空";
+            return res;
+        }
+
+        String input = rawInput.trim();
+        String reg = PiMetConfig.getNpmRegistry(context);
+
+        // 1. 去除用户复制的 shell 前缀
+        if (input.startsWith("npm i -g ") || input.startsWith("npm install -g ")) {
+            input = input.replaceFirst("^npm (install|i) -g ", "").trim();
+        } else if (input.startsWith("npm i ") || input.startsWith("npm install ")) {
+            input = input.replaceFirst("^npm (install|i) ", "").trim();
+        } else if (input.startsWith("pnpm add -g ") || input.startsWith("pnpm add ")) {
+            input = input.replaceFirst("^pnpm add (-g )?", "").trim();
+        }
+
+        try {
+            // Case A: Git 仓库链接或 Raw 文件链接 (http://, https://, git@)
+            if (input.startsWith("http://") || input.startsWith("https://") || input.startsWith("git@")) {
+                if (input.endsWith("/SKILL.md") || (input.contains("/skills/") && input.endsWith(".md"))) {
+                    // 这是 Skill 技能的 Raw 链接
+                    res.detectedType = "Skill 专家技能";
+                    String skillName = "custom-skill-" + System.currentTimeMillis();
+                    String[] parts = input.split("/");
+                    if (parts.length > 2 && parts[parts.length - 1].equalsIgnoreCase("SKILL.md")) {
+                        skillName = parts[parts.length - 2];
+                    }
+                    res.targetName = skillName;
+                    String content = downloadUrlContent(input);
+                    if (content != null && !content.isEmpty()) {
+                        saveSkill(context, skillName, content);
+                        syncPlugins(context);
+                        res.success = true;
+                        res.message = "成功下载并添加技能: " + skillName;
+                        return res;
+                    } else {
+                        res.success = false;
+                        res.message = "下载 SKILL.md 失败，请检查网络链接";
+                        return res;
+                    }
+                } else if (input.endsWith(".md")) {
+                    // 这是 Subagent 提示词的 Raw 链接
+                    res.detectedType = "Subagent 子智能体";
+                    String agentName = new File(input).getName().replace(".md", "");
+                    res.targetName = agentName;
+                    String content = downloadUrlContent(input);
+                    if (content != null && !content.isEmpty()) {
+                        saveSubagent(context, agentName, content);
+                        syncPlugins(context);
+                        res.success = true;
+                        res.message = "成功下载并添加子智能体: " + agentName;
+                        return res;
+                    } else {
+                        res.success = false;
+                        res.message = "下载子智能体失败，请检查网络链接";
+                        return res;
+                    }
+                } else {
+                    // Git 仓库 -> 作为扩展克隆并集成
+                    res.detectedType = "Git 仓库扩展";
+                    String repoName = input;
+                    if (repoName.endsWith(".git")) repoName = repoName.substring(0, repoName.length() - 4);
+                    int lastSlash = repoName.lastIndexOf('/');
+                    if (lastSlash >= 0) repoName = repoName.substring(lastSlash + 1);
+                    res.targetName = repoName;
+
+                    // 优先在 ~/.pi/agent/extensions 目录中 git clone
+                    String cloneCmd = "mkdir -p /root/.pi/agent/extensions && cd /root/.pi/agent/extensions && git clone --depth=1 " + input;
+                    int code = ProotManager.executeCommandSync(context, cloneCmd);
+                    if (code != 0) {
+                        // 备选方案: npm install <git-url>
+                        String npmGitCmd = "cd /root/.pi/agent/npm && npm install " + input + " --registry=" + reg;
+                        code = ProotManager.executeCommandSync(context, npmGitCmd);
+                    }
+                    syncPlugins(context);
+                    res.success = (code == 0);
+                    res.message = res.success ? "成功克隆并同步扩展: " + repoName : "Git 克隆或安装失败";
+                    return res;
+                }
+            }
+
+            // Case B: MCP 模块 (以 @modelcontextprotocol/ 开头，或 mcp-server-，或以 npx 开头)
+            if (input.startsWith("@modelcontextprotocol/") || input.startsWith("mcp-server-") || input.startsWith("npx -y @modelcontextprotocol/")) {
+                res.detectedType = "MCP 外部协议服务";
+                String pkgName = input.replace("npx -y ", "").trim();
+                String serverName = pkgName;
+                if (serverName.contains("/")) serverName = serverName.substring(serverName.lastIndexOf('/') + 1);
+                if (serverName.startsWith("server-")) serverName = serverName.substring(7);
+                res.targetName = serverName;
+
+                // 1. 在容器中安装
+                String cmd = "npm install -g " + pkgName + " --registry=" + reg;
+                ProotManager.executeCommandSync(context, cmd);
+
+                // 2. 自动注入到 ~/.pi/agent/mcp.json
+                File rootfs = ProotManager.getRootfsDir(context);
+                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+                JSONObject mcpRoot = new JSONObject();
+                if (mcpFile.exists()) {
+                    String str = readFile(mcpFile);
+                    if (str != null && !str.trim().isEmpty()) {
+                        try { mcpRoot = new JSONObject(str); } catch (Throwable ignored) {}
+                    }
+                }
+                JSONObject servers = mcpRoot.optJSONObject("mcpServers");
+                if (servers == null) {
+                    servers = new JSONObject();
+                    mcpRoot.put("mcpServers", servers);
+                }
+                JSONObject srv = new JSONObject();
+                srv.put("command", "npx");
+                JSONArray args = new JSONArray();
+                args.put("-y");
+                args.put(pkgName);
+                srv.put("args", args);
+                servers.put(serverName, srv);
+                writeFile(mcpFile, mcpRoot.toString(2));
+
+                syncPlugins(context);
+                res.success = true;
+                res.message = "成功安装并自动配置 MCP 服务: " + serverName;
+                return res;
+            }
+
+            // Case C: 自定义 Shell 命令 (如 git clone, curl, npm ...)
+            if (input.startsWith("git ") || input.startsWith("curl ") || input.startsWith("wget ") || input.contains(" && ")) {
+                res.detectedType = "自定义 Shell 命令";
+                res.targetName = "shell-command";
+                int code = ProotManager.executeCommandSync(context, input);
+                syncPlugins(context);
+                res.success = (code == 0);
+                res.message = res.success ? "命令执行完成" : "命令执行返回非 0 状态码";
+                return res;
+            }
+
+            // Case D: 标准 NPM 扩展包名 (如 oh-my-pi, @bacnh85/pi-ux 等)
+            res.detectedType = "NPM 官方扩展包";
+            res.targetName = input;
+            String cmd1 = "cd /root/.pi/agent/npm && npm install " + input + " --registry=" + reg;
+            int code1 = ProotManager.executeCommandSync(context, cmd1);
+            if (code1 != 0) {
+                String cmd2 = "npm install -g " + input + " --registry=" + reg;
+                code1 = ProotManager.executeCommandSync(context, cmd2);
+            }
+            syncPlugins(context);
+            res.success = (code1 == 0);
+            res.message = res.success ? "成功安装并同步扩展: " + input : "NPM 安装失败，请检查包名或网络";
+            return res;
+
+        } catch (Throwable t) {
+            Log.e(TAG, "smartInstall error", t);
+            res.success = false;
+            res.message = "安装异常: " + t.getMessage();
+            return res;
+        }
+    }
+
+    private static String downloadUrlContent(String urlStr) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 PiMet/1.2.7");
+            if (conn.getResponseCode() == 200) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line).append("\n");
+                    }
+                    return sb.toString();
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return null;
+    }
+
+    /**
+     * 自动为插件、工具、技能或 MCP 服务生成中文注释与说明
+     */
+    public static String getChineseAnnotation(String name, String originalDesc, int type) {
+        String lowerName = (name != null ? name : "").toLowerCase().trim();
+        String lowerDesc = (originalDesc != null ? originalDesc : "").toLowerCase().trim();
+
+        // 1. 精确匹配已知官方及社区核心扩展/工具/技能
+        if (lowerName.equals("oh-my-pi") || lowerName.contains("oh-my-pi")) {
+            return "全能 AI 编排与多智能体系统（内置代码审查、自动化重构、浏览器测试与架构专家）";
+        }
+        if (lowerName.contains("pi-ux") || lowerName.contains("ux-design")) {
+            return "防 AI 劣质设计的 UI/UX 设计规范与自动化审查工具";
+        }
+        if (lowerName.contains("android-bridge") || lowerName.contains("pimet-android-bridge") || lowerName.contains("pimet-bridge")) {
+            return "Android 宿主原生控制扩展（支持动态操控桌宠、切换界面、配置端口）";
+        }
+        if (lowerName.equals("code-review")) {
+            return "代码审查专家 · 全面评估正确性、性能、安全性与代码风格";
+        }
+        if (lowerName.equals("debugging")) {
+            return "系统化调试专家 · 假设驱动定位、根因分析与最小化修复";
+        }
+        if (lowerName.equals("frontend")) {
+            return "前端 UI/UX 开发专家 · 页面设计、组件构建与响应式布局";
+        }
+        if (lowerName.equals("git-master")) {
+            return "Git 版本控制专家 · 原子提交、变基整理与历史检索";
+        }
+        if (lowerName.equals("playwright")) {
+            return "浏览器自动化与 E2E 测试 · 网页操控、截图录屏与状态抓取";
+        }
+        if (lowerName.equals("refactor")) {
+            return "智能重构专家 · 模块解耦、代码提炼与结构现代性优化";
+        }
+        if (lowerName.equals("remove-ai-slops")) {
+            return "消除 AI 生成代码异味 · 移除冗余复杂度与性能提速";
+        }
+        if (lowerName.equals("review-work")) {
+            return "实施后全面复盘审查 · 自动化 QA、代码质量与安全性检查";
+        }
+        if (lowerName.equals("security-review")) {
+            return "安全审计专家 · 漏洞评估、威胁建模与 OWASP 检查";
+        }
+        if (lowerName.equals("oracle")) {
+            return "架构设计、跨系统权衡与疑难排查专家顾问";
+        }
+        if (lowerName.equals("metis")) {
+            return "需求意图分析、潜在歧义与前置任务规划顾问";
+        }
+        if (lowerName.equals("momus")) {
+            return "工作计划与执行方案严苛审查顾问";
+        }
+        if (lowerName.equals("librarian")) {
+            return "多仓库研究、开源文档检索与 API 范例调研专家";
+        }
+        if (lowerName.equals("explore")) {
+            return "上下文快速检索与项目代码库导航专家";
+        }
+        if (lowerName.equals("sisyphus-junior")) {
+            return "专注单任务高效执行代理";
+        }
+        if (lowerName.equals("multimodal-looker")) {
+            return "多模态媒体与图像分析智能体";
+        }
+        if (lowerName.contains("fetch") || lowerName.contains("server-fetch")) {
+            return "网页内容抓取与文档提取服务";
+        }
+        if (lowerName.contains("filesystem") || lowerName.contains("server-filesystem")) {
+            return "PRoot 容器本地文件系统安全操作服务";
+        }
+        if (lowerName.contains("github") || lowerName.contains("server-github")) {
+            return "GitHub 远程仓库、Issue 与 Pull Request 交互服务";
+        }
+        if (lowerName.contains("puppeteer") || lowerName.contains("server-puppeteer")) {
+            return "Puppeteer 无头浏览器渲染与页面控制服务";
+        }
+        if (lowerName.contains("sqlite") || lowerName.contains("server-sqlite")) {
+            return "SQLite 数据库查询与结构管理服务";
+        }
+        if (lowerName.contains("memory") || lowerName.contains("server-memory") || lowerName.contains("pi-hermes-memory")) {
+            return "持久化跨会话知识、经验与记忆库管理服务";
+        }
+        if (lowerName.contains("brave-search") || lowerName.contains("server-brave-search")) {
+            return "Brave 互联网实时搜索引擎";
+        }
+        if (lowerName.contains("docker")) {
+            return "Docker 容器编排与镜像管理服务";
+        }
+
+        // 2. 根据语义和类型生成智能中文标签
+        if (type == PluginItem.TYPE_MCP) {
+            return "MCP 协议外部能力服务 (" + name + ")";
+        }
+        if (type == PluginItem.TYPE_SKILL) {
+            if (lowerDesc.contains("test") || lowerDesc.contains("browser")) return "自动化测试与浏览器交互技能";
+            if (lowerDesc.contains("git") || lowerDesc.contains("commit")) return "Git 仓库协同与代码提交技能";
+            if (lowerDesc.contains("refactor") || lowerDesc.contains("clean")) return "代码结构优化与重构技能";
+            if (lowerDesc.contains("review") || lowerDesc.contains("audit")) return "代码质量审查与规范检查技能";
+            return "Pi Agent 专业领域技能: " + name;
+        }
+        if (type == PluginItem.TYPE_SUBAGENT) {
+            return "智能体角色与专属提示词: " + name;
+        }
+
+        if (lowerDesc.contains("ui") || lowerDesc.contains("frontend") || lowerDesc.contains("css")) {
+            return "前端与用户界面交互扩展";
+        }
+        if (lowerDesc.contains("test") || lowerDesc.contains("testing")) {
+            return "自动化测试与质量保障工具包";
+        }
+        if (lowerDesc.contains("tool") || lowerDesc.contains("utility")) {
+            return "通用开发工具与效率扩展";
+        }
+        if (lowerDesc.contains("model") || lowerDesc.contains("ai") || lowerDesc.contains("agent")) {
+            return "AI 智能体与模型能力增强扩展";
+        }
+
+        if (originalDesc != null && !originalDesc.isEmpty() && !originalDesc.startsWith("来自") && !originalDesc.startsWith("NPM 官方")) {
+            return originalDesc;
+        }
+        return "Pi Agent 生态功能扩展包: " + name;
     }
 
     /**

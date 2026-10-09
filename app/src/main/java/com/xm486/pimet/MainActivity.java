@@ -284,6 +284,8 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isPiWebAlive = false;
     private boolean isDeploying = false;
+    private volatile boolean isPiWebActionInProgress = false;
+    private volatile boolean isOfflineRecovering = false;
 
     private final BroadcastReceiver overlayStateReceiver = new BroadcastReceiver() {
         @Override
@@ -2119,6 +2121,11 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "正在部署中，请稍候...", Toast.LENGTH_SHORT).show();
             return;
         }
+        if (isPiWebActionInProgress) {
+            Toast.makeText(this, "服务正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        isPiWebActionInProgress = true;
         launchProgressBar.setVisibility(View.VISIBLE);
         launchStateTv.setText("正在拉起服务...");
         launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
@@ -2142,6 +2149,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onStarted() {
+                isPiWebActionInProgress = false;
                 launchProgressBar.setVisibility(View.GONE);
                 isPiWebAlive = true;
                 PiMetService.start(MainActivity.this);
@@ -2152,6 +2160,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onError(String error) {
+                isPiWebActionInProgress = false;
                 launchProgressBar.setVisibility(View.GONE);
                 isPiWebAlive = false;
                 updateLaunchStatusUI(false);
@@ -2162,26 +2171,50 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void restartPiWebService() {
+        if (isPiWebActionInProgress) {
+            Toast.makeText(this, "正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        isPiWebActionInProgress = true;
         Toast.makeText(this, "正在安全重启 Pi-Web...", Toast.LENGTH_SHORT).show();
         launchProgressBar.setVisibility(View.VISIBLE);
         launchStateTv.setText("正在终止旧服务并释放端口...");
         launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
 
+        // 切断当前 WebView 内部 Socket/WebSocket 连接，防止客户端长连接锁定端口
+        if (piWebWebView != null) {
+            piWebWebView.stopLoading();
+            piWebWebView.loadUrl("about:blank");
+        }
+
         PiWebManager.stopPiWeb(this, () -> {
             isPiWebAlive = false;
             updateLaunchStatusUI(false);
+            isPiWebActionInProgress = false;
             startPiWebService();
         });
     }
 
     private void stopPiWebService() {
+        if (isPiWebActionInProgress) {
+            Toast.makeText(this, "正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        isPiWebActionInProgress = true;
         launchProgressBar.setVisibility(View.VISIBLE);
         launchStateTv.setText("正在停止服务...");
         launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
 
+        // 切断当前 WebView 内部连接
+        if (piWebWebView != null) {
+            piWebWebView.stopLoading();
+            piWebWebView.loadUrl("about:blank");
+        }
+
         PiWebManager.stopPiWeb(this, () -> {
             isPiWebAlive = false;
             PiMetService.stop(this);
+            isPiWebActionInProgress = false;
             launchProgressBar.setVisibility(View.GONE);
             updateLaunchStatusUI(false);
             Toast.makeText(this, "Pi-Web 服务已成功停止", Toast.LENGTH_SHORT).show();
@@ -2268,6 +2301,45 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
+                    // 深度草稿保护：监听输入框，切换页面或刷新不丢字
+                    view.evaluateJavascript(
+                        "(function() { " +
+                        "  if (window.__pimetDraftHookInstalled) return; " +
+                        "  window.__pimetDraftHookInstalled = true; " +
+                        "  document.addEventListener('input', function(e) { " +
+                        "    var t = e.target; " +
+                        "    if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'text') || t.isContentEditable)) { " +
+                        "      try { " +
+                        "        var val = t.isContentEditable ? t.innerHTML : t.value; " +
+                        "        if (val && val.trim().length > 0) { " +
+                        "          sessionStorage.setItem('__pimet_chat_draft', val); " +
+                        "        } " +
+                        "      } catch(e) {} " +
+                        "    } " +
+                        "  }, true); " +
+                        "  document.addEventListener('keydown', function(e) { " +
+                        "    if (e.key === 'Enter' && !e.shiftKey) { " +
+                        "      setTimeout(function() { sessionStorage.removeItem('__pimet_chat_draft'); }, 200); " +
+                        "    } " +
+                        "  }, true); " +
+                        "  try { " +
+                        "    var draft = sessionStorage.getItem('__pimet_chat_draft'); " +
+                        "    if (draft) { " +
+                        "      var el = document.querySelector('textarea, [contenteditable=\"true\"], input[type=\"text\"]'); " +
+                        "      if (el) { " +
+                        "        var cur = el.isContentEditable ? el.innerHTML : el.value; " +
+                        "        if (!cur || cur.trim().length === 0) { " +
+                        "          if (el.isContentEditable) el.innerHTML = draft; " +
+                        "          else el.value = draft; " +
+                        "          el.dispatchEvent(new Event('input', { bubbles: true })); " +
+                        "        } " +
+                        "      } " +
+                        "    } " +
+                        "  } catch(e) {} " +
+                        "})()",
+                        null
+                    );
+
                     // 深度自愈：检测页面是否由于 Node.js 启动延迟被 Service Worker 错误截获为 offline.html
                     view.evaluateJavascript(
                         "(function() { " +
@@ -2679,7 +2751,8 @@ public class MainActivity extends AppCompatActivity {
                     if (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port)) {
                         piWebWebView.loadUrl(url);
                     } else {
-                        piWebWebView.reload();
+                        // 目标网页已正确加载，切勿调用 reload()，以完整保留用户正在输入的文字与草稿！
+                        restoreChatDraftInWebView();
                     }
                 } else {
                     showPiWebOffline(true);
@@ -2688,20 +2761,55 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    private void restoreChatDraftInWebView() {
+        if (piWebWebView == null) return;
+        piWebWebView.evaluateJavascript(
+            "(function() { " +
+            "  try { " +
+            "    var draft = sessionStorage.getItem('__pimet_chat_draft'); " +
+            "    if (!draft) return; " +
+            "    var el = document.querySelector('textarea, [contenteditable=\"true\"], input[type=\"text\"]'); " +
+            "    if (el) { " +
+            "      var cur = el.isContentEditable ? el.innerHTML : el.value; " +
+            "      if (!cur || cur.trim().length === 0) { " +
+            "        if (el.isContentEditable) el.innerHTML = draft; " +
+            "        else el.value = draft; " +
+            "        el.dispatchEvent(new Event('input', { bubbles: true })); " +
+            "      } " +
+            "    } " +
+            "  } catch(e) {} " +
+            "})()",
+            null
+        );
+    }
+
     private void handlePiWebOfflineDetected() {
+        if (isOfflineRecovering) return;
+        isOfflineRecovering = true;
         int port = PiMetConfig.getWebPort(this);
         // 如果服务实际在运行或刚拉起，静默轮询并在就绪后自动重新加载，摆脱手动点击 Try again
         new Thread(() -> {
-            for (int i = 0; i < 15; i++) {
-                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-                if (ProotManager.isPiWebHttpReady(port)) {
-                    mainHandler.post(() -> {
-                        if (piWebWebView != null) {
-                            piWebWebView.reload();
-                        }
-                    });
-                    break;
+            try {
+                for (int i = 0; i < 15; i++) {
+                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                    if (ProotManager.isPiWebHttpReady(port)) {
+                        mainHandler.post(() -> {
+                            if (piWebWebView != null) {
+                                String url = getPiWebUrl();
+                                String cur = piWebWebView.getUrl();
+                                if (cur == null || !cur.startsWith("http://127.0.0.1:" + port)) {
+                                    piWebWebView.loadUrl(url);
+                                } else {
+                                    piWebWebView.reload();
+                                }
+                                showPiWebOffline(false);
+                            }
+                        });
+                        break;
+                    }
                 }
+            } finally {
+                isOfflineRecovering = false;
             }
         }).start();
     }
@@ -3336,7 +3444,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (btnRefreshPlugins != null) {
             btnRefreshPlugins.setOnClickListener(v -> {
-                Toast.makeText(this, "正在重新扫描容器内部插件...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "正在双向同步并扫描插件与扩展...", Toast.LENGTH_SHORT).show();
                 refreshPluginsList(currentPluginCategory);
             });
         }
@@ -3383,18 +3491,21 @@ public class MainActivity extends AppCompatActivity {
 
         if (btnInstallCustomPlugin != null) {
             btnInstallCustomPlugin.setOnClickListener(v -> {
-                String pkg = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
-                if (pkg.isEmpty()) {
-                    Toast.makeText(this, "请输入需要安装的 npm 包名或插件名称", Toast.LENGTH_SHORT).show();
+                String input = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
+                if (input.isEmpty()) {
+                    Toast.makeText(this, "请输入包名、Git 链接、Skill 网址或安装命令", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                Toast.makeText(this, "正在安装插件: " + pkg + " ...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "正在智能分析输入类型并执行安装...", Toast.LENGTH_SHORT).show();
                 new Thread(() -> {
-                    String reg = PiMetConfig.getNpmRegistry(this);
-                    String cmd = "npm install -g " + pkg + " --registry=" + reg;
-                    ProotManager.executeCommandSync(this, cmd);
+                    PluginManager.SmartInstallResult res = PluginManager.smartInstall(this, input);
                     mainHandler.post(() -> {
-                        Toast.makeText(this, "插件安装完成: " + pkg, Toast.LENGTH_SHORT).show();
+                        if (res.success) {
+                            Toast.makeText(this, "【" + res.detectedType + "】" + res.message, Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                        } else {
+                            Toast.makeText(this, "安装失败: " + res.message, Toast.LENGTH_LONG).show();
+                        }
                         refreshPluginsList(currentPluginCategory);
                     });
                 }).start();
@@ -3539,9 +3650,18 @@ public class MainActivity extends AppCompatActivity {
         card.addView(header);
 
         TextView desc = new TextView(this);
-        desc.setText(item.description + "\n路径: " + item.path);
+        StringBuilder sbDesc = new StringBuilder();
+        if (item.chineseDesc != null && !item.chineseDesc.isEmpty()) {
+            sbDesc.append("📌 ").append(item.chineseDesc).append("\n");
+        }
+        if (item.description != null && !item.description.isEmpty() && !item.description.equals(item.chineseDesc)) {
+            sbDesc.append("ℹ️ ").append(item.description).append("\n");
+        }
+        sbDesc.append("📁 路径: ").append(item.path);
+        desc.setText(sbDesc.toString());
         desc.setTextColor(0xFF8B949E);
         desc.setTextSize(12f);
+        desc.setLineSpacing(dpToPx(2), 1f);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         dLp.topMargin = dpToPx(6);

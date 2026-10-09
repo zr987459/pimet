@@ -219,29 +219,56 @@ public final class PiWebManager {
     public static void stopPiWebSync(Context context) {
         if (daemonProcess != null) {
             try {
-                daemonProcess.destroyForcibly();
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    daemonProcess.destroyForcibly();
+                } else {
+                    daemonProcess.destroy();
+                }
             } catch (Throwable ignored) {}
             daemonProcess = null;
         }
 
         try {
             int port = PiMetConfig.getWebPort(context);
-            // 杀死容器内残留的 pi-web 与 Node 监听实例
+            // 杀死容器内残留的 pi-web 与 Node 监听实例（避免在 PRoot 中调用易卡死的 fuser/lsof）
             List<String> killCmd = Arrays.asList(
                     "/bin/bash", "-c",
-                    "pkill -9 -f pi-web 2>/dev/null; " +
-                    "pkill -9 -f 'node.*pi-web' 2>/dev/null; " +
-                    "fuser -k -9 " + port + "/tcp 2>/dev/null; " +
-                    "kill -9 $(lsof -t -i:" + port + " 2>/dev/null) 2>/dev/null || true"
+                    "pkill -9 -f pi-web 2>/dev/null || true; " +
+                    "pkill -9 -f 'node.*pi-web' 2>/dev/null || true; " +
+                    "killall -9 node 2>/dev/null || true"
             );
             ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", killCmd);
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
             Process p = pb.start();
-            p.waitFor();
+            boolean finished = false;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                try {
+                    finished = p.waitFor(2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (InterruptedException ignored) {}
+            } else {
+                long start = System.currentTimeMillis();
+                while (System.currentTimeMillis() - start < 2000) {
+                    try {
+                        p.exitValue();
+                        finished = true;
+                        break;
+                    } catch (IllegalThreadStateException e) {
+                        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                    }
+                }
+            }
+            if (!finished) {
+                p.destroy();
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    p.destroyForcibly();
+                }
+            }
 
-            // 等待端口彻底释放
-            for (int i = 0; i < 6; i++) {
+            // 等待端口彻底释放（最多 2 秒）
+            for (int i = 0; i < 8; i++) {
                 if (!ProotManager.isPiWebPortAlive(port)) break;
-                Thread.sleep(300);
+                try { Thread.sleep(250); } catch (InterruptedException ignored) {}
             }
         } catch (Throwable ignored) {}
     }

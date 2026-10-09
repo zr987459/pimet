@@ -777,7 +777,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="📦 安装扩展或 NPM 插件包"
+                        android:text="📦 智能安装扩展 / 插件 / 技能"
                         android:textColor="#F0F6FC"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -786,7 +786,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="在 PRoot 容器内运行 npm install -g 安装扩展模块："
+                        android:text="支持 NPM包名、Git仓库、Skill/Raw链接或命令，自动识别类型并同步："
                         android:textColor="#8B949E"
                         android:textSize="12sp" />
 
@@ -797,7 +797,7 @@
                         android:layout_marginTop="8dp"
                         android:background="#0D1117"
                         android:fontFamily="monospace"
-                        android:hint="例如 @modelcontextprotocol/server-fetch"
+                        android:hint="支持 NPM包名、Git链接、Skill/Raw网址或命令 (自动识别)"
                         android:inputType="text"
                         android:paddingStart="10dp"
                         android:paddingEnd="10dp"
@@ -812,7 +812,7 @@
                         android:layout_marginTop="8dp"
                         android:background="@drawable/bg_btn_secondary"
                         android:gravity="center"
-                        android:text="⬇️ 在容器终端中拉取安装"
+                        android:text="⚡ 智能识别类型并拉取安装"
                         android:textColor="#C9D1D9"
                         android:textSize="12sp" />
                 </LinearLayout>
