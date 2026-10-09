@@ -94,8 +94,11 @@ public class StatusCardView extends LinearLayout {
             try {
                 Intent intent = new Intent(context, com.xm486.pimet.MainActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                intent.putExtra("pimet.open_pet_chat", true);
+                intent.putExtra("pimet.toggle_web_fullscreen", true);
                 context.startActivity(intent);
+                if (context instanceof com.xm486.pimet.pet.PetOverlayService) {
+                    ((com.xm486.pimet.pet.PetOverlayService) context).toggleCard();
+                }
             } catch (Throwable ignored) {}
         });
         header.addView(fullScreenBtn, new LayoutParams(LayoutParams.WRAP_CONTENT,

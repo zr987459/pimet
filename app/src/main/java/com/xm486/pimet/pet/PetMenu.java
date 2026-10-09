@@ -328,19 +328,19 @@ public class PetMenu {
             actionRow.addView(chatBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actionRow.addView(createSpacingView(3));
 
-            // 3. 💻 终端
-            Button termBtn = buildMiniBtn("💻 终端", 0x223B82F6, 0x443B82F6, 0xFF93C5FD, v -> {
+            // 3. 🌐 工作台
+            Button webBtn = buildMiniBtn("🌐 工作台", 0x223B82F6, 0x443B82F6, 0xFF93C5FD, v -> {
                 dismiss();
                 if (activity != null) {
-                    activity.openTerminalInWorkbench();
+                    activity.switchTab(1);
                 } else {
                     Intent intent = new Intent(context, MainActivity.class);
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                    intent.putExtra("pimet.open_terminal", true);
+                    intent.putExtra("pimet.open_web", true);
                     context.startActivity(intent);
                 }
             });
-            actionRow.addView(termBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            actionRow.addView(webBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actionRow.addView(createSpacingView(3));
 
             // 4. ⚙️ 设置
