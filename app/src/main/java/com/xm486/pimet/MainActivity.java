@@ -1,6 +1,7 @@
 package com.xm486.pimet;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -11,6 +12,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -25,8 +27,11 @@ import android.text.TextWatcher;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -146,7 +151,14 @@ public class MainActivity extends AppCompatActivity {
     private SeekBar sbPetSize;
     private TextView tvBubbleWidthLabel;
     private SeekBar sbBubbleWidth;
+    private LinearLayout physicsContainer;
     private static final android.util.LruCache<String, Bitmap> PET_THUMB_CACHE = new android.util.LruCache<>(24);
+
+    // 原生桌宠物理手感引擎与 HUD 浮动控制弹窗
+    private AlertDialog petHudDialog;
+    private VelocityTracker inAppVelocityTracker;
+    private ValueAnimator inAppFlingAnimator;
+    private long inAppLastFlingFrame;
 
     private PiWebMonitor piWebMonitor;
     private OperitState.Snapshot lastPetSnapshot = new OperitState.Snapshot();
@@ -946,81 +958,416 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showPetMenuDialog() {
-        String curPet = PetRegistry.getPetDir(this);
-        LinearLayout menuLayout = new LinearLayout(this);
-        menuLayout.setOrientation(LinearLayout.VERTICAL);
-        menuLayout.setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(10));
+        showPetHudMenu();
+    }
 
-        // 宠物大小滑块
-        int curSize = PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
-        TextView tvSize = new TextView(this);
-        tvSize.setText("📏 宠物显示大小: " + curSize + " dp");
-        tvSize.setTextColor(0xFFC9D1D9);
-        tvSize.setTextSize(12f);
-        menuLayout.addView(tvSize);
+    private void showPetHudMenu() {
+        if (petHudDialog != null && petHudDialog.isShowing()) {
+            petHudDialog.dismiss();
+        }
 
-        SeekBar sbSize = new SeekBar(this);
-        sbSize.setMax(120 - 32);
-        sbSize.setProgress(curSize - 32);
-        sbSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int val = 32 + progress;
-                tvSize.setText("📏 宠物显示大小: " + val + " dp");
-                PetRegistry.setIntPref(MainActivity.this, PetRegistry.KEY_PET_SIZE, val);
-                applyPetParams();
+        try {
+            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+            LinearLayout root = new LinearLayout(this);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+
+            // ---- 顶栏：标题 + ✕ 关闭 ----
+            LinearLayout topBar = new LinearLayout(this);
+            topBar.setOrientation(LinearLayout.HORIZONTAL);
+            topBar.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView title = new TextView(this);
+            title.setText("🐾 桌宠控制中心");
+            title.setTextColor(0xFFF0F6FC);
+            title.setTextSize(12.5f);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            topBar.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView closeBtn = new TextView(this);
+            closeBtn.setText("✕");
+            closeBtn.setTextColor(0xFF8B949E);
+            closeBtn.setTextSize(13f);
+            closeBtn.setPadding(dpToPx(6), dpToPx(2), dpToPx(4), dpToPx(2));
+            closeBtn.setOnClickListener(v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+            });
+            topBar.addView(closeBtn);
+            root.addView(topBar);
+
+            // 分割线
+            View div1 = new View(this);
+            div1.setBackgroundColor(0x2230363D);
+            LinearLayout.LayoutParams divLp1 = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
+            divLp1.topMargin = dpToPx(6);
+            divLp1.bottomMargin = dpToPx(6);
+            root.addView(div1, divLp1);
+
+            // ---- 监控目标标签行 (Operit / pi-web / ClawBench / RikkaHub) ----
+            LinearLayout targetGrid = new LinearLayout(this);
+            targetGrid.setOrientation(LinearLayout.VERTICAL);
+
+            int currentPort = PiMetConfig.getWebPort(this);
+            boolean isRunning = PiMetService.isRunning(this);
+
+            LinearLayout targetRow1 = new LinearLayout(this);
+            targetRow1.setOrientation(LinearLayout.HORIZONTAL);
+            TextView chipPiWeb = createHudChip(isRunning ? "● pi-web:" + currentPort : "○ pi-web (未启)", isRunning ? 0x2210B981 : 0x226E7681, isRunning ? 0xFF3FB950 : 0xFF8B949E, v -> {
+                showPetBubble("当前已直连本地 Web 终端与工作台 🚀");
+            });
+            TextView chipOperit = createHudChip("● Operit (伴侣)", 0x223B82F6, 0xFF58A6FF, v -> {
+                showPetBubble("Operit 桌宠运行中，随时互动 ฅ'ω'ฅ");
+            });
+            targetRow1.addView(chipPiWeb, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            targetRow1.addView(createSpacingView(4));
+            targetRow1.addView(chipOperit, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            targetGrid.addView(targetRow1);
+
+            LinearLayout targetRow2 = new LinearLayout(this);
+            targetRow2.setOrientation(LinearLayout.HORIZONTAL);
+            targetRow2.setPadding(0, dpToPx(4), 0, 0);
+            TextView chipClaw = createHudChip("○ ClawBench", 0x118B949E, 0xFF8B949E, v -> {
+                showPetBubble("ClawBench 评测模块待命中 ✨");
+            });
+            TextView chipRikka = createHudChip("○ RikkaHub", 0x118B949E, 0xFF8B949E, v -> {
+                showPetBubble("RikkaHub 分发模块连接正常 📡");
+            });
+            targetRow2.addView(chipClaw, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            targetRow2.addView(createSpacingView(4));
+            targetRow2.addView(chipRikka, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            targetGrid.addView(targetRow2);
+
+            root.addView(targetGrid);
+
+            // 分割线
+            View div2 = new View(this);
+            div2.setBackgroundColor(0x2230363D);
+            LinearLayout.LayoutParams divLp2 = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
+            divLp2.topMargin = dpToPx(8);
+            divLp2.bottomMargin = dpToPx(6);
+            root.addView(div2, divLp2);
+
+            // ---- 角色形象切换器 ◀ 名字 ▶ ----
+            LinearLayout petSwitchRow = new LinearLayout(this);
+            petSwitchRow.setOrientation(LinearLayout.HORIZONTAL);
+            petSwitchRow.setGravity(Gravity.CENTER_VERTICAL);
+
+            List<PetRegistry.PetInfo> allPets = PetRegistry.listPets(this);
+            String curPetDir = PetRegistry.getPetDir(this);
+            final int[] petIdx = new int[]{0};
+            for (int i = 0; i < allPets.size(); i++) {
+                if (allPets.get(i).dir.equals(curPetDir)) {
+                    petIdx[0] = i;
+                    break;
+                }
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-        menuLayout.addView(sbSize);
 
-        String[] menuItems = new String[]{
-                "🔄 切换角色形象 (当前: " + curPet + ")",
-                "💬 打开桌宠对话卡片",
-                "💻 打开 PRoot Linux 终端抽屉",
-                "💃 来段才艺互动 (跳舞/挥手/翻跟斗)",
-                "🎛️ 更多物理参数调节",
-                "🏪 宠物社区商店与素材",
-                "🌐 系统全局悬浮窗 (" + (PetOverlayService.isRunning() ? "🟢 运行中·点击关闭" : "⚪ 未开启·点击开启") + ")"
-        };
+            TextView btnPrev = createHudChip("◀", 0x223B82F6, 0xFF58A6FF, null);
+            TextView tvPetName = new TextView(this);
+            tvPetName.setGravity(Gravity.CENTER);
+            tvPetName.setTextColor(0xFFF0F6FC);
+            tvPetName.setTextSize(11.5f);
+            tvPetName.setTypeface(Typeface.DEFAULT_BOLD);
+            tvPetName.setText((petIdx[0] + 1) + "/" + allPets.size() + " " + (allPets.isEmpty() ? curPetDir : allPets.get(petIdx[0]).displayName));
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("🐾 桌宠伴侣控制台")
-                .setView(menuLayout)
-                .setItems(menuItems, (d, which) -> {
-                    switch (which) {
-                        case 0:
-                            showPetSwitchDialog();
-                            break;
-                        case 1:
-                            togglePetChatCard(true);
-                            break;
-                        case 2:
-                            openTerminalInWorkbench();
-                            break;
-                        case 3:
-                            if (floatingPetView != null) {
-                                String[] acts = {"dancing", "waving", "jumping"};
-                                String act = acts[new java.util.Random().nextInt(acts.length)];
-                                floatingPetView.playOneShot(act);
-                                showPetBubble("主人的专属互动动作搞定啦！✨");
-                            }
-                            break;
-                        case 4:
-                            showPetParamsDialog();
-                            break;
-                        case 5:
-                            startActivity(new Intent(this, PetShopActivity.class));
-                            break;
-                        case 6:
-                            toggleGlobalOverlay();
-                            break;
+            TextView btnNext = createHudChip("▶", 0x223B82F6, 0xFF58A6FF, null);
+
+            Runnable updatePetDisplay = () -> {
+                if (allPets.isEmpty()) return;
+                PetRegistry.PetInfo p = allPets.get(petIdx[0]);
+                tvPetName.setText((petIdx[0] + 1) + "/" + allPets.size() + " " + p.displayName);
+                PetRegistry.setPetDir(this, p.dir);
+                if (floatingPetView != null) {
+                    floatingPetView.setPet(p.dir);
+                    floatingPetView.playOneShot("waving");
+                }
+                if (previewPetView != null) {
+                    previewPetView.setPet(p.dir);
+                }
+                buildPetList();
+                showPetBubble("已切换为角色: " + p.displayName + " ✨");
+            };
+
+            btnPrev.setOnClickListener(v -> {
+                if (allPets.isEmpty()) return;
+                petIdx[0] = (petIdx[0] - 1 + allPets.size()) % allPets.size();
+                updatePetDisplay.run();
+            });
+
+            btnNext.setOnClickListener(v -> {
+                if (allPets.isEmpty()) return;
+                petIdx[0] = (petIdx[0] + 1) % allPets.size();
+                updatePetDisplay.run();
+            });
+
+            tvPetName.setOnClickListener(v -> showPetSwitchDialog());
+
+            petSwitchRow.addView(btnPrev, new LinearLayout.LayoutParams(dpToPx(32), dpToPx(28)));
+            petSwitchRow.addView(tvPetName, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            petSwitchRow.addView(btnNext, new LinearLayout.LayoutParams(dpToPx(32), dpToPx(28)));
+            root.addView(petSwitchRow);
+
+            // ---- 才艺互动芯片 (跳舞 / 挥手 / 翻跟斗) ----
+            LinearLayout actionChipsRow = new LinearLayout(this);
+            actionChipsRow.setOrientation(LinearLayout.HORIZONTAL);
+            actionChipsRow.setPadding(0, dpToPx(6), 0, 0);
+
+            TextView btnDance = createHudChip("💃 跳舞", 0x228B5CF6, 0xFFC4B5FD, v -> {
+                if (floatingPetView != null) {
+                    floatingPetView.playOneShot("dancing");
+                    showPetBubble("为主人们献上一支欢快的舞蹈~ 💃✨");
+                }
+            });
+            TextView btnWave = createHudChip("👋 挥手", 0x223B82F6, 0xFF93C5FD, v -> {
+                if (floatingPetView != null) {
+                    floatingPetView.playOneShot("waving");
+                    showPetBubble("主人辛苦啦！热情的招呼奉上~ ฅ'ω'ฅ");
+                }
+            });
+            TextView btnJump = createHudChip("✨ 翻跟斗", 0x22F59E0B, 0xFFFDE68A, v -> {
+                if (floatingPetView != null) {
+                    floatingPetView.playOneShot("jumping");
+                    showPetBubble("看我帅气的后空翻！咻咻咻~ 🌟");
+                }
+            });
+
+            actionChipsRow.addView(btnDance, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            actionChipsRow.addView(createSpacingView(4));
+            actionChipsRow.addView(btnWave, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            actionChipsRow.addView(createSpacingView(4));
+            actionChipsRow.addView(btnJump, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            root.addView(actionChipsRow);
+
+            // 分割线
+            View div3 = new View(this);
+            div3.setBackgroundColor(0x2230363D);
+            LinearLayout.LayoutParams divLp3 = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
+            divLp3.topMargin = dpToPx(8);
+            divLp3.bottomMargin = dpToPx(6);
+            root.addView(div3, divLp3);
+
+            // ---- 快捷工具栏按钮 ----
+            LinearLayout toolsRow1 = new LinearLayout(this);
+            toolsRow1.setOrientation(LinearLayout.HORIZONTAL);
+
+            TextView btnParams = createHudChip("🎛️ 物理手感", 0x223B82F6, 0xFF58A6FF, v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+                showPetParamsDialog();
+            });
+
+            TextView btnChat = createHudChip("💬 聊天卡片", 0x2210B981, 0xFF3FB950, v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+                togglePetChatCard(true);
+            });
+
+            TextView btnTerm = createHudChip("💻 终端抽屉", 0x228B5CF6, 0xFFBC8CFF, v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+                openTerminalInWorkbench();
+            });
+
+            toolsRow1.addView(btnParams, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            toolsRow1.addView(createSpacingView(4));
+            toolsRow1.addView(btnChat, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            toolsRow1.addView(createSpacingView(4));
+            toolsRow1.addView(btnTerm, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            root.addView(toolsRow1);
+
+            LinearLayout toolsRow2 = new LinearLayout(this);
+            toolsRow2.setOrientation(LinearLayout.HORIZONTAL);
+            toolsRow2.setPadding(0, dpToPx(4), 0, 0);
+
+            TextView btnSettings = createHudChip("⚙️ 设置中心", 0x226E7681, 0xFFC9D1D9, v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+                switchTab(3);
+            });
+
+            boolean isOverlayRunning = PetOverlayService.isRunning();
+            TextView btnOverlay = createHudChip(isOverlayRunning ? "🌐 全局桌宠·开" : "🌐 全局桌宠·关", isOverlayRunning ? 0x2210B981 : 0x226E7681, isOverlayRunning ? 0xFF3FB950 : 0xFF8B949E, v -> {
+                toggleGlobalOverlay();
+                boolean nowRunning = PetOverlayService.isRunning();
+                ((TextView) v).setText(nowRunning ? "🌐 全局桌宠·开" : "🌐 全局桌宠·关");
+            });
+
+            toolsRow2.addView(btnSettings, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            toolsRow2.addView(createSpacingView(4));
+            toolsRow2.addView(btnOverlay, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            root.addView(toolsRow2);
+
+            builder.setView(root);
+            petHudDialog = builder.create();
+
+            Window window = petHudDialog.getWindow();
+            if (window != null) {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(0xF4181A22);
+                bg.setCornerRadius(dpToPx(13));
+                bg.setStroke(dpToPx(1), 0x33475569);
+                window.setBackgroundDrawable(bg);
+            }
+
+            petHudDialog.show();
+
+            // 定位：吸附在桌宠旁
+            if (window != null && floatingMenuContainer != null) {
+                WindowManager.LayoutParams attrs = window.getAttributes();
+                if (attrs != null) {
+                    attrs.gravity = Gravity.TOP | Gravity.START;
+                    int winW = dpToPx(230);
+                    attrs.width = winW;
+                    attrs.height = WindowManager.LayoutParams.WRAP_CONTENT;
+
+                    int[] loc = new int[2];
+                    floatingMenuContainer.getLocationOnScreen(loc);
+                    int screenW = getResources().getDisplayMetrics().widthPixels;
+                    int petW = floatingMenuContainer.getWidth();
+                    if (petW <= 0) petW = dpToPx(72);
+
+                    if (loc[0] + petW / 2 > screenW / 2) {
+                        attrs.x = Math.max(dpToPx(8), loc[0] - winW - dpToPx(6));
+                    } else {
+                        attrs.x = Math.min(screenW - winW - dpToPx(8), loc[0] + petW + dpToPx(6));
                     }
-                })
-                .setNegativeButton("关闭", null)
-                .create();
-        dialog.show();
+                    attrs.y = Math.max(dpToPx(36), loc[1]);
+                    window.setAttributes(attrs);
+                }
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("PiMet.PetHud", "show hud menu failed", t);
+        }
+    }
+
+    private TextView createHudChip(String text, int bgColor, int textColor, View.OnClickListener clk) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(textColor);
+        tv.setTextSize(11f);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+
+        GradientDrawable n = new GradientDrawable();
+        n.setColor(bgColor);
+        n.setCornerRadius(dpToPx(6));
+        n.setStroke(dpToPx(1), 0x22FFFFFF);
+        tv.setBackground(n);
+
+        if (clk != null) {
+            tv.setOnClickListener(clk);
+        }
+        return tv;
+    }
+
+    private View createSpacingView(int dpVal) {
+        View v = new View(this);
+        v.setLayoutParams(new LinearLayout.LayoutParams(dpToPx(dpVal), 1));
+        return v;
+    }
+
+    // ---------------- 桌宠原生物理手感引擎 (惯性飞行/边界弹性反弹/空气摩擦) ----------------
+
+    private void stopInAppFling() {
+        if (inAppFlingAnimator != null) {
+            inAppFlingAnimator.cancel();
+            inAppFlingAnimator = null;
+        }
+    }
+
+    private void startInAppFling(float vx0, float vy0) {
+        stopInAppFling();
+        int bouncePct = PetRegistry.getIntPref(this, PetRegistry.KEY_BOUNCE, PetRegistry.DEFAULT_BOUNCE);
+        int frictionPct = PetRegistry.getIntPref(this, PetRegistry.KEY_FRICTION, PetRegistry.DEFAULT_FRICTION);
+        int stopSpeed = PetRegistry.getIntPref(this, PetRegistry.KEY_STOP_SPEED, PetRegistry.DEFAULT_STOP_SPEED);
+        int duration = PetRegistry.getIntPref(this, PetRegistry.KEY_FLING_DURATION, PetRegistry.DEFAULT_FLING_DURATION);
+
+        float bounce = Math.max(0f, Math.min(1f, bouncePct / 100f));
+        float frictionPerSec = Math.max(0f, Math.min(1f, frictionPct / 100f));
+
+        final float[] v = new float[]{vx0, vy0};
+        inAppLastFlingFrame = System.currentTimeMillis();
+
+        inAppFlingAnimator = ValueAnimator.ofFloat(0f, 1f);
+        inAppFlingAnimator.setDuration(Math.max(500, duration));
+        inAppFlingAnimator.setInterpolator(null);
+        inAppFlingAnimator.addUpdateListener(anim -> {
+            long now = System.currentTimeMillis();
+            float dt = (now - inAppLastFlingFrame) / 1000f;
+            inAppLastFlingFrame = now;
+            if (dt > 0.1f) dt = 0.1f;
+            if (dt <= 0f) return;
+
+            if (floatingMenuContainer == null) {
+                stopInAppFling();
+                return;
+            }
+            View parent = (View) floatingMenuContainer.getParent();
+            if (parent == null) {
+                stopInAppFling();
+                return;
+            }
+
+            // 根据飞行速度调整面向和动作
+            if (floatingPetView != null) {
+                if (v[0] > 15) {
+                    floatingPetView.setMoveDirection(1);
+                } else if (v[0] < -15) {
+                    floatingPetView.setMoveDirection(-1);
+                }
+            }
+
+            float currentX = floatingMenuContainer.getLeft() + floatingMenuContainer.getTranslationX();
+            float currentY = floatingMenuContainer.getTop() + floatingMenuContainer.getTranslationY();
+
+            float px = currentX + v[0] * dt;
+            float py = currentY + v[1] * dt;
+
+            float density = getResources().getDisplayMetrics().density;
+            float minMarginTop = 32 * density;
+            float minMarginBottom = 16 * density;
+            float minMarginSide = 8 * density;
+
+            float minX = minMarginSide;
+            float maxX = Math.max(minX, parent.getWidth() - floatingMenuContainer.getWidth() - minMarginSide);
+            float minY = minMarginTop;
+            float maxY = Math.max(minY, parent.getHeight() - floatingMenuContainer.getHeight() - minMarginBottom);
+
+            // 碰到边界物理弹性反弹
+            if (px < minX) {
+                px = minX;
+                v[0] = -v[0] * bounce;
+            } else if (px > maxX) {
+                px = maxX;
+                v[0] = -v[0] * bounce;
+            }
+
+            if (py < minY) {
+                py = minY;
+                v[1] = -v[1] * bounce;
+            } else if (py > maxY) {
+                py = maxY;
+                v[1] = -v[1] * bounce;
+            }
+
+            floatingMenuContainer.setTranslationX(px - floatingMenuContainer.getLeft());
+            floatingMenuContainer.setTranslationY(py - floatingMenuContainer.getTop());
+
+            // 空气摩擦衰减
+            float friction = 1f - frictionPerSec * dt;
+            v[0] *= friction;
+            v[1] *= friction;
+
+            // 停稳判定
+            if (Math.hypot(v[0], v[1]) < stopSpeed) {
+                stopInAppFling();
+                if (floatingPetView != null) {
+                    floatingPetView.setMoveDirection(0);
+                }
+            }
+        });
+        inAppFlingAnimator.start();
     }
 
     private void showPetParamsDialog() {
@@ -1582,19 +1929,29 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
 
-        // 桌面宠物自由拖拽交互、奔跑手势与互动动作
+        // 桌面宠物自由拖拽交互、奔跑手势、惯性甩动与弹射物理反弹
         if (floatingPetView != null) {
             floatingPetView.setOnTouchListener((v, event) -> {
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
+                        stopInAppFling();
                         floatDownRawX = event.getRawX();
                         floatDownRawY = event.getRawY();
                         floatInitialX = floatingMenuContainer.getTranslationX();
                         floatInitialY = floatingMenuContainer.getTranslationY();
                         isFloatDragging = false;
+                        if (inAppVelocityTracker == null) {
+                            inAppVelocityTracker = VelocityTracker.obtain();
+                        } else {
+                            inAppVelocityTracker.clear();
+                        }
+                        inAppVelocityTracker.addMovement(event);
                         return true;
 
                     case MotionEvent.ACTION_MOVE:
+                        if (inAppVelocityTracker != null) {
+                            inAppVelocityTracker.addMovement(event);
+                        }
                         float dx = event.getRawX() - floatDownRawX;
                         float dy = event.getRawY() - floatDownRawY;
                         if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
@@ -1635,10 +1992,30 @@ public class MainActivity extends AppCompatActivity {
 
                     case MotionEvent.ACTION_UP:
                         floatingPetView.setMoveDirection(0); // 停止跑步恢复呼吸
-                        if (!isFloatDragging) {
+                        if (isFloatDragging) {
+                            if (inAppVelocityTracker != null) {
+                                inAppVelocityTracker.addMovement(event);
+                                inAppVelocityTracker.computeCurrentVelocity(1000);
+                                float vx = inAppVelocityTracker.getXVelocity();
+                                float vy = inAppVelocityTracker.getYVelocity();
+                                inAppVelocityTracker.recycle();
+                                inAppVelocityTracker = null;
+                                int threshold = PetRegistry.getIntPref(
+                                        MainActivity.this,
+                                        PetRegistry.KEY_FLING_THRESHOLD,
+                                        PetRegistry.DEFAULT_FLING_THRESHOLD);
+                                if (Math.hypot(vx, vy) >= threshold) {
+                                    startInAppFling(vx, vy);
+                                }
+                            }
+                        } else {
+                            if (inAppVelocityTracker != null) {
+                                inAppVelocityTracker.recycle();
+                                inAppVelocityTracker = null;
+                            }
                             long pressDuration = event.getEventTime() - event.getDownTime();
                             if (pressDuration >= 400) {
-                                showPetMenuDialog();
+                                showPetHudMenu();
                             } else {
                                 if (petInteractionCount++ % 2 == 0) {
                                     floatingPetView.playOneShot("waving");
@@ -2878,6 +3255,9 @@ public class MainActivity extends AppCompatActivity {
             btnToggleGlobalOverlay.setOnClickListener(v -> toggleGlobalOverlay());
         }
 
+        physicsContainer = findViewById(R.id.physicsContainer);
+        buildPhysicsSettings();
+
         updatePetPreview();
         buildPetList();
 
@@ -3596,6 +3976,7 @@ public class MainActivity extends AppCompatActivity {
         updatePetDisplay(PetRegistry.isPetEnabled(this));
         updatePetPreview();
         buildPetList();
+        buildPhysicsSettings();
         if (btnToggleGlobalOverlay != null) {
             btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
                     ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
@@ -3606,6 +3987,15 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopInAppFling();
+        if (inAppVelocityTracker != null) {
+            try { inAppVelocityTracker.recycle(); } catch (Throwable ignored) {}
+            inAppVelocityTracker = null;
+        }
+        if (petHudDialog != null) {
+            try { petHudDialog.dismiss(); } catch (Throwable ignored) {}
+            petHudDialog = null;
+        }
         if (previewPetView != null) {
             previewPetView.stopTicker();
         }
@@ -3621,5 +4011,84 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         terminalTabs.clear();
+    }
+
+    // ---------------- 拖动物理手感参数设置 (8 项原生交互滑块) ----------------
+    private static final Object[][] PHYSICS_ITEMS = {
+            {"宠物大小", PetRegistry.KEY_PET_SIZE, 32, 120, PetRegistry.DEFAULT_PET_SIZE, "dp"},
+            {"甩动灵敏度", PetRegistry.KEY_FLING_THRESHOLD, 100, 2000, PetRegistry.DEFAULT_FLING_THRESHOLD, "px/s"},
+            {"反弹保留", PetRegistry.KEY_BOUNCE, 0, 100, PetRegistry.DEFAULT_BOUNCE, "%"},
+            {"空气摩擦", PetRegistry.KEY_FRICTION, 0, 100, PetRegistry.DEFAULT_FRICTION, "%"},
+            {"停稳阈值", PetRegistry.KEY_STOP_SPEED, 10, 200, PetRegistry.DEFAULT_STOP_SPEED, "px/s"},
+            {"聊天框宽度", PetRegistry.KEY_CARD_WIDTH, 140, 360, PetRegistry.DEFAULT_CARD_WIDTH, "dp"},
+            {"设置框宽度", PetRegistry.KEY_MENU_WIDTH, 140, 320, PetRegistry.DEFAULT_MENU_WIDTH, "dp"},
+            {"窗口紧凑度", PetRegistry.KEY_CARD_SCALE, 40, 120, PetRegistry.DEFAULT_CARD_SCALE, "%"},
+    };
+
+    private void buildPhysicsSettings() {
+        if (physicsContainer == null) return;
+        physicsContainer.removeAllViews();
+
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+
+        for (Object[] item : PHYSICS_ITEMS) {
+            final String name = (String) item[0];
+            final String key = (String) item[1];
+            final int min = (Integer) item[2];
+            final int max = (Integer) item[3];
+            final int def = (Integer) item[4];
+            final String unit = (String) item[5];
+            int cur = PetRegistry.getIntPref(this, key, def);
+            cur = Math.max(min, Math.min(max, cur));
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dpToPx(3), 0, dpToPx(3));
+
+            final TextView label = new TextView(this);
+            label.setText(name);
+            label.setTextSize(11.5f);
+            label.setTextColor(0xFF8B949E);
+            label.setMaxLines(1);
+            row.addView(label, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f));
+
+            final TextView valueText = new TextView(this);
+            valueText.setText(cur + " " + unit);
+            valueText.setTextSize(11.5f);
+            valueText.setTypeface(Typeface.MONOSPACE);
+            valueText.setTextColor(0xFF58A6FF);
+            valueText.setGravity(Gravity.END);
+            row.addView(valueText, new LinearLayout.LayoutParams(
+                    dpToPx(62), LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            SeekBar sb = new SeekBar(this);
+            sb.setMax(max - min);
+            sb.setProgress(cur - min);
+            sb.setContentDescription(name);
+            sb.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
+            sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    int val = min + progress;
+                    PetRegistry.setIntPref(MainActivity.this, key, val);
+                    valueText.setText(val + " " + unit);
+                    if (fromUser) {
+                        applyPetParams();
+                    }
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+            row.addView(sb, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f));
+
+            column.addView(row, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        physicsContainer.addView(column);
     }
 }

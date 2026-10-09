@@ -94,29 +94,67 @@ public class PetParamsDialog {
             int curMenuWidth = PetRegistry.getIntPref(context, "pref_menu_width",
                     PetRegistry.DEFAULT_MENU_WIDTH);
 
+            int curBounce = PetRegistry.getIntPref(context, PetRegistry.KEY_BOUNCE,
+                    PetRegistry.DEFAULT_BOUNCE);
+            int curFriction = PetRegistry.getIntPref(context, PetRegistry.KEY_FRICTION,
+                    PetRegistry.DEFAULT_FRICTION);
+            int curFlingThresh = PetRegistry.getIntPref(context, PetRegistry.KEY_FLING_THRESHOLD,
+                    PetRegistry.DEFAULT_FLING_THRESHOLD);
+            int curStopSpeed = PetRegistry.getIntPref(context, PetRegistry.KEY_STOP_SPEED,
+                    PetRegistry.DEFAULT_STOP_SPEED);
+
             // 1. 桌宠大小: 32 ~ 140 dp (min 32)
             root.addView(createCompactSlider("桌宠大小", curPetSize, "dp", 32, 140, 32, (val) -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, val);
+                if (onChangeCallback != null) onChangeCallback.run();
             }));
 
             // 2. 气泡宽度: 120 ~ 280 dp (min 120)
             root.addView(createCompactSlider("气泡宽", curBubbleWidth, "dp", 120, 280, 120, (val) -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH, val);
+                if (onChangeCallback != null) onChangeCallback.run();
             }));
 
-            // 3. 卡片宽度: 140 ~ 300 dp (min 140)
+            // 3. 反弹保留: 0 ~ 100 % (min 0)
+            root.addView(createCompactSlider("反弹保留", curBounce, "%", 0, 100, 0, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_BOUNCE, val);
+                if (onChangeCallback != null) onChangeCallback.run();
+            }));
+
+            // 4. 空气摩擦: 0 ~ 100 % (min 0)
+            root.addView(createCompactSlider("空气摩擦", curFriction, "%", 0, 100, 0, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_FRICTION, val);
+                if (onChangeCallback != null) onChangeCallback.run();
+            }));
+
+            // 5. 甩动灵敏度: 100 ~ 2000 px/s (min 100)
+            root.addView(createCompactSlider("甩动阈值", curFlingThresh, "px/s", 100, 2000, 100, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_FLING_THRESHOLD, val);
+                if (onChangeCallback != null) onChangeCallback.run();
+            }));
+
+            // 6. 停稳阈值: 10 ~ 200 px/s (min 10)
+            root.addView(createCompactSlider("停稳阈值", curStopSpeed, "px/s", 10, 200, 10, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_STOP_SPEED, val);
+                if (onChangeCallback != null) onChangeCallback.run();
+            }));
+
+            // 7. 卡片宽度: 140 ~ 300 dp (min 140)
             root.addView(createCompactSlider("卡片宽", curCardWidth, "dp", 140, 300, 140, (val) -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_CARD_WIDTH, val);
+                if (onChangeCallback != null) onChangeCallback.run();
             }));
 
-            // 4. 缩放紧凑度: 40 ~ 120 % (min 40)
+            // 8. 缩放紧凑度: 40 ~ 120 % (min 40)
             root.addView(createCompactSlider("缩放比例", curCardScale, "%", 40, 120, 40, (val) -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_CARD_SCALE, val);
+                if (onChangeCallback != null) onChangeCallback.run();
             }));
 
-            // 5. 菜单宽度: 120 ~ 260 dp (min 120)
+            // 9. 菜单宽度: 120 ~ 260 dp (min 120)
             root.addView(createCompactSlider("菜单面板宽", curMenuWidth, "dp", 120, 260, 120, (val) -> {
                 PetRegistry.setIntPref(context, "pref_menu_width", val);
+                if (onChangeCallback != null) onChangeCallback.run();
             }));
 
             // ---- 底部返回主菜单按钮 ----
@@ -219,7 +257,7 @@ public class PetParamsDialog {
     }
 
     private Button buildMiniBtn(String text, int bgNormal, int bgPressed, int textColor, View.OnClickListener clk) {
-        Button btn = new Button(service);
+        Button btn = new Button(context);
         btn.setText(text);
         btn.setTextSize(10f);
         btn.setTextColor(textColor);
