@@ -1044,9 +1044,35 @@
                                 android:orientation="horizontal">
 
                                 <TextView
+                                    android:id="@+id/btnPetChipPiWeb"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="24dp"
+                                    android:background="@drawable/bg_btn_secondary"
+                                    android:gravity="center"
+                                    android:paddingStart="8dp"
+                                    android:paddingEnd="8dp"
+                                    android:text="🚀 直达工作台"
+                                    android:textColor="#38BDF8"
+                                    android:textSize="10.5sp" />
+
+                                <TextView
+                                    android:id="@+id/btnPetChipCustomPorts"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="24dp"
+                                    android:layout_marginStart="4dp"
+                                    android:background="@drawable/bg_btn_secondary"
+                                    android:gravity="center"
+                                    android:paddingStart="8dp"
+                                    android:paddingEnd="8dp"
+                                    android:text="🌐 自定义端口"
+                                    android:textColor="#F59E0B"
+                                    android:textSize="10.5sp" />
+
+                                <TextView
                                     android:id="@+id/btnPetChipDance"
                                     android:layout_width="wrap_content"
                                     android:layout_height="24dp"
+                                    android:layout_marginStart="4dp"
                                     android:background="@drawable/bg_btn_secondary"
                                     android:gravity="center"
                                     android:paddingStart="8dp"
@@ -1740,7 +1766,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 端口设置卡片 -->
+                <!-- 多服务自定义端口设置卡片 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -1751,7 +1777,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="🌐 网络与端口设置"
+                        android:text="🌐 本地多服务自定义端口配置"
                         android:textColor="#F0F6FC"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1760,21 +1786,29 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="设置 Pi-Web 服务监听端口 (默认 30141)"
+                        android:text="支持灵活自定义 Pi-Web、Operit、ClawBench 及 RikkaHub 端口与凭据"
                         android:textColor="#8B949E"
                         android:textSize="12sp" />
 
+                    <!-- 1. Pi-Web 端口 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="12dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="Pi-Web 端口"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
 
                         <EditText
                             android:id="@+id/settingsPortInput"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="36dp"
                             android:layout_weight="1"
                             android:background="#0D1117"
                             android:fontFamily="monospace"
@@ -1783,20 +1817,275 @@
                             android:paddingStart="10dp"
                             android:paddingEnd="10dp"
                             android:text="30141"
-                            android:textColor="#F0F6FC"
+                            android:textColor="#58A6FF"
                             android:textColorHint="#484F58"
                             android:textSize="13sp" />
 
                         <TextView
-                            android:id="@+id/btnSavePort"
+                            android:id="@+id/btnTestPiWebPort"
                             android:layout_width="wrap_content"
-                            android:layout_height="38dp"
+                            android:layout_height="36dp"
                             android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="测试"
+                            android:textColor="#C9D1D9"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tvPiWebPortStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
+                    <!-- 2. Operit 伴侣服务端口与 Token -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="Operit 端口"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/settingsOperitPortInput"
+                            android:layout_width="0dp"
+                            android:layout_height="36dp"
+                            android:layout_weight="1"
+                            android:background="#0D1117"
+                            android:fontFamily="monospace"
+                            android:hint="8094"
+                            android:inputType="number"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:text="8094"
+                            android:textColor="#58A6FF"
+                            android:textColorHint="#484F58"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnTestOperitPort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="测试"
+                            android:textColor="#C9D1D9"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tvOperitPortStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="Operit Token"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/settingsOperitTokenInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:background="#0D1117"
+                            android:fontFamily="monospace"
+                            android:hint="Operit API Token"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:textColor="#C9D1D9"
+                            android:textColorHint="#484F58"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+
+                    <!-- 3. ClawBench 评测服务端口与凭据 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="Claw 端口"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/settingsClawbenchPortInput"
+                            android:layout_width="0dp"
+                            android:layout_height="36dp"
+                            android:layout_weight="1"
+                            android:background="#0D1117"
+                            android:fontFamily="monospace"
+                            android:hint="20000"
+                            android:inputType="number"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:text="20000"
+                            android:textColor="#58A6FF"
+                            android:textColorHint="#484F58"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnTestClawbenchPort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="测试"
+                            android:textColor="#C9D1D9"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tvClawbenchPortStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="Claw Token"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/settingsClawbenchTokenInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:background="#0D1117"
+                            android:fontFamily="monospace"
+                            android:hint="ClawBench Token/Password"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:textColor="#C9D1D9"
+                            android:textColorHint="#484F58"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+
+                    <!-- 4. RikkaHub 分发服务端口 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="92dp"
+                            android:layout_height="wrap_content"
+                            android:text="RikkaHub 端口"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/settingsRikkaPortInput"
+                            android:layout_width="0dp"
+                            android:layout_height="36dp"
+                            android:layout_weight="1"
+                            android:background="#0D1117"
+                            android:fontFamily="monospace"
+                            android:hint="8095"
+                            android:inputType="number"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:text="8095"
+                            android:textColor="#58A6FF"
+                            android:textColorHint="#484F58"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/btnTestRikkaPort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="测试"
+                            android:textColor="#C9D1D9"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                    <TextView
+                        android:id="@+id/tvRikkaPortStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
+                    <!-- 操作按钮行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnResetDefaultPorts"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:text="恢复默认端口"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/btnSavePort"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1.4"
                             android:background="@drawable/bg_btn_primary"
                             android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="保存并生效"
+                            android:text="保存并应用所有端口"
                             android:textColor="#FFFFFF"
                             android:textSize="12sp" />
                     </LinearLayout>

@@ -399,7 +399,28 @@ public class PetRegistry {
 
     /** pi-web 工作台端口（默认 30141） */
     public static int getPiWebPort(Context context) {
-        return getIntPref(context, KEY_PIWEB_PORT, DEFAULT_PIWEB_PORT);
+        return com.xm486.pimet.PiMetConfig.getWebPort(context);
+    }
+
+    public static void setPiWebPort(Context context, int port) {
+        setIntPref(context, KEY_PIWEB_PORT, port);
+        com.xm486.pimet.PiMetConfig.setWebPort(context, port);
+    }
+
+    public static void setOperitPort(Context context, int port) {
+        setIntPref(context, KEY_OPERIT_PORT, port);
+    }
+
+    public static void setClawbenchPort(Context context, int port) {
+        setIntPref(context, KEY_CB_PORT, port);
+    }
+
+    public static int getRikkaPort(Context context) {
+        return getIntPref(context, KEY_RK_PORT, 8095);
+    }
+
+    public static void setRikkaPort(Context context, int port) {
+        setIntPref(context, KEY_RK_PORT, port);
     }
 
     /** 是否已保存过某个整型设置（用于判断是否有历史值可回填） */

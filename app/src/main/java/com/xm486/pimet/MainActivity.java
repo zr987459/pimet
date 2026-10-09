@@ -79,6 +79,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
@@ -354,6 +355,27 @@ public class MainActivity extends AppCompatActivity {
     private boolean isApiKeyVisible = false;
 
     private EditText settingsPortInput;
+    private EditText settingsOperitPortInput;
+    private EditText settingsOperitTokenInput;
+    private View btnTestOperitPort;
+    private TextView tvOperitPortStatus;
+
+    private EditText settingsClawbenchPortInput;
+    private EditText settingsClawbenchTokenInput;
+    private View btnTestClawbenchPort;
+    private TextView tvClawbenchPortStatus;
+
+    private EditText settingsRikkaPortInput;
+    private View btnTestRikkaPort;
+    private TextView tvRikkaPortStatus;
+
+    private View btnTestPiWebPort;
+    private TextView tvPiWebPortStatus;
+    private View btnResetDefaultPorts;
+
+    private View btnPetChipPiWeb;
+    private View btnPetChipCustomPorts;
+
     private View btnSavePort;
     private TextView btnRegistryMirror;
     private TextView btnRegistryOfficial;
@@ -544,6 +566,33 @@ public class MainActivity extends AppCompatActivity {
         btnFetchAiModels = findViewById(R.id.btnFetchAiModels);
 
         settingsPortInput = findViewById(R.id.settingsPortInput);
+        settingsOperitPortInput = findViewById(R.id.settingsOperitPortInput);
+        settingsOperitTokenInput = findViewById(R.id.settingsOperitTokenInput);
+        btnTestOperitPort = findViewById(R.id.btnTestOperitPort);
+        tvOperitPortStatus = findViewById(R.id.tvOperitPortStatus);
+
+        settingsClawbenchPortInput = findViewById(R.id.settingsClawbenchPortInput);
+        settingsClawbenchTokenInput = findViewById(R.id.settingsClawbenchTokenInput);
+        btnTestClawbenchPort = findViewById(R.id.btnTestClawbenchPort);
+        tvClawbenchPortStatus = findViewById(R.id.tvClawbenchPortStatus);
+
+        settingsRikkaPortInput = findViewById(R.id.settingsRikkaPortInput);
+        btnTestRikkaPort = findViewById(R.id.btnTestRikkaPort);
+        tvRikkaPortStatus = findViewById(R.id.tvRikkaPortStatus);
+
+        btnTestPiWebPort = findViewById(R.id.btnTestPiWebPort);
+        tvPiWebPortStatus = findViewById(R.id.tvPiWebPortStatus);
+        btnResetDefaultPorts = findViewById(R.id.btnResetDefaultPorts);
+
+        btnPetChipPiWeb = findViewById(R.id.btnPetChipPiWeb);
+        btnPetChipCustomPorts = findViewById(R.id.btnPetChipCustomPorts);
+        if (btnPetChipPiWeb != null) {
+            btnPetChipPiWeb.setOnClickListener(v -> switchTab(1));
+        }
+        if (btnPetChipCustomPorts != null) {
+            btnPetChipCustomPorts.setOnClickListener(v -> showCustomPortsDialog());
+        }
+
         btnSavePort = findViewById(R.id.btnSavePort);
         btnRegistryMirror = findViewById(R.id.btnRegistryMirror);
         btnRegistryOfficial = findViewById(R.id.btnRegistryOfficial);
@@ -918,33 +967,39 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateFloatingPetChatCardStatus() {
         if (tvPetStatusText == null || viewPetStatusDot == null) return;
+        String target = PetRegistry.getStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+        int port = PetRegistry.TARGET_PIWEB.equals(target) ? PiMetConfig.getWebPort(this) :
+                (PetRegistry.TARGET_OPERIT.equals(target) ? PetRegistry.getOperitPort(this) :
+                (PetRegistry.TARGET_CLAWBENCH.equals(target) ? PetRegistry.getClawbenchPort(this) :
+                (PetRegistry.TARGET_RIKKA.equals(target) ? PetRegistry.getRikkaPort(this) : 8080)));
+
         if (lastPetSnapshot != null && lastPetSnapshot.state != null) {
             switch (lastPetSnapshot.state) {
                 case THINKING:
-                    tvPetStatusText.setText("🤔 Agent 深度思考中...");
+                    tvPetStatusText.setText("🤔 Pi-Web 思考中 (:" + port + ")");
                     viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
                     break;
                 case TOOL_RUNNING:
                     String tool = TextUtils.isEmpty(lastPetSnapshot.lastTool) ? "工具中" : lastPetSnapshot.lastTool;
-                    tvPetStatusText.setText("🔧 执行: " + tool);
+                    tvPetStatusText.setText("🔧 执行: " + tool + " (:" + port + ")");
                     viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
                     break;
                 case RESPONDING:
-                    tvPetStatusText.setText("💬 Agent 组织回复...");
+                    tvPetStatusText.setText("💬 生成回复中 (:" + port + ")");
                     viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
                     break;
                 case ERROR:
-                    tvPetStatusText.setText("😱 遇到异常: " + (lastPetSnapshot.lastTool != null ? lastPetSnapshot.lastTool : ""));
+                    tvPetStatusText.setText("😱 遇到异常 (:" + port + ")");
                     viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_gray);
                     break;
                 case IDLE:
                 default:
-                    tvPetStatusText.setText("🟢 随时待命就绪");
+                    tvPetStatusText.setText("🟢 目标: " + target + ":" + port + " · 就绪");
                     viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_green);
                     break;
             }
         } else {
-            tvPetStatusText.setText("🟢 随时待命就绪");
+            tvPetStatusText.setText("🟢 目标: " + target + ":" + port + " · 就绪");
             viewPetStatusDot.setBackgroundResource(R.drawable.bg_status_dot_green);
         }
     }
@@ -1214,6 +1269,11 @@ public class MainActivity extends AppCompatActivity {
                 switchTab(3);
             });
 
+            TextView btnPorts = createHudChip("🌐 自定义端口", 0x22F59E0B, 0xFFF59E0B, v -> {
+                if (petHudDialog != null) petHudDialog.dismiss();
+                showCustomPortsDialog();
+            });
+
             boolean isOverlayRunning = PetOverlayService.isRunning();
             TextView btnOverlay = createHudChip(isOverlayRunning ? "🌐 全局桌宠·开" : "🌐 全局桌宠·关", isOverlayRunning ? 0x2210B981 : 0x226E7681, isOverlayRunning ? 0xFF3FB950 : 0xFF8B949E, v -> {
                 toggleGlobalOverlay();
@@ -1222,6 +1282,8 @@ public class MainActivity extends AppCompatActivity {
             });
 
             toolsRow2.addView(btnSettings, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            toolsRow2.addView(createSpacingView(4));
+            toolsRow2.addView(btnPorts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             toolsRow2.addView(createSpacingView(4));
             toolsRow2.addView(btnOverlay, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             root.addView(toolsRow2);
@@ -1480,6 +1542,165 @@ public class MainActivity extends AppCompatActivity {
         new PetParamsDialog(this, this::applyPetParams).show();
     }
 
+    private String readStreamToString(InputStream is) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[2048];
+        int n;
+        while ((n = is.read(buf)) != -1) {
+            bos.write(buf, 0, n);
+        }
+        return bos.toString("UTF-8");
+    }
+
+    private void testPortInput(EditText et, TextView tvStatus) {
+        if (et == null || tvStatus == null) return;
+        try {
+            int port = Integer.parseInt(et.getText().toString().trim());
+            tvStatus.setVisibility(View.VISIBLE);
+            tvStatus.setText("🔍 正在探测端口 " + port + "...");
+            tvStatus.setTextColor(0xFF8B949E);
+            new Thread(() -> {
+                long t0 = System.currentTimeMillis();
+                boolean ok = PortDetector.isPortOpen("127.0.0.1", port, 400);
+                int latency = (int) (System.currentTimeMillis() - t0);
+                mainHandler.post(() -> {
+                    if (ok) {
+                        tvStatus.setText("● 端口 " + port + " 开放连通正常 (延迟 " + latency + "ms)");
+                        tvStatus.setTextColor(0xFF3FB950);
+                    } else {
+                        tvStatus.setText("○ 端口 " + port + " 未响应或服务未启动");
+                        tvStatus.setTextColor(0xFFF85149);
+                    }
+                });
+            }).start();
+        } catch (Throwable t) {
+            Toast.makeText(this, "请输入合法的端口数字", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showCustomPortsDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("🌐 自定义多服务端口配置");
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(18), dpToPx(12), dpToPx(18), dpToPx(12));
+
+        EditText etPiWeb = createPortDialogRow(layout, "Pi-Web 工作台端口:", String.valueOf(PiMetConfig.getWebPort(this)));
+        EditText etOperit = createPortDialogRow(layout, "Operit 伴侣服务端口:", String.valueOf(PetRegistry.getOperitPort(this)));
+        EditText etClaw = createPortDialogRow(layout, "ClawBench 服务端口:", String.valueOf(PetRegistry.getClawbenchPort(this)));
+        EditText etRikka = createPortDialogRow(layout, "RikkaHub 分发端口:", String.valueOf(PetRegistry.getRikkaPort(this)));
+
+        builder.setView(layout);
+        builder.setPositiveButton("保存并生效", (dialog, which) -> {
+            try {
+                int pw = Integer.parseInt(etPiWeb.getText().toString().trim());
+                int op = Integer.parseInt(etOperit.getText().toString().trim());
+                int cb = Integer.parseInt(etClaw.getText().toString().trim());
+                int rk = Integer.parseInt(etRikka.getText().toString().trim());
+
+                if (pw < 1024 || pw > 65535 || op < 1024 || op > 65535 || cb < 1024 || cb > 65535 || rk < 1024 || rk > 65535) {
+                    Toast.makeText(this, "端口需在 1024 ~ 65535 范围内", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                PetRegistry.setPiWebPort(this, pw);
+                PetRegistry.setOperitPort(this, op);
+                PetRegistry.setClawbenchPort(this, cb);
+                PetRegistry.setRikkaPort(this, rk);
+
+                initPetMonitor();
+                checkServiceStatus();
+                refreshSettingsPortFields();
+                Toast.makeText(this, "多服务自定义端口已全部保存并生效！", Toast.LENGTH_SHORT).show();
+                showPetBubble("✅ 多服务端口已更新！Pi-Web:" + pw + " / Operit:" + op);
+            } catch (Throwable t) {
+                Toast.makeText(this, "端口保存异常: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+        builder.setNegativeButton("取消", null);
+        builder.show();
+    }
+
+    private EditText createPortDialogRow(LinearLayout parent, String label, String currentVal) {
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextColor(0xFFCBD5E1);
+        tv.setTextSize(12f);
+        tv.setPadding(0, dpToPx(6), 0, dpToPx(2));
+        parent.addView(tv);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText et = new EditText(this);
+        et.setLayoutParams(new LinearLayout.LayoutParams(0, dpToPx(38), 1f));
+        et.setText(currentVal);
+        et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        et.setTextColor(0xFF58A6FF);
+        et.setTextSize(13f);
+        et.setTypeface(Typeface.MONOSPACE);
+        et.setPadding(dpToPx(8), 0, dpToPx(8), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFF0D1117);
+        bg.setCornerRadius(dpToPx(4));
+        bg.setStroke(dpToPx(1), 0x33475569);
+        et.setBackground(bg);
+        row.addView(et);
+
+        TextView btnTest = new TextView(this);
+        btnTest.setText("测试");
+        btnTest.setTextColor(0xFFC9D1D9);
+        btnTest.setTextSize(11f);
+        btnTest.setGravity(Gravity.CENTER);
+        btnTest.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        GradientDrawable tbg = new GradientDrawable();
+        tbg.setColor(0x2230363D);
+        tbg.setCornerRadius(dpToPx(4));
+        tbg.setStroke(dpToPx(1), 0x22FFFFFF);
+        btnTest.setBackground(tbg);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(36));
+        btnLp.setMarginStart(dpToPx(8));
+        row.addView(btnTest, btnLp);
+
+        TextView tvStatus = new TextView(this);
+        tvStatus.setTextSize(10.5f);
+        tvStatus.setTextColor(0xFF8B949E);
+        tvStatus.setVisibility(View.GONE);
+        tvStatus.setPadding(dpToPx(2), dpToPx(2), 0, 0);
+
+        btnTest.setOnClickListener(v -> {
+            try {
+                int p = Integer.parseInt(et.getText().toString().trim());
+                btnTest.setText("检测中");
+                new Thread(() -> {
+                    long t0 = System.currentTimeMillis();
+                    boolean ok = PortDetector.isPortOpen("127.0.0.1", p, 400);
+                    int latency = (int) (System.currentTimeMillis() - t0);
+                    mainHandler.post(() -> {
+                        btnTest.setText("测试");
+                        tvStatus.setVisibility(View.VISIBLE);
+                        if (ok) {
+                            tvStatus.setText("● 端口 " + p + " 开放 (延迟 " + latency + "ms)");
+                            tvStatus.setTextColor(0xFF3FB950);
+                        } else {
+                            tvStatus.setText("○ 端口 " + p + " 未响应或服务未启动");
+                            tvStatus.setTextColor(0xFFF85149);
+                        }
+                    });
+                }).start();
+            } catch (Throwable ignored) {
+                Toast.makeText(this, "请输入合法的端口数字", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        parent.addView(row);
+        parent.addView(tvStatus);
+        return et;
+    }
+
     private void applyPetParams() {
         int petSize = PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
         int bubbleWidth = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
@@ -1666,12 +1887,205 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
+        if (q.equalsIgnoreCase("#ports") || q.equalsIgnoreCase("#port")) {
+            new Thread(() -> {
+                int pw = PiMetConfig.getWebPort(MainActivity.this);
+                int op = PetRegistry.getOperitPort(MainActivity.this);
+                int cb = PetRegistry.getClawbenchPort(MainActivity.this);
+                int rk = PetRegistry.getRikkaPort(MainActivity.this);
+
+                boolean pwOk = PortDetector.isPortOpen("127.0.0.1", pw, 350);
+                boolean opOk = PortDetector.isPortOpen("127.0.0.1", op, 350);
+                boolean cbOk = PortDetector.isPortOpen("127.0.0.1", cb, 350);
+                boolean rkOk = PortDetector.isPortOpen("127.0.0.1", rk, 350);
+
+                String msg = "🌐 自定义多服务端口概览：\n"
+                        + (pwOk ? "🟢" : "⚪") + " Pi-Web: " + pw + (pwOk ? " (运行中)" : " (未运行)") + "\n"
+                        + (opOk ? "🟢" : "⚪") + " Operit: " + op + (opOk ? " (运行中)" : " (未运行)") + "\n"
+                        + (cbOk ? "🟢" : "⚪") + " ClawBench: " + cb + (cbOk ? " (运行中)" : " (未运行)") + "\n"
+                        + (rkOk ? "🟢" : "⚪") + " RikkaHub: " + rk + (rkOk ? " (运行中)" : " (未运行)") + "\n"
+                        + "提示: 可用 #port <服务> <端口> 快捷修改";
+                mainHandler.post(() -> showPetBubble(msg));
+            }).start();
+            return;
+        }
+
+        if (q.startsWith("#port ")) {
+            String[] parts = q.split("\\s+");
+            if (parts.length >= 3) {
+                String svc = parts[1].toLowerCase();
+                try {
+                    int newPort = Integer.parseInt(parts[2]);
+                    if (newPort < 1024 || newPort > 65535) {
+                        showPetBubble("端口范围应在 1024 ~ 65535 之间哦！");
+                        return;
+                    }
+                    if (svc.contains("pi")) {
+                        PetRegistry.setPiWebPort(this, newPort);
+                        initPetMonitor();
+                        refreshSettingsPortFields();
+                        showPetBubble("✅ Pi-Web 端口已更新为 " + newPort);
+                    } else if (svc.contains("oper")) {
+                        PetRegistry.setOperitPort(this, newPort);
+                        refreshSettingsPortFields();
+                        showPetBubble("✅ Operit 端口已更新为 " + newPort);
+                    } else if (svc.contains("claw")) {
+                        PetRegistry.setClawbenchPort(this, newPort);
+                        refreshSettingsPortFields();
+                        showPetBubble("✅ ClawBench 端口已更新为 " + newPort);
+                    } else if (svc.contains("rikka")) {
+                        PetRegistry.setRikkaPort(this, newPort);
+                        refreshSettingsPortFields();
+                        showPetBubble("✅ RikkaHub 端口已更新为 " + newPort);
+                    } else {
+                        showPetBubble("未知服务名，可选: piweb / operit / claw / rikka");
+                    }
+                    return;
+                } catch (NumberFormatException e) {
+                    showPetBubble("请输入合法的数字端口号！例如 #port piweb 30141");
+                    return;
+                }
+            }
+        }
+
         showPetBubble("收到啦！正在思考回答中...");
 
         String activeTarget = PetRegistry.getStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
 
         new Thread(() -> {
             try {
+                if (PetRegistry.TARGET_PIWEB.equals(activeTarget)) {
+                    int piwebPort = PiMetConfig.getWebPort(MainActivity.this);
+                    if (!PortDetector.isPortOpen("127.0.0.1", piwebPort, 450)) {
+                        mainHandler.post(() -> showPetBubble("⚠️ Pi-Web 未在端口 " + piwebPort + " 启动，请点击上方「🚀 直达工作台」启动服务~"));
+                        return;
+                    }
+
+                    // 1. 查找或创建会话
+                    String sessionId = null;
+                    try {
+                        URL sUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/sessions");
+                        HttpURLConnection sConn = (HttpURLConnection) sUrl.openConnection();
+                        sConn.setConnectTimeout(2500);
+                        sConn.setReadTimeout(3000);
+                        if (sConn.getResponseCode() == 200) {
+                            String body = readStreamToString(sConn.getInputStream());
+                            JSONObject sRoot = new JSONObject(body);
+                            JSONArray sArr = sRoot.optJSONArray("sessions");
+                            if (sArr != null && sArr.length() > 0) {
+                                sessionId = sArr.getJSONObject(0).optString("id", null);
+                            }
+                        }
+                        sConn.disconnect();
+                    } catch (Throwable ignored) {}
+
+                    if (sessionId == null) {
+                        try {
+                            URL nUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/agent/new");
+                            HttpURLConnection nConn = (HttpURLConnection) nUrl.openConnection();
+                            nConn.setRequestMethod("POST");
+                            nConn.setRequestProperty("Content-Type", "application/json");
+                            nConn.setDoOutput(true);
+                            nConn.setConnectTimeout(3000);
+                            nConn.setReadTimeout(5000);
+                            JSONObject nReq = new JSONObject();
+                            nReq.put("cwd", "/root");
+                            nReq.put("type", "prompt");
+                            nReq.put("message", q);
+                            nConn.getOutputStream().write(nReq.toString().getBytes(StandardCharsets.UTF_8));
+                            if (nConn.getResponseCode() >= 200 && nConn.getResponseCode() < 300) {
+                                String nBody = readStreamToString(nConn.getInputStream());
+                                JSONObject nObj = new JSONObject(nBody);
+                                sessionId = nObj.optString("sessionId", null);
+                            }
+                            nConn.disconnect();
+                        } catch (Throwable ignored) {}
+                    } else {
+                        try {
+                            URL pUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/agent/" + sessionId);
+                            HttpURLConnection pConn = (HttpURLConnection) pUrl.openConnection();
+                            pConn.setRequestMethod("POST");
+                            pConn.setRequestProperty("Content-Type", "application/json");
+                            pConn.setDoOutput(true);
+                            pConn.setConnectTimeout(3000);
+                            pConn.setReadTimeout(5000);
+                            JSONObject pReq = new JSONObject();
+                            pReq.put("type", "prompt");
+                            pReq.put("message", q);
+                            pConn.getOutputStream().write(pReq.toString().getBytes(StandardCharsets.UTF_8));
+                            pConn.getResponseCode();
+                            pConn.disconnect();
+                        } catch (Throwable ignored) {}
+                    }
+
+                    if (sessionId == null) {
+                        mainHandler.post(() -> showPetBubble("未能与 Pi-Web 建立 Agent 会话"));
+                        return;
+                    }
+
+                    mainHandler.post(() -> showPetBubble("💭 Pi-Web Agent 正在思考中..."));
+
+                    // 2. 监听 SSE 事件流实时更新桌宠动画与气泡
+                    URL sseUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/agent/" + sessionId + "/events");
+                    HttpURLConnection sseConn = (HttpURLConnection) sseUrl.openConnection();
+                    sseConn.setRequestProperty("Accept", "text/event-stream");
+                    sseConn.setConnectTimeout(4000);
+                    sseConn.setReadTimeout(75000);
+
+                    StringBuilder answer = new StringBuilder();
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(sseConn.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        long t0 = System.currentTimeMillis();
+                        while ((line = reader.readLine()) != null) {
+                            if (System.currentTimeMillis() - t0 > 75000) break;
+                            if (line.startsWith("data:")) {
+                                String data = line.substring(5).trim();
+                                if (data.isEmpty()) continue;
+                                try {
+                                    JSONObject ev = new JSONObject(data);
+                                    String evType = ev.optString("type", "");
+                                    if ("message_update".equals(evType)) {
+                                        JSONObject aEv = ev.optJSONObject("assistantMessageEvent");
+                                        if (aEv != null) {
+                                            String aType = aEv.optString("type", "");
+                                            if ("text_delta".equals(aType)) {
+                                                String delta = aEv.optString("delta", "");
+                                                answer.append(delta);
+                                                final String cur = answer.toString();
+                                                mainHandler.post(() -> showPetBubble(cur));
+                                            } else if ("thinking_delta".equals(aType)) {
+                                                mainHandler.post(() -> {
+                                                    if (floatingPetView != null) floatingPetView.updateState(OperitState.THINKING);
+                                                    showPetBubble("💭 Pi-Web 正在深度分析...");
+                                                });
+                                            }
+                                        }
+                                    } else if ("tool_execution_update".equals(evType)) {
+                                        String toolName = ev.optString("toolName", "工具");
+                                        mainHandler.post(() -> {
+                                            if (floatingPetView != null) floatingPetView.updateState(OperitState.TOOL_RUNNING);
+                                            showPetBubble("🛠️ Pi-Web 正在执行: " + toolName);
+                                        });
+                                    } else if ("agent_end".equals(evType) || "session_shutdown".equals(evType)) {
+                                        break;
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
+                        }
+                    } finally {
+                        sseConn.disconnect();
+                    }
+
+                    mainHandler.post(() -> {
+                        if (floatingPetView != null) floatingPetView.playOneShot("jumping");
+                        if (answer.length() > 0) {
+                            showPetBubble(answer.toString().trim());
+                        } else {
+                            showPetBubble("🎉 Pi-Web Agent 已执行完毕！随时待命");
+                        }
+                    });
+                    return;
+                }
                 if (PetRegistry.TARGET_OPERIT.equals(activeTarget)) {
                     int operitPort = PetRegistry.getOperitPort(MainActivity.this);
                     java.net.URL url = new java.net.URL("http://127.0.0.1:" + operitPort + "/api/external-chat");
@@ -3292,24 +3706,73 @@ public class MainActivity extends AppCompatActivity {
 
         btnFetchAiModels.setOnClickListener(v -> fetchAiModels());
 
-        int currentPort = PiMetConfig.getWebPort(this);
-        settingsPortInput.setText(String.valueOf(currentPort));
+        refreshSettingsPortFields();
 
-        btnSavePort.setOnClickListener(v -> {
-            String portStr = settingsPortInput.getText().toString().trim();
-            try {
-                int port = Integer.parseInt(portStr);
-                if (port < 1024 || port > 65535) {
-                    Toast.makeText(this, "请输入合法的端口号 (1024 - 65535)", Toast.LENGTH_SHORT).show();
-                    return;
+        if (btnTestPiWebPort != null) {
+            btnTestPiWebPort.setOnClickListener(v -> testPortInput(settingsPortInput, tvPiWebPortStatus));
+        }
+        if (btnTestOperitPort != null) {
+            btnTestOperitPort.setOnClickListener(v -> testPortInput(settingsOperitPortInput, tvOperitPortStatus));
+        }
+        if (btnTestClawbenchPort != null) {
+            btnTestClawbenchPort.setOnClickListener(v -> testPortInput(settingsClawbenchPortInput, tvClawbenchPortStatus));
+        }
+        if (btnTestRikkaPort != null) {
+            btnTestRikkaPort.setOnClickListener(v -> testPortInput(settingsRikkaPortInput, tvRikkaPortStatus));
+        }
+
+        if (btnResetDefaultPorts != null) {
+            btnResetDefaultPorts.setOnClickListener(v -> {
+                if (settingsPortInput != null) settingsPortInput.setText(String.valueOf(PiMetConfig.DEFAULT_WEB_PORT));
+                if (settingsOperitPortInput != null) settingsOperitPortInput.setText(String.valueOf(PetRegistry.DEFAULT_OPERIT_PORT));
+                if (settingsClawbenchPortInput != null) settingsClawbenchPortInput.setText(String.valueOf(PetRegistry.DEFAULT_CB_PORT));
+                if (settingsRikkaPortInput != null) settingsRikkaPortInput.setText("8095");
+                Toast.makeText(this, "已重置输入框为默认端口，点击右侧保存生效", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        if (btnSavePort != null) {
+            btnSavePort.setOnClickListener(v -> {
+                try {
+                    int pwPort = Integer.parseInt(settingsPortInput.getText().toString().trim());
+                    int opPort = Integer.parseInt(settingsOperitPortInput.getText().toString().trim());
+                    int cbPort = Integer.parseInt(settingsClawbenchPortInput.getText().toString().trim());
+                    int rkPort = Integer.parseInt(settingsRikkaPortInput.getText().toString().trim());
+
+                    if (pwPort < 1024 || pwPort > 65535 ||
+                        opPort < 1024 || opPort > 65535 ||
+                        cbPort < 1024 || cbPort > 65535 ||
+                        rkPort < 1024 || rkPort > 65535) {
+                        Toast.makeText(this, "端口需在 1024 ~ 65535 范围内", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    PetRegistry.setPiWebPort(this, pwPort);
+                    PetRegistry.setOperitPort(this, opPort);
+                    PetRegistry.setClawbenchPort(this, cbPort);
+                    PetRegistry.setRikkaPort(this, rkPort);
+
+                    if (settingsOperitTokenInput != null) {
+                        String opToken = settingsOperitTokenInput.getText().toString().trim();
+                        if (!opToken.isEmpty()) {
+                            PetRegistry.setStringPref(this, ChatConfig.KEY_OPERIT_TOKEN, opToken);
+                        }
+                    }
+                    if (settingsClawbenchTokenInput != null) {
+                        String cbToken = settingsClawbenchTokenInput.getText().toString().trim();
+                        if (!cbToken.isEmpty()) {
+                            PetRegistry.setClawbenchToken(this, cbToken);
+                        }
+                    }
+
+                    initPetMonitor();
+                    checkServiceStatus();
+                    Toast.makeText(this, "所有自定义端口与凭证已保存并生效！", Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "无效端口数字: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
-                PiMetConfig.setWebPort(this, port);
-                Toast.makeText(this, "端口配置已更新为 " + port, Toast.LENGTH_SHORT).show();
-                checkServiceStatus();
-            } catch (Exception e) {
-                Toast.makeText(this, "无效端口", Toast.LENGTH_SHORT).show();
-            }
-        });
+            });
+        }
 
         updateRegistryButtons();
         btnRegistryMirror.setOnClickListener(v -> {
@@ -4194,6 +4657,27 @@ public class MainActivity extends AppCompatActivity {
         return card;
     }
 
+    private void refreshSettingsPortFields() {
+        if (settingsPortInput != null) {
+            settingsPortInput.setText(String.valueOf(PiMetConfig.getWebPort(this)));
+        }
+        if (settingsOperitPortInput != null) {
+            settingsOperitPortInput.setText(String.valueOf(PetRegistry.getOperitPort(this)));
+        }
+        if (settingsOperitTokenInput != null) {
+            settingsOperitTokenInput.setText(PetRegistry.getStringPref(this, ChatConfig.KEY_OPERIT_TOKEN, "465ea3984db74e0790e8df63c6e85643"));
+        }
+        if (settingsClawbenchPortInput != null) {
+            settingsClawbenchPortInput.setText(String.valueOf(PetRegistry.getClawbenchPort(this)));
+        }
+        if (settingsClawbenchTokenInput != null) {
+            settingsClawbenchTokenInput.setText(PetRegistry.getClawbenchToken(this));
+        }
+        if (settingsRikkaPortInput != null) {
+            settingsRikkaPortInput.setText(String.valueOf(PetRegistry.getRikkaPort(this)));
+        }
+    }
+
     private void refreshSettingsUiFields() {
         selectedProvider = PiMetConfig.getAiProvider(this);
         if (inputAiApiKey != null) inputAiApiKey.setText(PiMetConfig.getAiApiKey(this));
@@ -4201,6 +4685,7 @@ public class MainActivity extends AppCompatActivity {
         if (inputAiModel != null) inputAiModel.setText(PiMetConfig.getAiModel(this));
         updateProviderChips();
         updateLaunchModelDesc();
+        refreshSettingsPortFields();
     }
 
     @Override
