@@ -224,18 +224,6 @@ public final class ProotManager {
         }
     }
 
-    private static String readFileToString(File file) {
-        try (FileInputStream fis = new FileInputStream(file);
-             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
-            byte[] buf = new byte[2048];
-            int n;
-            while ((n = fis.read(buf)) != -1) bos.write(buf, 0, n);
-            return bos.toString("UTF-8");
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
     private static void writeStringToFile(File file, String str) {
         try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(str.getBytes(StandardCharsets.UTF_8));
