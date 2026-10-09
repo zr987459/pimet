@@ -373,6 +373,14 @@ public class PetRegistry {
         return getPrefs(context).getInt(key, def);
     }
 
+    public static boolean getBooleanPref(Context context, String key, boolean def) {
+        return getPrefs(context).getBoolean(key, def);
+    }
+
+    public static void setBooleanPref(Context context, String key, boolean val) {
+        getPrefs(context).edit().putBoolean(key, val).apply();
+    }
+
     /** Operit Web API 端口（主页可改，默认 8094） */
     public static int getOperitPort(Context context) {
         return getIntPref(context, KEY_OPERIT_PORT, DEFAULT_OPERIT_PORT);

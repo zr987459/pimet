@@ -54,6 +54,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public static boolean isRunning() { return isRunning; }
     private static volatile PetOverlayService sInstance = null;
     public static PetOverlayService getInstance() { return sInstance; }
+    public SpritePetView getPetView() { return petView; }
     public static final String ACTION_OVERLAY_STATE_CHANGED = "com.xm486.pimet.OVERLAY_STATE_CHANGED";
 
     private static final String TAG = "DevPetM.PetSvc";
@@ -181,6 +182,55 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         statusCard.setModeLabel(ChatConfig.load(this).modeLabel());
         // 自动应用当前模式绑定的专属角色
         applyModePet(ChatConfig.load(this).mode);
+        // 自动启动桌宠独立记忆与主动关怀定时器
+        startProactiveChatter();
+    }
+
+    // ---------------- 桌宠主动互动与独立记忆 ----------------
+    private final Handler proactiveHandler = new Handler(Looper.getMainLooper());
+    private final Runnable proactiveRunnable = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                boolean enabled = PetRegistry.getBooleanPref(PetOverlayService.this,
+                        PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+                if (enabled && !isPetHidden && overlayRoot != null && !cardVisible) {
+                    String msg = PetMemoryManager.generateProactiveMessage(PetOverlayService.this);
+                    showProactiveBubble(msg);
+                    if (petView != null) {
+                        petView.playOneShot("waving");
+                    }
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "proactiveRunnable error", t);
+            }
+            int intervalMin = PetRegistry.getIntPref(PetOverlayService.this,
+                    PetMemoryManager.KEY_PROACTIVE_INTERVAL_MIN, 3);
+            long delay = (intervalMin * 60L + (long)(Math.random() * 60)) * 1000L;
+            proactiveHandler.postDelayed(this, Math.max(60000L, delay));
+        }
+    };
+
+    public void startProactiveChatter() {
+        stopProactiveChatter();
+        PetMemoryManager.ensurePetSubagentInstalled(this);
+        int intervalMin = PetRegistry.getIntPref(this,
+                PetMemoryManager.KEY_PROACTIVE_INTERVAL_MIN, 3);
+        proactiveHandler.postDelayed(proactiveRunnable, Math.max(45000L, intervalMin * 60000L));
+    }
+
+    public void stopProactiveChatter() {
+        proactiveHandler.removeCallbacks(proactiveRunnable);
+    }
+
+    public void showProactiveBubble(String msg) {
+        if (bubbleView == null || msg == null || msg.trim().isEmpty()) return;
+        bubbleHandler.removeCallbacks(bubbleHideRunnable);
+        bubbleView.setText("💬 " + msg);
+        bubbleView.setVisibility(View.VISIBLE);
+        bubbleView.setAlpha(0f);
+        bubbleView.animate().alpha(1f).setDuration(200).start();
+        bubbleHandler.postDelayed(bubbleHideRunnable, 6500);
     }
 
     @Override
@@ -1358,6 +1408,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     @Override
     public void onDestroy() {
+        stopProactiveChatter();
         savePosition();
         PetRegistry.getPrefs(this).unregisterOnSharedPreferenceChangeListener(this);
         stopFling();

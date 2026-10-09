@@ -266,6 +266,10 @@ public class AppBridgeManager {
                         if (attachedActivity != null && attachedActivity.floatingPetView != null) {
                             attachedActivity.floatingPetView.playOneShot(action);
                         }
+                        if (PetOverlayService.isRunning && PetOverlayService.getInstance() != null) {
+                            PetOverlayService svc = PetOverlayService.getInstance();
+                            if (svc.getPetView() != null) svc.getPetView().playOneShot(action);
+                        }
                         feedback.append("已播放动作 ").append(action).append("; ");
                     }
                 }
@@ -273,8 +277,13 @@ public class AppBridgeManager {
                 // 4. 对话气泡说话
                 if (json.has("bubble_text")) {
                     String bubble = json.optString("bubble_text").trim();
-                    if (!TextUtils.isEmpty(bubble) && attachedActivity != null) {
-                        attachedActivity.showPetBubble(bubble);
+                    if (!TextUtils.isEmpty(bubble)) {
+                        if (attachedActivity != null) {
+                            attachedActivity.showPetBubble(bubble);
+                        }
+                        if (PetOverlayService.isRunning && PetOverlayService.getInstance() != null) {
+                            PetOverlayService.getInstance().showProactiveBubble(bubble);
+                        }
                         feedback.append("已展示气泡: ").append(bubble).append("; ");
                     }
                 }

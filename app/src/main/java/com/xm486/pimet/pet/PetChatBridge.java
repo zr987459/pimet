@@ -264,14 +264,23 @@ public class PetChatBridge {
                         if (card != null) card.startChatPhase(fNew ? "⚡ 开启新会话中…" : "正在处理…");
                     });
                     ChatConfig config = ChatConfig.load(service);
-                    if (ChatConfig.MODE_OPERIT.equals(config.mode)) {
-                        segments = sendViaOperit(config, cleanInput, forceNew);
-                    } else if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
-                        segments = sendViaPiWeb(config, cleanInput, forceNew);
-                    } else if (ChatConfig.MODE_CLAWBENCH.equals(config.mode)) {
-                        segments = sendViaClawBench(config, cleanInput, forceNew);
-                    } else {
-                        segments = sendViaCustomApi(config, cleanInput);
+                    // 询问具体进度时，若未配置或处于快速模式，可直接由桌宠独立记忆与进度汇报直接响应
+                    if (PetMemoryManager.isProgressQuery(cleanInput)) {
+                        String realProgress = PetMemoryManager.getSystemProgressReport(service);
+                        if (ChatConfig.MODE_CUSTOM_API.equals(config.mode) && (config.apiKey == null || config.apiKey.isEmpty())) {
+                            segments = Collections.singletonList(realProgress);
+                        }
+                    }
+                    if (segments == null) {
+                        if (ChatConfig.MODE_OPERIT.equals(config.mode)) {
+                            segments = sendViaOperit(config, cleanInput, forceNew);
+                        } else if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
+                            segments = sendViaPiWeb(config, cleanInput, forceNew);
+                        } else if (ChatConfig.MODE_CLAWBENCH.equals(config.mode)) {
+                            segments = sendViaClawBench(config, cleanInput, forceNew);
+                        } else {
+                            segments = sendViaCustomApi(config, cleanInput);
+                        }
                     }
                 }
             } catch (Throwable t) {
@@ -290,6 +299,9 @@ public class PetChatBridge {
                 }
             }
             if (segments != null && !segments.isEmpty()) {
+                StringBuilder full = new StringBuilder();
+                for (String seg : segments) full.append(seg).append(" ");
+                PetMemoryManager.recordInteraction(service, cleanInput, full.toString());
                 playSegments(segments, 0); // 只打字已回复的正文（长文自动分段）
             }
         }
@@ -299,6 +311,16 @@ public class PetChatBridge {
     private void playSegments(final List<String> segs, final int idx) {
         if (segs == null || idx >= segs.size()) return;
         final String s = segs.get(idx);
+        if (idx == 0 && s != null) {
+            String lower = s.toLowerCase();
+            if (lower.contains("跳跃") || lower.contains("好耶") || lower.contains("庆祝") || lower.contains("完成")) {
+                if (service.getPetView() != null) service.getPetView().playOneShot("jumping");
+            } else if (lower.contains("跳舞") || lower.contains("啦啦") || lower.contains("开心")) {
+                if (service.getPetView() != null) service.getPetView().playOneShot("dancing");
+            } else if (lower.contains("你好") || lower.contains("戳戳")) {
+                if (service.getPetView() != null) service.getPetView().playOneShot("waving");
+            }
+        }
         if (idx < segs.size() - 1) {
             handler.post(new PetTypewriter(service, s, new Runnable() {
                 @Override
@@ -618,7 +640,10 @@ public class PetChatBridge {
             JSONArray messages = new JSONArray();
             JSONObject system = new JSONObject();
             system.put("role", "system");
-            system.put("content", config.apiPrompt);
+            String sysContent = (config.apiPrompt != null ? config.apiPrompt : "")
+                    + "\n\n" + PetMemoryManager.getFormattedPromptContext(service)
+                    + "\n\n当前宿主系统与任务实时进度：\n" + PetMemoryManager.getSystemProgressReport(service);
+            system.put("content", sysContent);
             messages.put(system);
             JSONObject user = new JSONObject();
             user.put("role", "user");
@@ -742,7 +767,11 @@ public class PetChatBridge {
                 JSONObject req = new JSONObject();
                 req.put("cwd", "/root");
                 req.put("type", "prompt");
-                req.put("message", message);
+                String piWebMsg = message;
+                if (PetMemoryManager.isProgressQuery(message)) {
+                    piWebMsg = message + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
+                }
+                req.put("message", piWebMsg);
                 conn.getOutputStream().write(req.toString().getBytes("UTF-8"));
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) {

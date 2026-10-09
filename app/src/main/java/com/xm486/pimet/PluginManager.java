@@ -1062,6 +1062,9 @@ public final class PluginManager {
         String lowerDesc = (originalDesc != null ? originalDesc : "").toLowerCase().trim();
 
         // 1. 精确匹配已知官方及社区核心扩展/工具/技能
+        if (lowerName.contains("pet-companion") || lowerName.contains("desktop-pet") || lowerName.contains("pet-agent")) {
+            return "动态桌宠专属智能体 · 具备独立长久记忆、系统进度感知汇报与动作互动能力";
+        }
         if (lowerName.equals("oh-my-pi") || lowerName.contains("oh-my-pi")) {
             return "全能 AI 编排与多智能体系统（内置代码审查、自动化重构、浏览器测试与架构专家）";
         }

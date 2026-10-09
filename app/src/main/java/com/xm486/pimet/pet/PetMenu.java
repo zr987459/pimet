@@ -315,6 +315,51 @@ public class PetMenu {
             divLp2.bottomMargin = dp(5);
             root.addView(div2, divLp2);
 
+            // ---- 桌宠专属子代理功能行: [🧠 汇报进度] [🗣️ 主动说话: 开/关] ----
+            LinearLayout petAgentRow = new LinearLayout(context);
+            petAgentRow.setOrientation(LinearLayout.HORIZONTAL);
+            petAgentRow.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams agentLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
+            agentLp.bottomMargin = dp(4);
+            petAgentRow.setLayoutParams(agentLp);
+
+            TextView btnProgress = buildCompactActionBtn("🧠 汇报进度", 0x228B5CF6, 0x558B5CF6, 0xFFDDD6FE, v -> {
+                dismiss();
+                String report = PetMemoryManager.getSystemProgressReport(context);
+                if (service != null) {
+                    service.showProactiveBubble(report);
+                    if (service.getPetView() != null) service.getPetView().playOneShot("waving");
+                } else if (activity != null) {
+                    activity.showPetBubble(report);
+                } else {
+                    Toast.makeText(context, report, Toast.LENGTH_LONG).show();
+                }
+            });
+            petAgentRow.addView(btnProgress, new LinearLayout.LayoutParams(0, dp(23), 1f));
+
+            View agentSpace = new View(context);
+            petAgentRow.addView(agentSpace, new LinearLayout.LayoutParams(dp(3), 1));
+
+            boolean proactiveOn = PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+            TextView btnProactive = buildCompactActionBtn(
+                    proactiveOn ? "🗣️ 主动说话: 开" : "🗣️ 主动说话: 关",
+                    proactiveOn ? 0x2210B981 : 0x2264748B,
+                    proactiveOn ? 0x5510B981 : 0x5564748B,
+                    proactiveOn ? 0xFFA7F3D0 : 0xFFCBD5E1,
+                    v -> {
+                        boolean newState = !PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, newState);
+                        Toast.makeText(context, newState ? "✅ 已开启桌宠主动关怀与闲聊" : "⏸️ 已暂停桌宠主动说话", Toast.LENGTH_SHORT).show();
+                        if (service != null) {
+                            if (newState) service.startProactiveChatter();
+                            else service.stopProactiveChatter();
+                        }
+                        dismiss();
+                    });
+            petAgentRow.addView(btnProactive, new LinearLayout.LayoutParams(0, dp(23), 1f));
+            root.addView(petAgentRow);
+
             // ---- 底部操作功能键行 1: [💬 快捷聊天(直接打开对应网页端)] [🌐 工作台] ----
             LinearLayout actionRow1 = new LinearLayout(context);
             actionRow1.setOrientation(LinearLayout.HORIZONTAL);

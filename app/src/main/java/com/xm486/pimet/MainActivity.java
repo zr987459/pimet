@@ -346,6 +346,7 @@ public class MainActivity extends AppCompatActivity {
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).attachActivity(this);
         PluginManager.ensureAndroidBridgeExtension(this);
+        com.xm486.pimet.pet.PetMemoryManager.ensurePetSubagentInstalled(this);
     }
 
     private String getPiWebUrl() {
