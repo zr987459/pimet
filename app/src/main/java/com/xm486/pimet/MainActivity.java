@@ -200,14 +200,23 @@ public class MainActivity extends AppCompatActivity {
     private TextView launchMetricPortTv;
     private TextView launchMetricEnvTv;
     private TextView launchMetricSizeTv;
-    private View btnActionCopyUrl;
-    private TextView launchCopyUrlDescTv;
-    private View btnActionOpenBrowser;
-    private View btnActionModelConfig;
-    private TextView launchModelDescTv;
+    private View btnLaunchFileManager;
+    private View btnLaunchPetToggle;
+    private TextView launchPetStatusTv;
+    private TextView launchPetIconTv;
+    private TextView launchPetStateBadge;
+    private View btnLaunchLogDetail;
+    private View btnLaunchLogCopy;
     private View btnLaunchLogRefresh;
     private View btnLaunchLogClear;
     private TextView launchLogTv;
+    private boolean isDetailLogMode = false;
+
+    // 更新中心组件
+    private TextView settingsPiWebVersionTv;
+    private TextView settingsAppVersionTv;
+    private View btnCheckPiWebUpdate;
+    private View btnCheckAppUpdate;
 
     // Pi-Web 工作台视图组件
     private View piWebStatusDot;
@@ -291,6 +300,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onReceive(Context context, Intent intent) {
             updatePetDisplay(PetRegistry.isPetEnabled(MainActivity.this));
+            updateLaunchPetUI();
             if (btnToggleGlobalOverlay != null) {
                 btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
                         ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
@@ -387,14 +397,21 @@ public class MainActivity extends AppCompatActivity {
         launchMetricPortTv = findViewById(R.id.launchMetricPortTv);
         launchMetricEnvTv = findViewById(R.id.launchMetricEnvTv);
         launchMetricSizeTv = findViewById(R.id.launchMetricSizeTv);
-        btnActionCopyUrl = findViewById(R.id.btnActionCopyUrl);
-        launchCopyUrlDescTv = findViewById(R.id.launchCopyUrlDescTv);
-        btnActionOpenBrowser = findViewById(R.id.btnActionOpenBrowser);
-        btnActionModelConfig = findViewById(R.id.btnActionModelConfig);
-        launchModelDescTv = findViewById(R.id.launchModelDescTv);
+        btnLaunchFileManager = findViewById(R.id.btnLaunchFileManager);
+        btnLaunchPetToggle = findViewById(R.id.btnLaunchPetToggle);
+        launchPetStatusTv = findViewById(R.id.launchPetStatusTv);
+        launchPetIconTv = findViewById(R.id.launchPetIconTv);
+        launchPetStateBadge = findViewById(R.id.launchPetStateBadge);
+        btnLaunchLogDetail = findViewById(R.id.btnLaunchLogDetail);
+        btnLaunchLogCopy = findViewById(R.id.btnLaunchLogCopy);
         btnLaunchLogRefresh = findViewById(R.id.btnLaunchLogRefresh);
         btnLaunchLogClear = findViewById(R.id.btnLaunchLogClear);
         launchLogTv = findViewById(R.id.launchLogTv);
+
+        settingsPiWebVersionTv = findViewById(R.id.settingsPiWebVersionTv);
+        settingsAppVersionTv = findViewById(R.id.settingsAppVersionTv);
+        btnCheckPiWebUpdate = findViewById(R.id.btnCheckPiWebUpdate);
+        btnCheckAppUpdate = findViewById(R.id.btnCheckAppUpdate);
 
         // Pi-Web 组件
         piWebProgressBar = findViewById(R.id.piWebProgressBar);
@@ -578,6 +595,7 @@ public class MainActivity extends AppCompatActivity {
         if (btnTogglePetEnabled != null) {
             btnTogglePetEnabled.setText(PetOverlayService.isRunning() ? "🐾 全局悬浮桌宠: 运行中" : "⚪ 全局悬浮桌宠: 未开启");
         }
+        updateLaunchPetUI();
     }
 
     private void updatePetPreview() {
@@ -2035,11 +2053,39 @@ public class MainActivity extends AppCompatActivity {
         btnLaunchStop.setOnClickListener(v -> stopPiWebService());
         btnLaunchDeploy.setOnClickListener(v -> triggerFullDeploy());
 
-        btnActionCopyUrl.setOnClickListener(v -> copyTextToClipboard(getPiWebUrl(), "访问地址已复制到剪切板"));
-        btnActionOpenBrowser.setOnClickListener(v -> openExternalBrowser());
-        btnActionModelConfig.setOnClickListener(v -> switchTab(3));
+        if (btnLaunchFileManager != null) {
+            btnLaunchFileManager.setOnClickListener(v -> new com.xm486.pimet.ui.FileBrowserDialog(this).show());
+        }
 
-        updateLaunchModelDesc();
+        if (btnLaunchPetToggle != null) {
+            btnLaunchPetToggle.setOnClickListener(v -> togglePetFromLaunch());
+        }
+
+        if (btnLaunchLogDetail != null) {
+            btnLaunchLogDetail.setOnClickListener(v -> {
+                isDetailLogMode = !isDetailLogMode;
+                if (btnLaunchLogDetail instanceof TextView) {
+                    ((TextView) btnLaunchLogDetail).setText(isDetailLogMode ? "📄 简略日志" : "🔍 详细日志");
+                }
+                refreshLaunchLog();
+            });
+        }
+
+        if (btnLaunchLogCopy != null) {
+            btnLaunchLogCopy.setOnClickListener(v -> {
+                if (launchLogTv != null && !TextUtils.isEmpty(launchLogTv.getText())) {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(ClipData.newPlainText("PiMetLog", launchLogTv.getText()));
+                        Toast.makeText(this, "守护日志已复制到剪切板", Toast.LENGTH_SHORT).show();
+                    }
+                } else {
+                    Toast.makeText(this, "暂无日志可复制", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        updateLaunchPetUI();
 
         btnLaunchLogRefresh.setOnClickListener(v -> refreshLaunchLog());
         btnLaunchLogClear.setOnClickListener(v -> {
@@ -2051,10 +2097,41 @@ public class MainActivity extends AppCompatActivity {
         refreshLaunchLog();
     }
 
-    private void updateLaunchModelDesc() {
-        String provider = PiMetConfig.getAiProvider(this);
-        String model = PiMetConfig.getAiModel(this);
-        launchModelDescTv.setText(provider + " · " + model);
+    private void updateLaunchPetUI() {
+        boolean enabled = PetRegistry.isPetEnabled(this) || PetOverlayService.isRunning();
+        if (launchPetStatusTv != null) {
+            launchPetStatusTv.setText(enabled ? "状态: 已开启" : "状态: 已关闭");
+            launchPetStatusTv.setTextColor(enabled ? 0xFF3FB950 : 0xFF8B949E);
+        }
+        if (launchPetStateBadge != null) {
+            launchPetStateBadge.setText(enabled ? "已开" : "已关");
+            launchPetStateBadge.setTextColor(enabled ? 0xFF3FB950 : 0xFF8B949E);
+        }
+        if (launchPetIconTv != null) {
+            launchPetIconTv.setText(enabled ? "🐾" : "💤");
+        }
+    }
+
+    private void togglePetFromLaunch() {
+        boolean currentlyActive = PetOverlayService.isRunning() || PetRegistry.isPetEnabled(this);
+        boolean willEnable = !currentlyActive;
+        PetRegistry.setPetEnabled(this, willEnable);
+        if (willEnable) {
+            if (!Settings.canDrawOverlays(this)) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+                Toast.makeText(this, "请授予悬浮窗权限以显示桌宠", Toast.LENGTH_LONG).show();
+            } else {
+                PetOverlayService.start(this);
+                Toast.makeText(this, "🐾 悬浮桌宠已开启", Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            PetOverlayService.stop(this);
+            Toast.makeText(this, "🐾 悬浮桌宠已关闭", Toast.LENGTH_SHORT).show();
+        }
+        updateLaunchPetUI();
+        updatePetDisplay(willEnable);
     }
 
     private void appendLaunchLog(String message) {
@@ -2071,12 +2148,40 @@ public class MainActivity extends AppCompatActivity {
 
     private void refreshLaunchLog() {
         new Thread(() -> {
-            String log = PiWebManager.readLastLog(this);
-            mainHandler.post(() -> {
-                if (!TextUtils.isEmpty(log)) {
-                    launchLogTv.setText(log);
+            String baseLog = PiWebManager.readLastLog(this);
+            final String displayText;
+            if (isDetailLogMode) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("=== 🔍 PiMet 守护诊断详细日志 ===\n");
+                sb.append("• 诊断时间: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new java.util.Date())).append("\n");
+                sb.append("• 应用版本: v").append(BuildConfig.VERSION_NAME).append("\n");
+                sb.append("• PRoot 容器: ").append(ProotManager.isRootfsExtracted(this) ? "已部署就绪 (OK)" : "未部署").append("\n");
+                sb.append("• Pi-Web 端口: ").append(PiMetConfig.getWebPort(this))
+                  .append(" (监听: ").append(isPiWebAlive ? "ALIVE 运行中" : "OFFLINE 未拉起").append(")\n");
+                sb.append("• Operit 端口: ").append(PetRegistry.getOperitPort(this)).append("\n");
+                sb.append("• ClawBench 端口: ").append(PetRegistry.getClawbenchPort(this)).append("\n");
+                sb.append("• Rikka 端口: ").append(PetRegistry.getRikkaPort(this)).append("\n");
+                sb.append("• 悬浮桌宠: ").append((PetRegistry.isPetEnabled(this) || PetOverlayService.isRunning()) ? "已开启" : "已关闭")
+                  .append(" (当前形象: ").append(PetRegistry.getCurrentPet(this)).append(")\n");
+
+                File rootfs = ProotManager.getRootfsDir(this);
+                if (rootfs != null && rootfs.exists()) {
+                    sb.append("• 容器根路径: ").append(rootfs.getAbsolutePath()).append("\n");
+                }
+                sb.append("----------------------------------------\n");
+                sb.append("=== 📜 守护进程实时日志 ===\n");
+                if (!TextUtils.isEmpty(baseLog)) {
+                    sb.append(baseLog);
                 } else {
-                    launchLogTv.setText("[系统就绪] 暂无守护日志");
+                    sb.append("[守护服务暂无新输出]");
+                }
+                displayText = sb.toString();
+            } else {
+                displayText = !TextUtils.isEmpty(baseLog) ? baseLog : "[系统就绪] 暂无守护日志";
+            }
+            mainHandler.post(() -> {
+                if (launchLogTv != null) {
+                    launchLogTv.setText(displayText);
                 }
             });
         }).start();
@@ -2885,6 +2990,8 @@ public class MainActivity extends AppCompatActivity {
 
                     initPetMonitor();
                     checkServiceStatus();
+                    refreshSettingsPortFields();
+                    updateLaunchStatusUI(isPiWebAlive);
                     Toast.makeText(this, "所有自定义端口与凭证已保存并生效！", Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
                     Toast.makeText(this, "无效端口数字: " + e.getMessage(), Toast.LENGTH_SHORT).show();
@@ -3086,6 +3193,67 @@ public class MainActivity extends AppCompatActivity {
 
         refreshStorageSize();
         refreshPrivilegeStatus();
+
+        initUpdateCenter();
+    }
+
+    private void initUpdateCenter() {
+        if (settingsPiWebVersionTv != null) {
+            settingsPiWebVersionTv.setText("已安装版本: " + UpdateManager.getInstalledPiWebVersion(this));
+        }
+        if (settingsAppVersionTv != null) {
+            settingsAppVersionTv.setText("当前客户端版本: v" + BuildConfig.VERSION_NAME);
+        }
+
+        if (btnCheckPiWebUpdate != null) {
+            btnCheckPiWebUpdate.setOnClickListener(v -> {
+                btnCheckPiWebUpdate.setEnabled(false);
+                Toast.makeText(this, "正在检测 Pi-Web 最新版本...", Toast.LENGTH_SHORT).show();
+                UpdateManager.checkPiWebUpdate(this, (success, info, message) -> {
+                    btnCheckPiWebUpdate.setEnabled(true);
+                    if (info != null && info.hasUpdate) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("🌐 发现 Pi-Web 工作台新版")
+                                .setMessage("当前版本: " + info.currentVersion + "\n最新版本: " + info.latestVersion + "\n\n升级采用平滑原地增量更新，将保留您所有的会话、插件与配置。\n是否立即无感升级？")
+                                .setPositiveButton("立即平滑升级", (d, w) -> {
+                                    Toast.makeText(this, "正在无感平滑升级 Pi-Web，请稍候...", Toast.LENGTH_LONG).show();
+                                    UpdateManager.updatePiWebInPlace(this, (upOk, data, upMsg) -> {
+                                        Toast.makeText(this, upMsg, Toast.LENGTH_LONG).show();
+                                        if (settingsPiWebVersionTv != null) {
+                                            settingsPiWebVersionTv.setText("已安装版本: " + UpdateManager.getInstalledPiWebVersion(this));
+                                        }
+                                    });
+                                })
+                                .setNegativeButton("稍后", null)
+                                .show();
+                    } else {
+                        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
+        }
+
+        if (btnCheckAppUpdate != null) {
+            btnCheckAppUpdate.setOnClickListener(v -> {
+                btnCheckAppUpdate.setEnabled(false);
+                Toast.makeText(this, "正在检测客户端新版...", Toast.LENGTH_SHORT).show();
+                UpdateManager.checkAppUpdate(this, (success, info, message) -> {
+                    btnCheckAppUpdate.setEnabled(true);
+                    if (info != null && info.hasUpdate) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("✨ 发现 PiMet 客户端新版本 " + info.latestVersion)
+                                .setMessage((info.releaseTitle != null ? info.releaseTitle + "\n\n" : "") +
+                                        "【更新日志】\n" + (info.changelog != null && !info.changelog.isEmpty() ? info.changelog : "常规体验与稳定性优化") +
+                                        "\n\n【提示】更新采用安全覆盖安装，完整保留现有数据、容器与桌宠。")
+                                .setPositiveButton("下载更新", (d, w) -> UpdateManager.startApkDownload(this, info.downloadUrl))
+                                .setNegativeButton("稍后再说", null)
+                                .show();
+                    } else {
+                        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
+        }
     }
 
     private void checkBatteryOptimizationPermission() {
@@ -3988,7 +4156,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void refreshSettingsUiFields() {
-        updateLaunchModelDesc();
+        updateLaunchPetUI();
         refreshSettingsPortFields();
     }
 
