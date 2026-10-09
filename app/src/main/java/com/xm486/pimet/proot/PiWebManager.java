@@ -79,35 +79,6 @@ public final class PiWebManager {
                     return;
                 }
 
-                // 检查并部署 Pi 核心命令行
-                if (!ProotManager.isPiCoreInstalled(context)) {
-                    mainHandler.post(() -> {
-                        if (listener != null) listener.onLog("• 正在初始化容器运行时核心...\n");
-                    });
-                    ProotManager.installPiCore(context, new ProotManager.InstallCallback() {
-                        @Override
-                        public void onProgress(String message, int percent) {
-                            mainHandler.post(() -> {
-                                if (listener != null) listener.onLog("• " + message + "\n");
-                            });
-                        }
-
-                        @Override
-                        public void onSuccess() {
-                            // 递归拉起 Pi-Web
-                            startInternal(context, isRestart, listener);
-                        }
-
-                        @Override
-                        public void onError(String error) {
-                            mainHandler.post(() -> {
-                                if (listener != null) listener.onError("初始化容器失败: " + error);
-                            });
-                        }
-                    });
-                    return;
-                }
-
                 int port = PiMetConfig.getWebPort(context);
 
                 // 若非强制重启模式且服务已就绪响应 HTTP，直接成功返回
