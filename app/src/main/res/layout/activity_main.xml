@@ -1846,6 +1846,97 @@
                         android:textSize="12sp" />
                 </LinearLayout>
 
+                <!-- 🤖 Pi 子代理中心 (Subagents) 管理卡片 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🤖 Pi 子代理中心 (Subagents)"
+                        android:textColor="#F0F6FC"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="与 Web 工作台及 ~/.pi/agent/agents/*.md 规范实时互通。支持设置工具白名单、技能、模型、思考级别、轮次与系统指令"
+                        android:textColor="#8B949E"
+                        android:textSize="12sp" />
+
+                    <Button
+                        android:id="@+id/btnOpenSubagentsSettings"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:text="🤖 管理子代理智能体 (浏览/新建/配置)"
+                        android:textColor="#58A6FF"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!-- 🗣️ 桌宠主动关怀与活跃度调节卡片 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🗣️ 桌宠主动关怀与活跃度"
+                        android:textColor="#F0F6FC"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="桌宠会结合系统运行状态、时段、电量与开发进度适时主动陪伴；支持调节发言间隔与防重复"
+                        android:textColor="#8B949E"
+                        android:textSize="12sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/btnToggleProactiveSettings"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="6dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:text="🗣️ 主动说话: 开启"
+                            android:textColor="#34D399"
+                            android:textSize="12sp" />
+
+                        <Button
+                            android:id="@+id/btnAdjustProactiveIntervalSettings"
+                            android:layout_width="0dp"
+                            android:layout_height="38dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:text="⏱️ 活跃度: 3分钟"
+                            android:textColor="#FDE68A"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
                 <!-- 致敬与开源卡片 -->
                 <LinearLayout
                     android:layout_width="match_parent"

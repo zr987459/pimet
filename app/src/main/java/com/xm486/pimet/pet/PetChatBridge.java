@@ -284,10 +284,10 @@ public class PetChatBridge {
                     }
                 }
             } catch (Throwable t) {
+                Log.w(TAG, "ChatTask processing error", t);
                 segments = Collections.singletonList(
-                        "请求异常（请检查配置或接口）: "
-                        + t.getClass().getSimpleName() + " - " + t.getMessage());
-                handler.post(() -> service.showFailureBubble("对话异常: " + t.getMessage()));
+                        "🐾 小元刚刚走神了一下，能再对我说一遍吗~");
+                handler.post(() -> service.showFailureBubble("小元连接超时或异常，请稍后重试"));
             } finally {
                 chatting = false;
                 // 结束阶段态，恢复监控驱动的状态刷新（顶栏回到 思考中/工具/回复中 等）
@@ -357,8 +357,8 @@ public class PetChatBridge {
         try {
             JSONObject body = buildOperitBody(config, msg);
             conn = (HttpURLConnection) new URL(config.operitUrl).openConnection();
-            conn.setConnectTimeout(30000);
-            conn.setReadTimeout(300000); // sync 模式：Operit 阻塞生成完整个回复才返回，长文本/多工具时可能很久
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(45000); // 保护时间，避免工具循环卡死桌宠
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
@@ -373,7 +373,8 @@ public class PetChatBridge {
             if (code != 200) {
                 String errBody = firstLine(readErrorStream(conn));
                 conn.disconnect();
-                return Collections.singletonList("HTTP " + code + " · " + errBody);
+                Log.w(TAG, "sendViaOperit HTTP " + code + ": " + errBody);
+                return Collections.singletonList("🐾 服务暂时有点忙碌 (HTTP " + code + ")，等会儿再聊哦~");
             }
 
             // sync 模式：Operit 阻塞执行完，返回 {"success":true,"chat_id":..,"ai_response":..}
@@ -383,21 +384,21 @@ public class PetChatBridge {
             if (result.optBoolean("success", false)) {
                 String ai = result.optString("ai_response", "").trim();
                 if (ai.isEmpty()) {
-                    return Collections.singletonList("唔...Operit 没返回内容，再试一次嘛");
+                    return Collections.singletonList("🐾 小元收到了，但刚刚走神了没回复出来，再问我一次嘛~");
                 }
                 return cleanWithNote(ai); // 工具/思考摘要 + 正文分段
             } else {
                 String err = firstLine(result.optString("error", "").trim());
-                return Collections.singletonList("Operit 出错: " + (err.isEmpty() ? "未知" : err));
+                Log.w(TAG, "sendViaOperit error: " + err);
+                return Collections.singletonList("🐾 刚刚遇到了一点小麻烦，主人再重新说一遍吧~");
             }
         } catch (Throwable t) {
             Log.w(TAG, "sendViaOperit failed", t);
             if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) {}
             if (t instanceof java.net.SocketTimeoutException) {
-                return Collections.singletonList("AI 思考/生成太久了（超过5分钟），没等到回复");
+                return Collections.singletonList("🐾 AI 思考稍微有点久，小元先为你记录下啦，稍后再问问看哦~");
             }
-            return Collections.singletonList("请求异常: "
-                    + t.getClass().getSimpleName() + " - " + t.getMessage());
+            return Collections.singletonList("🐾 唔...网络或服务连接稍有波动，请稍后重试~");
         }
     }
 
@@ -495,7 +496,9 @@ public class PetChatBridge {
             }
         }
         JSONObject body = new JSONObject();
-        body.put("message", message);
+        // 关键约束：防止大模型在日常闲聊时误触发连续工具调用
+        String promptMsg = "【桌面伴侣约束：当前为常驻桌宠日常互动，请直接使用亲切简明的语气作答（50字内）。非系统管理指令严禁循环调用工具】\n" + message;
+        body.put("message", promptMsg);
         body.put("response_mode", "sync");
         if (!chatId.isEmpty()) {
             body.put("chat_id", chatId);

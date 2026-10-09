@@ -247,14 +247,43 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         proactiveHandler.removeCallbacks(proactiveRunnable);
     }
 
+    private String lastProactiveMsg = null;
+
     public void showProactiveBubble(String msg) {
         if (bubbleView == null || msg == null || msg.trim().isEmpty()) return;
+        this.lastProactiveMsg = msg;
         bubbleHandler.removeCallbacks(bubbleHideRunnable);
-        bubbleView.setText("💬 " + msg);
+        bubbleView.setText("💬 " + msg + "\n(👉 点击进入互动)");
         bubbleView.setVisibility(View.VISIBLE);
         bubbleView.setAlpha(0f);
         bubbleView.animate().alpha(1f).setDuration(200).start();
-        bubbleHandler.postDelayed(bubbleHideRunnable, 6500);
+        bubbleHandler.postDelayed(bubbleHideRunnable, 8500);
+    }
+
+    /**
+     * 点击主动气泡直接展开互动面板并填充预设话题
+     */
+    public void onProactiveBubbleClicked(String text) {
+        if (!cardVisible) {
+            toggleCard();
+        }
+        if (statusCard != null) {
+            android.widget.EditText input = statusCard.getChatInput();
+            if (input != null) {
+                input.setText("聊聊刚才说的: " + text);
+                input.setSelection(input.getText().length());
+                input.requestFocus();
+            }
+        }
+    }
+
+    public void sendPromptDirectly(String prompt) {
+        if (!cardVisible) {
+            toggleCard();
+        }
+        if (chatBridge != null && prompt != null && !prompt.trim().isEmpty()) {
+            chatBridge.send(prompt);
+        }
     }
 
     @Override
@@ -354,7 +383,15 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         bg.setStroke(dp(1), 0x4460A5FA);
         bubbleView.setBackground(bg);
         bubbleView.setVisibility(View.GONE);
-        bubbleView.setOnClickListener(v -> openTargetConsole());
+        bubbleView.setOnClickListener(v -> {
+            if (lastProactiveMsg != null && !lastProactiveMsg.trim().isEmpty()) {
+                String promptText = lastProactiveMsg;
+                lastProactiveMsg = null;
+                onProactiveBubbleClicked(promptText);
+            } else {
+                openTargetConsole();
+            }
+        });
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,

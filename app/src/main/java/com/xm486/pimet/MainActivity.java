@@ -291,6 +291,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnSyncClipboard;
     private View btnFloatClipboard;
 
+    private Button btnOpenSubagentsSettings;
+    private Button btnToggleProactiveSettings;
+    private Button btnAdjustProactiveIntervalSettings;
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isPiWebAlive = false;
     private boolean isDeploying = false;
@@ -486,6 +490,10 @@ public class MainActivity extends AppCompatActivity {
         btnPetParams = findViewById(R.id.btnPetParams);
         btnPetShop = findViewById(R.id.btnPetShop);
         btnToggleGlobalOverlay = findViewById(R.id.btnToggleGlobalOverlay);
+
+        btnOpenSubagentsSettings = findViewById(R.id.btnOpenSubagentsSettings);
+        btnToggleProactiveSettings = findViewById(R.id.btnToggleProactiveSettings);
+        btnAdjustProactiveIntervalSettings = findViewById(R.id.btnAdjustProactiveIntervalSettings);
     }
 
     private void initNavigation() {
@@ -3193,7 +3201,78 @@ public class MainActivity extends AppCompatActivity {
         refreshStorageSize();
         refreshPrivilegeStatus();
 
+        initSubagentsAndProactiveSettings();
         initUpdateCenter();
+    }
+
+    private void initSubagentsAndProactiveSettings() {
+        if (btnOpenSubagentsSettings != null) {
+            btnOpenSubagentsSettings.setOnClickListener(v -> new com.xm486.pimet.subagent.SubAgentDialog(this).show());
+        }
+
+        updateProactiveSettingsUi();
+
+        if (btnToggleProactiveSettings != null) {
+            btnToggleProactiveSettings.setOnClickListener(v -> {
+                boolean cur = com.xm486.pimet.pet.PetRegistry.getBooleanPref(this,
+                        com.xm486.pimet.pet.PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+                com.xm486.pimet.pet.PetRegistry.setBooleanPref(this,
+                        com.xm486.pimet.pet.PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, !cur);
+                updateProactiveSettingsUi();
+                if (com.xm486.pimet.pet.PetOverlayService.isRunning()) {
+                    if (!cur) com.xm486.pimet.pet.PetOverlayService.getInstance().startProactiveChatter();
+                    else com.xm486.pimet.pet.PetOverlayService.getInstance().stopProactiveChatter();
+                }
+            });
+        }
+
+        if (btnAdjustProactiveIntervalSettings != null) {
+            btnAdjustProactiveIntervalSettings.setOnClickListener(v -> showActivenessSettingsDialog());
+        }
+    }
+
+    private void updateProactiveSettingsUi() {
+        boolean on = com.xm486.pimet.pet.PetRegistry.getBooleanPref(this,
+                com.xm486.pimet.pet.PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+        int min = com.xm486.pimet.pet.PetMemoryManager.getProactiveIntervalMin(this);
+        if (btnToggleProactiveSettings != null) {
+            btnToggleProactiveSettings.setText(on ? "🗣️ 主动说话: 开启" : "🗣️ 主动说话: 关闭");
+            btnToggleProactiveSettings.setTextColor(on ? 0xFF34D399 : 0xFF8B949E);
+        }
+        if (btnAdjustProactiveIntervalSettings != null) {
+            btnAdjustProactiveIntervalSettings.setText(com.xm486.pimet.pet.PetMemoryManager.getActivenessLabel(min));
+        }
+    }
+
+    private void showActivenessSettingsDialog() {
+        final String[] options = new String[]{
+                "🌟 话痨模式 (1分钟)",
+                "😊 适度陪伴 (3分钟 - 默认)",
+                "🍵 偶尔关怀 (8分钟)",
+                "🤫 安静守护 (15分钟)"
+        };
+        final int[] mins = new int[]{1, 3, 8, 15};
+        int cur = com.xm486.pimet.pet.PetMemoryManager.getProactiveIntervalMin(this);
+        int selected = 1;
+        for (int i = 0; i < mins.length; i++) {
+            if (mins[i] == cur) {
+                selected = i;
+                break;
+            }
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("⏱️ 调节桌宠主动关怀活跃度")
+                .setSingleChoiceItems(options, selected, (d, which) -> {
+                    d.dismiss();
+                    com.xm486.pimet.pet.PetMemoryManager.setProactiveIntervalMin(this, mins[which]);
+                    updateProactiveSettingsUi();
+                    if (com.xm486.pimet.pet.PetOverlayService.isRunning()) {
+                        com.xm486.pimet.pet.PetOverlayService.getInstance().startProactiveChatter();
+                    }
+                    Toast.makeText(this, "活跃度已设定: " + options[which], Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void initUpdateCenter() {
@@ -4012,35 +4091,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showAddSubagentDialog() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
-
-        final EditText nameInput = createDialogInput("智能体标识 (如 librarian)", false);
-        final EditText contentInput = createDialogInput("You are a specialized agent...\n", true);
-        contentInput.setMinLines(6);
-
-        layout.addView(createDialogLabel("智能体名称:"));
-        layout.addView(nameInput);
-        layout.addView(createDialogLabel("系统提示词 / 流程定义:"));
-        layout.addView(contentInput);
-
-        new AlertDialog.Builder(this)
-                .setTitle("新建 Subagent 子智能体")
-                .setView(layout)
-                .setPositiveButton("保存", (dialog, which) -> {
-                    String name = nameInput.getText().toString().trim();
-                    String prompt = contentInput.getText().toString().trim();
-                    if (name.isEmpty() || prompt.isEmpty()) {
-                        Toast.makeText(this, "名称与提示词不能为空", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    boolean ok = PluginManager.saveSubagent(this, name, prompt);
-                    Toast.makeText(this, ok ? "✔ Subagent 已创建！" : "创建失败", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                })
-                .setNegativeButton("取消", null)
-                .show();
+        new com.xm486.pimet.subagent.SubAgentDialog(this).show();
     }
 
     private void showEditGlobalSettingsDialog() {
@@ -4071,6 +4122,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showEditPluginConfigDialog(PluginManager.PluginItem item) {
+        if (item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
+            new com.xm486.pimet.subagent.SubAgentDialog(this).show();
+            return;
+        }
+
         String content = PluginManager.getPluginConfig(this, item);
         if (content == null || content.isEmpty()) {
             Toast.makeText(this, "该插件暂无文本配置文件，路径: " + item.path, Toast.LENGTH_LONG).show();

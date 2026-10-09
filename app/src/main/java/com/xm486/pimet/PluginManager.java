@@ -199,13 +199,26 @@ public final class PluginManager {
                 scanSkillsRecursive(skillsDir, list, addedPaths, null);
             }
 
-            // 5. 扫描 Subagents (~/.pi/agent/subagents)
+            // 5. 扫描 Subagents 标准目录 (~/.pi/agent/agents) 与兼容目录 (~/.pi/agent/subagents)
+            File agentsDir = new File(piAgentDir, "agents");
+            if (agentsDir.exists() && agentsDir.isDirectory()) {
+                File[] files = agentsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".") || !f.getName().endsWith(".md")) continue;
+                        if (addedPaths.add(f.getAbsolutePath())) {
+                            list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "Pi 标准子代理: " + f.getName()));
+                        }
+                    }
+                }
+            }
+
             File subagentsDir = new File(piAgentDir, "subagents");
             if (subagentsDir.exists() && subagentsDir.isDirectory()) {
                 File[] files = subagentsDir.listFiles();
                 if (files != null) {
                     for (File f : files) {
-                        if (f.getName().startsWith(".")) continue;
+                        if (f.getName().startsWith(".") || !f.getName().endsWith(".md")) continue;
                         if (addedPaths.add(f.getAbsolutePath())) {
                             list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "子代理模板: " + f.getName()));
                         }
@@ -516,7 +529,7 @@ public final class PluginManager {
     public static boolean saveSubagent(Context context, String agentName, String promptContent) {
         try {
             File rootfs = ProotManager.getRootfsDir(context);
-            File agentDir = new File(rootfs, "root/.pi/agent/subagents");
+            File agentDir = new File(rootfs, "root/.pi/agent/agents");
             agentDir.mkdirs();
             File agentFile = new File(agentDir, agentName.trim().endsWith(".md") ? agentName.trim() : (agentName.trim() + ".md"));
             writeFile(agentFile, promptContent);

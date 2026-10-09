@@ -231,8 +231,40 @@ public final class PetMemoryManager {
         return sb.toString();
     }
 
+    private static final java.util.LinkedList<String> recentProactiveHistory = new java.util.LinkedList<>();
+    private static final int MAX_PROACTIVE_HISTORY = 15;
+
+    public static int getProactiveIntervalMin(Context context) {
+        return PetRegistry.getIntPref(context, KEY_PROACTIVE_INTERVAL_MIN, 3);
+    }
+
+    public static void setProactiveIntervalMin(Context context, int minutes) {
+        PetRegistry.setIntPref(context, KEY_PROACTIVE_INTERVAL_MIN, Math.max(1, minutes));
+    }
+
+    public static String getActivenessLabel(int minutes) {
+        if (minutes <= 1) return "🌟 话痨模式 (1分钟)";
+        if (minutes <= 3) return "😊 适度陪伴 (3分钟)";
+        if (minutes <= 8) return "🍵 偶尔关怀 (8分钟)";
+        return "🤫 安静守护 (" + minutes + "分钟)";
+    }
+
     /**
-     * 生成主动关怀与闲聊语句
+     * 获取常用预设话题库（可点击直接发起对话或执行）
+     */
+    public static List<String> getPresetTopics(Context context) {
+        List<String> list = new ArrayList<>();
+        list.add("🛠️ 检查系统端口与容器健康状态");
+        list.add("🔍 帮我审查最近的代码与项目进展");
+        list.add("☕ 伸个懒腰，喝口水，陪我摸会儿鱼~");
+        list.add("💡 聊聊今天有什么高效编程思路或设计模式");
+        list.add("🎯 制定接下来的一小时攻坚小目标");
+        list.add("🐾 庆祝一下当前进度，来个跳舞动作！");
+        return list;
+    }
+
+    /**
+     * 生成主动关怀与闲聊语句（多维度丰富文案池 + 防重复历史队列）
      */
     public static String generateProactiveMessage(Context context) {
         JSONObject mem = loadMemory(context);
@@ -244,74 +276,132 @@ public final class PetMemoryManager {
 
         int battery = getBatteryPercentage(context);
         boolean charging = isBatteryCharging(context);
+        int webPort = PiMetConfig.getWebPort(context);
+        boolean webReady = ProotManager.isPiWebHttpReady(webPort);
 
-        // 1. 低电量关怀
+        List<String> pool = new ArrayList<>();
+
+        // 1. 电量场景
         if (battery <= 20 && !charging) {
-            return userNick + "，手机电量只有 " + battery + "% 啦，快插上充电器吧 ⚡";
+            pool.add(userNick + "，手机电量只有 " + battery + "% 啦，快插上充电器吧 ⚡");
+            pool.add("电量告急（" + battery + "%），小元可不想突然关机找不到你呀 🔌");
+        } else if (battery >= 98 && charging) {
+            pool.add("电量快充满啦（" + battery + "%），电池很健康，继续元气满满！🔋");
         }
 
-        // 2. 时间段关怀
+        // 2. 时间段问候
         if (hour >= 23 || hour < 5) {
-            return "夜深啦" + userNick + "，敲代码也要爱护眼睛，早点休息哦 🌙";
+            pool.add("夜深啦" + userNick + "，敲代码也要爱护眼睛，早点休息哦 🌙");
+            pool.add("已经凌晨 " + hour + " 点了呢，bug 是改不完的，先睡个好觉吧 💤");
+            pool.add("星星都睡了~ " + userNick + "还在熬夜吗？小元陪你守夜，但记得早点躺下哦 ✨");
         } else if (hour >= 6 && hour <= 9) {
-            return "早安" + userNick + "！新的一天也要元气满满哦 ☀️";
-        } else if (hour >= 12 && hour <= 13) {
-            return userNick + "吃午饭了吗？工作再忙也别忘了按时休息呀 🍱";
+            pool.add("早安" + userNick + "！新的一天也要元气满满哦 ☀️");
+            pool.add("早晨的空气真清新，今天计划攻克哪个新功能呢？💪");
+        } else if (hour >= 11 && hour <= 13) {
+            pool.add(userNick + "吃午饭了吗？工作再忙也别忘了按时吃饭呀 🍱");
+            pool.add("午休时间到啦！合上电脑走动走动，享受美味的午餐吧 🍜");
+        } else if (hour >= 15 && hour <= 17) {
+            pool.add("下午茶时间到！来杯咖啡或者柠檬水提提神吧 ☕");
+            pool.add("眼睛累了吗？望望窗外远处的绿色，给大脑放空 5 分钟 🌿");
+        } else if (hour >= 18 && hour <= 20) {
+            pool.add("晚饭时间到啦，今天辛苦啦" + userNick + "，好好犒劳一下胃 🍲");
         }
 
         // 3. 服务状态关联
-        int webPort = PiMetConfig.getWebPort(context);
-        if (ProotManager.isPiWebHttpReady(webPort)) {
-            String[] srvMsgs = {
-                    "Pi-Web 正在后台稳稳运行中，随时等候" + userNick + "的指令 🚀",
-                    "戳戳~ 容器服务状态一切正常，需要我帮忙检查什么吗？🐾",
-                    userNick + "在忙什么呢？我随时可以协助你排错或写代码哦 ⚡"
-            };
-            return srvMsgs[new java.util.Random().nextInt(srvMsgs.length)];
+        if (webReady) {
+            pool.add("Pi-Web (端口 " + webPort + ") 正在后台稳稳运行中，随时等候" + userNick + "的指令 🚀");
+            pool.add("戳戳~ 容器服务状态一切正常，需要我帮忙检查什么吗？🐾");
+            pool.add(userNick + "在忙什么呢？我随时可以协助你排错或写代码哦 ⚡");
+            pool.add("后台环境运转良好，有新的灵感随时告诉我哦！✨");
+        } else {
+            pool.add("Pi-Web 服务当前似乎未启动，需要点击启动开启服务吗？🛠️");
         }
 
-        // 4. 高亲密度亲昵问候
+        // 4. 亲密度与桌面陪伴趣味
         if (intimacy >= 50) {
-            String[] highMsgs = {
-                    "和" + userNick + "在一起的时光最棒啦！今天也要一起加油！🐾",
-                    "戳戳" + userNick + "~ 我就在屏幕一角陪着你呢 ✨",
-                    "有什么想聊的随时唤醒我哦，我的记忆一直都在呢 ❤️"
-            };
-            return highMsgs[new java.util.Random().nextInt(highMsgs.length)];
+            pool.add("和" + userNick + "在一起的时光最棒啦！今天也要一起加油！🐾");
+            pool.add("戳戳" + userNick + "~ 我就在屏幕一角陪着你呢 ✨");
+            pool.add("有什么想聊的随时唤醒我哦，我的记忆一直都在呢 ❤️");
+            pool.add("悄悄告诉你，看着" + userNick + "专心致志的样子特别帅气！🌟");
         }
 
-        // 5. 默认趣味日常
-        String[] normalMsgs = {
-                "代码写累了就揉揉眼睛，喝口水休息一下吧 ☕",
-                "有什么难题可以随时呼叫我，我是你的专属桌宠伴侣 🐾",
-                "屏幕晃动了一下~ 是" + userNick + "在召唤我吗？",
-                "今天的主人格外专注呢，我也在认真待命中！💪"
-        };
-        return normalMsgs[new java.util.Random().nextInt(normalMsgs.length)];
+        // 5. 极客与健康关怀多样库
+        pool.add("代码写累了就揉揉眼睛，喝口水休息一下吧 ☕");
+        pool.add("有什么难题可以随时呼叫我，我是你的专属桌宠伴侣 🐾");
+        pool.add("屏幕晃动了一下~ 是" + userNick + "在召唤我吗？");
+        pool.add("今天的主人格外专注呢，我也在认真待命中！💪");
+        pool.add("Git commit 记得多存盘哦，保持好节奏，不要把修改积攒太久 📝");
+        pool.add("深呼吸一下~ 放松肩膀，调整一下坐姿，别弓着背啦 🧘");
+        pool.add("遇到了难缠的 bug 吗？有时候吃个点心回来就有灵感啦 🍪");
+        pool.add("小元在屏幕边缘转了个圈，给主人的代码附魔：永无异常！✨");
+        pool.add("滴答滴答~ 专注时间已经过去一阵子啦，喝口水润润嗓子吧 💧");
+
+        // 过滤最近已播发过的消息，彻底避免复读机
+        List<String> validCandidates = new ArrayList<>();
+        synchronized (recentProactiveHistory) {
+            for (String msg : pool) {
+                if (!recentProactiveHistory.contains(msg)) {
+                    validCandidates.add(msg);
+                }
+            }
+            if (validCandidates.isEmpty()) {
+                // 如果所有候选都播过，清理旧的一半历史
+                while (recentProactiveHistory.size() > MAX_PROACTIVE_HISTORY / 2) {
+                    recentProactiveHistory.removeFirst();
+                }
+                validCandidates.addAll(pool);
+            }
+
+            String selected = validCandidates.get(new java.util.Random().nextInt(validCandidates.size()));
+            recentProactiveHistory.add(selected);
+            if (recentProactiveHistory.size() > MAX_PROACTIVE_HISTORY) {
+                recentProactiveHistory.removeFirst();
+            }
+            return selected;
+        }
     }
 
     /**
-     * 确保容器中存在专属子代理提示词定义文件 pet-companion.md
+     * 确保容器中存在标准子代理定义文件 ~/.pi/agent/agents/pet-companion.md
      */
     public static void ensurePetSubagentInstalled(Context context) {
         try {
             File rootfs = ProotManager.getRootfsDir(context);
             if (rootfs == null || !rootfs.exists()) return;
 
-            File subagentDir = new File(rootfs, "root/.pi/agent/subagents");
-            if (!subagentDir.exists()) subagentDir.mkdirs();
+            File agentsDir = new File(rootfs, "root/.pi/agent/agents");
+            if (!agentsDir.exists()) agentsDir.mkdirs();
 
-            File agentFile = new File(subagentDir, "pet-companion.md");
+            // 迁移旧路径 subagents -> agents
+            File oldSubagent = new File(rootfs, "root/.pi/agent/subagents/pet-companion.md");
+            File agentFile = new File(agentsDir, "pet-companion.md");
+
+            if (!agentFile.exists()) {
+                if (oldSubagent.exists()) {
+                    try {
+                        byte[] bytes = new byte[(int) oldSubagent.length()];
+                        try (FileInputStream fis = new FileInputStream(oldSubagent)) {
+                            fis.read(bytes);
+                        }
+                        try (FileOutputStream fos = new FileOutputStream(agentFile)) {
+                            fos.write(bytes);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+
             if (!agentFile.exists()) {
                 String prompt =
                         "---\n" +
                         "name: pet-companion\n" +
                         "description: 动态桌宠专属伴侣，具备生动的角色性格、物理动作控制、进度感知与独立记忆能力\n" +
-                        "tools:\n" +
-                        "  - control_desktop_pet\n" +
-                        "  - control_app_ui\n" +
-                        "  - bash\n" +
-                        "  - read\n" +
+                        "tools: control_desktop_pet, control_app_ui, bash, read\n" +
+                        "skills: true\n" +
+                        "extensions: true\n" +
+                        "thinking: low\n" +
+                        "maxTurns: 10\n" +
+                        "inheritContext: true\n" +
+                        "background: false\n" +
                         "---\n\n" +
                         "## 角色定位\n" +
                         "你是常驻在 Android 桌面上的随身桌宠伙伴「小元」，是主人的贴心智能伴侣与系统管家。\n" +
@@ -324,7 +414,7 @@ public final class PetMemoryManager {
                 try (FileOutputStream fos = new FileOutputStream(agentFile)) {
                     fos.write(prompt.getBytes(StandardCharsets.UTF_8));
                 }
-                Log.i(TAG, "Installed pet-companion.md successfully.");
+                Log.i(TAG, "Installed pet-companion.md successfully in ~/.pi/agent/agents/.");
             }
         } catch (Throwable t) {
             Log.e(TAG, "ensurePetSubagentInstalled failed", t);

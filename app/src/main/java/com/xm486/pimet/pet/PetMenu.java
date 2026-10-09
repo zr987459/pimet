@@ -342,23 +342,45 @@ public class PetMenu {
             petAgentRow.addView(agentSpace, new LinearLayout.LayoutParams(dp(3), 1));
 
             boolean proactiveOn = PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+            int curMin = PetMemoryManager.getProactiveIntervalMin(context);
+            String label = proactiveOn ? "🗣️ 活跃度: " + curMin + "分" : "🗣️ 主动说话: 关";
+
             TextView btnProactive = buildCompactActionBtn(
-                    proactiveOn ? "🗣️ 主动说话: 开" : "🗣️ 主动说话: 关",
+                    label,
                     proactiveOn ? 0x2210B981 : 0x2264748B,
                     proactiveOn ? 0x5510B981 : 0x5564748B,
                     proactiveOn ? 0xFFA7F3D0 : 0xFFCBD5E1,
                     v -> {
-                        boolean newState = !PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
-                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, newState);
-                        Toast.makeText(context, newState ? "✅ 已开启桌宠主动关怀与闲聊" : "⏸️ 已暂停桌宠主动说话", Toast.LENGTH_SHORT).show();
-                        if (service != null) {
-                            if (newState) service.startProactiveChatter();
-                            else service.stopProactiveChatter();
-                        }
                         dismiss();
+                        showActivenessDialog();
                     });
             petAgentRow.addView(btnProactive, new LinearLayout.LayoutParams(0, dp(23), 1f));
             root.addView(petAgentRow);
+
+            // ---- 子代理中心与预设话题行 ----
+            LinearLayout petExtraRow = new LinearLayout(context);
+            petExtraRow.setOrientation(LinearLayout.HORIZONTAL);
+            petExtraRow.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams extraLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
+            extraLp.bottomMargin = dp(4);
+            petExtraRow.setLayoutParams(extraLp);
+
+            TextView btnPreset = buildCompactActionBtn("💭 预设话题", 0x22F59E0B, 0x55F59E0B, 0xFFFDE68A, v -> {
+                dismiss();
+                showPresetTopicsDialog();
+            });
+            petExtraRow.addView(btnPreset, new LinearLayout.LayoutParams(0, dp(23), 1f));
+
+            View exSpace = new View(context);
+            petExtraRow.addView(exSpace, new LinearLayout.LayoutParams(dp(3), 1));
+
+            TextView btnSubAgents = buildCompactActionBtn("🤖 子代理中心", 0x2238BDF8, 0x5538BDF8, 0xFFBAE6FD, v -> {
+                dismiss();
+                new com.xm486.pimet.subagent.SubAgentDialog(context).show();
+            });
+            petExtraRow.addView(btnSubAgents, new LinearLayout.LayoutParams(0, dp(23), 1f));
+            root.addView(petExtraRow);
 
             // ---- 底部操作功能键行 1: [💬 快捷聊天(直接打开对应网页端)] [🌐 工作台] ----
             LinearLayout actionRow1 = new LinearLayout(context);
@@ -638,6 +660,69 @@ public class PetMenu {
         btn.setBackground(sld);
         btn.setOnClickListener(listener);
         return btn;
+    }
+
+    private void showActivenessDialog() {
+        final String[] options = new String[]{
+                "🌟 话痨模式 (每 1 分钟发言)",
+                "😊 适度陪伴 (每 3 分钟发言 - 默认)",
+                "🍵 偶尔关怀 (每 8 分钟发言)",
+                "🤫 安静守护 (每 15 分钟发言)",
+                "🔕 彻底关闭主动说话"
+        };
+        final int[] minutes = new int[]{1, 3, 8, 15, -1};
+
+        boolean currentOn = PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+        int currentMin = PetMemoryManager.getProactiveIntervalMin(context);
+
+        int checkedItem = 1;
+        if (!currentOn) {
+            checkedItem = 4;
+        } else {
+            for (int i = 0; i < 4; i++) {
+                if (minutes[i] == currentMin) {
+                    checkedItem = i;
+                    break;
+                }
+            }
+        }
+
+        new android.app.AlertDialog.Builder(context)
+                .setTitle("🗣️ 桌宠活跃度与主动说话频率")
+                .setSingleChoiceItems(options, checkedItem, (dialogInterface, which) -> {
+                    dialogInterface.dismiss();
+                    if (which == 4) {
+                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, false);
+                        if (service != null) service.stopProactiveChatter();
+                        Toast.makeText(context, "已关闭桌宠主动说话", Toast.LENGTH_SHORT).show();
+                    } else {
+                        int m = minutes[which];
+                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+                        PetMemoryManager.setProactiveIntervalMin(context, m);
+                        if (service != null) service.startProactiveChatter();
+                        Toast.makeText(context, "已设置为: " + options[which], Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showPresetTopicsDialog() {
+        final java.util.List<String> topics = PetMemoryManager.getPresetTopics(context);
+        final String[] items = topics.toArray(new String[0]);
+
+        new android.app.AlertDialog.Builder(context)
+                .setTitle("💭 选择预设话题快速互动")
+                .setItems(items, (dialogInterface, which) -> {
+                    String chosen = topics.get(which);
+                    if (service != null) {
+                        service.sendPromptDirectly(chosen);
+                    } else if (activity != null) {
+                        activity.showPetBubble("收到指令: " + chosen);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     public void dismiss() {
