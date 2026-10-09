@@ -7,8 +7,11 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.system.Os;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -63,31 +66,61 @@ public class FileBrowserDialog {
     public static class FileItem {
         public final File file;
         public final boolean isDirectory;
+        public final boolean isSymlink;
+        public final File resolvedTarget;
         public final String name;
         public final long size;
         public final long lastModified;
         public final int childCount;
 
-        public FileItem(File file) {
+        public FileItem(File file, File rootfs) {
             this.file = file;
-            this.isDirectory = file.isDirectory();
+            boolean isDir = file.isDirectory();
+            boolean symlink = false;
+            File resolved = file;
+            if (!isDir) {
+                resolved = resolveSymlink(rootfs, file);
+                if (resolved != null && resolved.exists() && resolved.isDirectory()) {
+                    isDir = true;
+                    symlink = true;
+                }
+            }
+            this.isDirectory = isDir;
+            this.isSymlink = symlink;
+            this.resolvedTarget = resolved != null ? resolved : file;
             this.name = file.getName();
             this.lastModified = file.lastModified();
             if (this.isDirectory) {
-                File[] list = file.listFiles();
+                String[] list = this.resolvedTarget.list();
                 this.childCount = list != null ? list.length : 0;
-                long total = 0;
-                if (list != null) {
-                    for (File c : list) {
-                        if (c.isFile()) total += c.length();
-                    }
-                }
-                this.size = total;
+                this.size = 0;
             } else {
                 this.childCount = 0;
                 this.size = file.length();
             }
         }
+    }
+
+    public static File resolveSymlink(File rootfs, File file) {
+        if (file == null) return null;
+        try {
+            String targetStr = Os.readlink(file.getAbsolutePath());
+            if (targetStr != null && !targetStr.isEmpty()) {
+                if (targetStr.startsWith("/")) {
+                    if (rootfs != null) {
+                        File candidate = new File(rootfs, targetStr.substring(1));
+                        if (candidate.exists()) return candidate;
+                    }
+                } else {
+                    File parent = file.getParentFile();
+                    if (parent != null) {
+                        File candidate = new File(parent, targetStr);
+                        if (candidate.exists()) return candidate;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return file;
     }
 
     public FileBrowserDialog(Context context) {
@@ -173,8 +206,20 @@ public class FileBrowserDialog {
             if (usrDir.exists()) {
                 shortcutBar.addView(buildChipBtn("📦 /usr", v -> navigateTo(usrDir)));
             }
+            File tmpDir = new File(rootfs, "tmp");
+            if (tmpDir.exists()) {
+                shortcutBar.addView(buildChipBtn("🌐 /tmp", v -> navigateTo(tmpDir)));
+            }
+            File varDir = new File(rootfs, "var");
+            if (varDir.exists()) {
+                shortcutBar.addView(buildChipBtn("💾 /var", v -> navigateTo(varDir)));
+            }
         }
-        shortcutBar.addView(buildChipBtn("📂 App数据私有目录", v -> navigateTo(context.getFilesDir())));
+        File sdcard = Environment.getExternalStorageDirectory();
+        if (sdcard != null && sdcard.exists()) {
+            shortcutBar.addView(buildChipBtn("📱 存储 (/sdcard)", v -> navigateTo(sdcard)));
+        }
+        shortcutBar.addView(buildChipBtn("📂 App私有目录", v -> navigateTo(context.getFilesDir())));
 
         hsv.addView(shortcutBar);
         root.addView(hsv);
@@ -194,6 +239,15 @@ public class FileBrowserDialog {
         tvCurrentPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvCurrentPath.setTypeface(Typeface.MONOSPACE);
         tvCurrentPath.setSingleLine(false);
+        tvCurrentPath.setOnClickListener(v -> {
+            if (currentDir != null) {
+                ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("CurrentPath", currentDir.getAbsolutePath()));
+                    Toast.makeText(context, "已复制当前路径", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
         pathCard.addView(tvCurrentPath);
 
         tvPathSummary = new TextView(context);
@@ -219,7 +273,7 @@ public class FileBrowserDialog {
         listView.setOnItemClickListener((parent, view, position, id) -> {
             FileItem item = fileItems.get(position);
             if (item.isDirectory) {
-                navigateTo(item.file);
+                navigateTo(item.resolvedTarget != null ? item.resolvedTarget : item.file);
             } else {
                 showFilePreviewDialog(item.file);
             }
@@ -247,12 +301,22 @@ public class FileBrowserDialog {
     }
 
     private void navigateTo(File dir) {
-        if (dir == null || !dir.exists() || !dir.isDirectory()) {
+        if (dir == null) {
             Toast.makeText(context, "目录不存在或无法访问", Toast.LENGTH_SHORT).show();
             return;
         }
-        this.currentDir = dir;
-        loadCurrentDir();
+        File target = resolveSymlink(rootDir, dir);
+        if (target != null && target.exists() && target.isDirectory()) {
+            this.currentDir = target;
+            loadCurrentDir();
+            return;
+        }
+        if (dir.exists() && dir.isDirectory()) {
+            this.currentDir = dir;
+            loadCurrentDir();
+            return;
+        }
+        Toast.makeText(context, "目录不存在或无法访问", Toast.LENGTH_SHORT).show();
     }
 
     private void navigateUp() {
@@ -304,7 +368,7 @@ public class FileBrowserDialog {
                 });
 
                 for (File f : files) {
-                    FileItem item = new FileItem(f);
+                    FileItem item = new FileItem(f, rootDir);
                     list.add(item);
                     if (item.isDirectory) {
                         dirCount++;
@@ -441,9 +505,10 @@ public class FileBrowserDialog {
             String timeStr = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date(item.lastModified));
 
             if (item.isDirectory) {
-                icon.setText("📁");
-                name.setTextColor(0xFF58A6FF);
-                meta.setText(String.format(Locale.getDefault(), "[文件夹 · %d 项]  ·  %s", item.childCount, timeStr));
+                icon.setText(item.isSymlink ? "🔗" : "📁");
+                name.setTextColor(item.isSymlink ? 0xFF79C0FF : 0xFF58A6FF);
+                meta.setText(String.format(Locale.getDefault(), "[%s · %d 项]  ·  %s",
+                        item.isSymlink ? "快捷链接目录" : "文件夹", item.childCount, timeStr));
                 arrow.setText("›");
                 arrow.setTextColor(0xFF58A6FF);
             } else {

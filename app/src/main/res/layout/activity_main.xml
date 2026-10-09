@@ -242,23 +242,23 @@
                         android:id="@+id/btnLaunchFileManager"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginEnd="6dp"
+                        android:layout_marginEnd="5dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_card_modern"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:padding="12dp">
+                        android:padding="10dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="📁"
-                            android:textSize="22sp" />
+                            android:textSize="20sp" />
 
                         <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="10dp"
+                            android:layout_marginStart="8dp"
                             android:layout_weight="1"
                             android:orientation="vertical">
 
@@ -267,16 +267,20 @@
                                 android:layout_height="wrap_content"
                                 android:text="文件管理"
                                 android:textColor="#F0F6FC"
-                                android:textSize="14sp"
-                                android:textStyle="bold" />
+                                android:textSize="13.5sp"
+                                android:textStyle="bold"
+                                android:singleLine="true"
+                                android:ellipsize="end" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
-                                android:text="浏览容器文件与大小"
+                                android:text="容器全量浏览"
                                 android:textColor="#8B949E"
-                                android:textSize="11sp" />
+                                android:textSize="10.5sp"
+                                android:singleLine="true"
+                                android:ellipsize="end" />
                         </LinearLayout>
 
                         <TextView
@@ -293,24 +297,24 @@
                         android:id="@+id/btnLaunchPetToggle"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
+                        android:layout_marginStart="5dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_card_modern"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
-                        android:padding="12dp">
+                        android:padding="10dp">
 
                         <TextView
                             android:id="@+id/launchPetIconTv"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="🐾"
-                            android:textSize="22sp" />
+                            android:textSize="20sp" />
 
                         <LinearLayout
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="10dp"
+                            android:layout_marginStart="8dp"
                             android:layout_weight="1"
                             android:orientation="vertical">
 
@@ -319,17 +323,21 @@
                                 android:layout_height="wrap_content"
                                 android:text="桌宠开关"
                                 android:textColor="#F0F6FC"
-                                android:textSize="14sp"
-                                android:textStyle="bold" />
+                                android:textSize="13.5sp"
+                                android:textStyle="bold"
+                                android:singleLine="true"
+                                android:ellipsize="end" />
 
                             <TextView
                                 android:id="@+id/launchPetStatusTv"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
-                                android:text="状态: 已开启"
+                                android:text="运行中"
                                 android:textColor="#3FB950"
-                                android:textSize="11sp" />
+                                android:textSize="10.5sp"
+                                android:singleLine="true"
+                                android:ellipsize="end" />
                         </LinearLayout>
 
                         <TextView
@@ -337,13 +345,13 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:background="@drawable/bg_status_badge"
-                            android:paddingStart="6dp"
+                            android:paddingStart="4dp"
                             android:paddingTop="2dp"
-                            android:paddingEnd="6dp"
+                            android:paddingEnd="4dp"
                             android:paddingBottom="2dp"
-                            android:text="开/关"
+                            android:text="已开"
                             android:textColor="#58A6FF"
-                            android:textSize="11sp"
+                            android:textSize="10sp"
                             android:textStyle="bold" />
                     </LinearLayout>
                 </LinearLayout>
@@ -368,64 +376,66 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:text="📜 守护服务运行日志"
-                            android:textColor="#8B949E"
+                            android:textColor="#C9D1D9"
                             android:textSize="12sp"
-                            android:textStyle="bold" />
+                            android:textStyle="bold"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
 
                         <TextView
                             android:id="@+id/btnLaunchLogDetail"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="6dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:paddingStart="8dp"
-                            android:paddingTop="3dp"
-                            android:paddingEnd="8dp"
-                            android:paddingBottom="3dp"
-                            android:text="🔍 详细日志"
+                            android:paddingStart="6dp"
+                            android:paddingTop="2.5dp"
+                            android:paddingEnd="6dp"
+                            android:paddingBottom="2.5dp"
+                            android:text="🔍 详情"
                             android:textColor="#58A6FF"
-                            android:textSize="11sp" />
+                            android:textSize="10.5sp" />
 
                         <TextView
                             android:id="@+id/btnLaunchLogCopy"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginStart="4dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:paddingStart="8dp"
-                            android:paddingTop="3dp"
-                            android:paddingEnd="8dp"
-                            android:paddingBottom="3dp"
+                            android:paddingStart="6dp"
+                            android:paddingTop="2.5dp"
+                            android:paddingEnd="6dp"
+                            android:paddingBottom="2.5dp"
                             android:text="📋 复制"
                             android:textColor="#C9D1D9"
-                            android:textSize="11sp" />
+                            android:textSize="10.5sp" />
 
                         <TextView
                             android:id="@+id/btnLaunchLogRefresh"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:paddingStart="8dp"
-                            android:paddingTop="3dp"
-                            android:paddingEnd="8dp"
-                            android:paddingBottom="3dp"
+                            android:paddingStart="6dp"
+                            android:paddingTop="2.5dp"
+                            android:paddingEnd="6dp"
+                            android:paddingBottom="2.5dp"
                             android:text="🔄 刷新"
                             android:textColor="#C9D1D9"
-                            android:textSize="11sp" />
+                            android:textSize="10.5sp" />
 
                         <TextView
                             android:id="@+id/btnLaunchLogClear"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="6dp"
+                            android:layout_marginStart="4dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:paddingStart="8dp"
-                            android:paddingTop="3dp"
-                            android:paddingEnd="8dp"
-                            android:paddingBottom="3dp"
+                            android:paddingStart="6dp"
+                            android:paddingTop="2.5dp"
+                            android:paddingEnd="6dp"
+                            android:paddingBottom="2.5dp"
                             android:text="🧹 清空"
-                            android:textColor="#C9D1D9"
-                            android:textSize="11sp" />
+                            android:textColor="#8B949E"
+                            android:textSize="10.5sp" />
                     </LinearLayout>
 
                     <ScrollView
@@ -1509,36 +1519,48 @@
                         <TextView
                             android:id="@+id/btnPrivilegeRoot"
                             android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
+                            android:layout_marginEnd="4dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:text="🛡️ 申请 Root 提权"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
+                            android:text="🛡️ Root 提权"
                             android:textColor="#58A6FF"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
 
                         <TextView
                             android:id="@+id/btnPrivilegeShizuku"
                             android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginStart="6dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
+                            android:layout_marginStart="4dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:text="⚡ 申请 Shizuku 授权"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
+                            android:text="⚡ Shizuku 授权"
                             android:textColor="#58A6FF"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
                     </LinearLayout>
 
                     <TextView
                         android:id="@+id/settingsShizukuStatusTv"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:text="Shizuku 状态: 检测中..."
                         android:textColor="#8B949E"
-                        android:textSize="11sp" />
+                        android:textSize="11sp"
+                        android:singleLine="false"
+                        android:lineSpacingExtra="2dp" />
 
                     <!-- 第二行: 全盘文件与剪贴板同步 -->
                     <LinearLayout
@@ -1683,24 +1705,26 @@
                                     android:layout_height="28dp"
                                     android:background="@drawable/bg_btn_secondary"
                                     android:gravity="center"
-                                    android:paddingStart="10dp"
-                                    android:paddingEnd="10dp"
-                                    android:text="💃 互动动作"
+                                    android:paddingStart="8dp"
+                                    android:paddingEnd="8dp"
+                                    android:text="💃 动作"
                                     android:textColor="#58A6FF"
-                                    android:textSize="11sp" />
+                                    android:textSize="11sp"
+                                    android:singleLine="true" />
 
                                 <TextView
                                     android:id="@+id/btnPetShop"
                                     android:layout_width="wrap_content"
                                     android:layout_height="28dp"
-                                    android:layout_marginStart="8dp"
+                                    android:layout_marginStart="6dp"
                                     android:background="@drawable/bg_btn_secondary"
                                     android:gravity="center"
-                                    android:paddingStart="10dp"
-                                    android:paddingEnd="10dp"
+                                    android:paddingStart="8dp"
+                                    android:paddingEnd="8dp"
                                     android:text="🛍️ 角色商城"
                                     android:textColor="#3FB950"
-                                    android:textSize="11sp" />
+                                    android:textSize="11sp"
+                                    android:singleLine="true" />
                             </LinearLayout>
                         </LinearLayout>
                     </LinearLayout>
@@ -1811,26 +1835,36 @@
                         <TextView
                             android:id="@+id/btnTogglePetEnabled"
                             android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
+                            android:layout_marginEnd="4dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_btn_primary"
                             android:gravity="center"
-                            android:text="🐾 悬浮桌宠: 开启"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
+                            android:text="🐾 悬浮桌宠: 开"
                             android:textColor="#FFFFFF"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
 
                         <TextView
                             android:id="@+id/btnPetParams"
                             android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginStart="6dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
+                            android:layout_marginStart="4dp"
                             android:layout_weight="1"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
                             android:text="🎛️ 更多物理参数"
                             android:textColor="#58A6FF"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
                     </LinearLayout>
 
                     <!-- 系统全局悬浮窗开关 -->
@@ -1916,24 +1950,34 @@
                         <Button
                             android:id="@+id/btnToggleProactiveSettings"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
                             android:layout_weight="1"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="4dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:text="🗣️ 主动说话: 开启"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
+                            android:text="🗣️ 主动说话: 开"
                             android:textColor="#34D399"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
 
                         <Button
                             android:id="@+id/btnAdjustProactiveIntervalSettings"
                             android:layout_width="0dp"
-                            android:layout_height="38dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="36dp"
                             android:layout_weight="1"
-                            android:layout_marginStart="6dp"
+                            android:layout_marginStart="4dp"
                             android:background="@drawable/bg_btn_secondary"
-                            android:text="⏱️ 活跃度: 3分钟"
+                            android:paddingStart="4dp"
+                            android:paddingEnd="4dp"
+                            android:text="⏱️ 适度 (3m)"
                             android:textColor="#FDE68A"
-                            android:textSize="12sp" />
+                            android:textSize="11.5sp"
+                            android:singleLine="true"
+                            android:ellipsize="end" />
                     </LinearLayout>
                 </LinearLayout>
 

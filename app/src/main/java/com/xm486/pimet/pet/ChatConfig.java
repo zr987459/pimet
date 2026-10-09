@@ -38,6 +38,7 @@ public class ChatConfig {
     public static final String KEY_API_MODEL = "chat_api_model";
     public static final String KEY_API_PROMPT = "chat_api_prompt";
     public static final String KEY_PIWEB_PROMPT = "chat_piweb_prompt";
+    public static final String KEY_PIWEB_SESSION_ID = "chat_piweb_session_id";
     public static final String KEY_CLAWBENCH_TOKEN = "chat_clawbench_token";
     public static final String KEY_API_PROVIDER = "chat_api_provider";
     public static final String KEY_OPERIT_TEMPLATE = "chat_operit_template";
@@ -52,7 +53,7 @@ public class ChatConfig {
             "/storage/emulated/0/Android/data/com.xm486.pimet/files";
     private static final String LEGACY_FILE = "config.json";
 
-    public String mode = MODE_CUSTOM_API;
+    public String mode = MODE_PIWEB;
 
     public String operitUrl = "http://127.0.0.1:8094/api/external-chat";
     /** Operit Web API 基址（专属对话 POST /api/web/chats 走这里） */
@@ -70,6 +71,8 @@ public class ChatConfig {
     public String apiModel = "gemini-3.1-flash-lite";
     public String apiPrompt = "你是一个活泼傲娇的桌面宠物，说话简短软莙，单次回答控制在50字以内。";
     public String piWebPrompt = "";
+    /** Pi-Web 专属桌宠会话 ID，绝不串入或复用用户的当前编码会话 */
+    public String piwebSessionId = "";
     public String clawbenchToken = "";
     public String apiProvider = "custom";
     public float temperature = 0.7f;
@@ -112,7 +115,7 @@ public class ChatConfig {
                 return config;
             }
         }
-        config.mode = sp.getString(KEY_MODE, MODE_CUSTOM_API);
+        config.mode = sp.getString(KEY_MODE, MODE_PIWEB);
         // Operit 服务端口由主页「Operit 端口」框（KEY_OPERIT_PORT）统一定，聊天链路跟随它，
         // 不再读 sp 里写死的旧地址（保证改端口后立即生效）
         int operitPort = PetRegistry.getOperitPort(context);
@@ -128,6 +131,7 @@ public class ChatConfig {
         config.apiModel = sp.getString(KEY_API_MODEL, config.apiModel);
         config.apiPrompt = sp.getString(KEY_API_PROMPT, config.apiPrompt);
         config.piWebPrompt = sp.getString(KEY_PIWEB_PROMPT, "");
+        config.piwebSessionId = sp.getString(KEY_PIWEB_SESSION_ID, "");
         config.clawbenchToken = sp.getString(KEY_CLAWBENCH_TOKEN, PetRegistry.getClawbenchToken(context));
         config.apiProvider = sp.getString(KEY_API_PROVIDER, "custom");
         return config;
@@ -149,6 +153,7 @@ public class ChatConfig {
         e.putString(KEY_API_MODEL, apiModel);
         e.putString(KEY_API_PROMPT, apiPrompt);
         e.putString(KEY_PIWEB_PROMPT, piWebPrompt);
+        e.putString(KEY_PIWEB_SESSION_ID, piwebSessionId);
         e.putString(KEY_CLAWBENCH_TOKEN, clawbenchToken);
         e.putString(KEY_API_PROVIDER, apiProvider);
         e.putFloat(KEY_TEMPERATURE, temperature);
@@ -165,9 +170,11 @@ public class ChatConfig {
     public void clearHistory(Context context) {
         operitChatId = "";
         operitChatOwned = false;
+        piwebSessionId = "";
         SharedPreferences.Editor e = PetRegistry.getPrefs(context).edit();
         e.remove(KEY_OPERIT_CHAT_ID);
         e.remove(KEY_OPERIT_CHAT_OWNED);
+        e.remove(KEY_PIWEB_SESSION_ID);
         e.apply();
     }
 

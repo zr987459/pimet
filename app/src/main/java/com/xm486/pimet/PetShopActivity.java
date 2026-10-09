@@ -148,9 +148,9 @@ public class PetShopActivity extends AppCompatActivity {
         sortRow.setPadding(dp(14), dp(4), dp(14), dp(8));
         sortRow.setBackgroundColor(ThemeHelper.getCardColor(this));
 
-        sortHotBtn = makeSortButton("🔥 最热下载", PetDexShop.SORT_HOT);
-        sortDefaultBtn = makeSortButton("✨ 官方推荐", PetDexShop.SORT_DEFAULT);
-        sortNameBtn = makeSortButton("🔤 名称 (A-Z)", PetDexShop.SORT_NAME);
+        sortHotBtn = makeSortButton("🔥 热门", PetDexShop.SORT_HOT);
+        sortDefaultBtn = makeSortButton("✨ 推荐", PetDexShop.SORT_DEFAULT);
+        sortNameBtn = makeSortButton("🔤 名称", PetDexShop.SORT_NAME);
 
         sortRow.addView(sortHotBtn);
         sortRow.addView(sortDefaultBtn);
@@ -210,12 +210,13 @@ public class PetShopActivity extends AppCompatActivity {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(11f);
-        b.setPadding(dp(10), dp(4), dp(10), dp(4));
+        b.setPadding(dp(8), dp(4), dp(8), dp(4));
         b.setMinHeight(0);
         b.setMinWidth(0);
+        b.setSingleLine(true);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(28));
-        lp.rightMargin = dp(6);
+                0, dp(28), 1f);
+        lp.rightMargin = dp(4);
         b.setLayoutParams(lp);
         b.setOnClickListener(v -> {
             if (currentSortMode != sortMode) {

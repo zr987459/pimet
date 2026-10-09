@@ -603,7 +603,7 @@ public class MainActivity extends AppCompatActivity {
             tvCurrentPetName.setText("当前角色: " + PetRegistry.getPetDir(this) + " (系统全局悬浮桌宠)");
         }
         if (btnTogglePetEnabled != null) {
-            btnTogglePetEnabled.setText(PetOverlayService.isRunning() ? "🐾 全局悬浮桌宠: 运行中" : "⚪ 全局悬浮桌宠: 未开启");
+            btnTogglePetEnabled.setText(PetOverlayService.isRunning() ? "🐾 桌宠: 运行中" : "⚪ 桌宠: 已关闭");
         }
         updateLaunchPetUI();
     }
@@ -3176,8 +3176,8 @@ public class MainActivity extends AppCompatActivity {
             btnTogglePetEnabled.setOnClickListener(v -> {
                 toggleGlobalOverlay();
                 btnTogglePetEnabled.setText(PetOverlayService.isRunning()
-                        ? "🐾 全局悬浮桌宠: 运行中 (点击关闭)"
-                        : "⚪ 全局悬浮桌宠: 未开启 (点击开启)");
+                        ? "🐾 桌宠: 运行中"
+                        : "⚪ 桌宠: 已关闭");
             });
         }
         if (btnPetParams != null) {
@@ -3237,11 +3237,11 @@ public class MainActivity extends AppCompatActivity {
                 com.xm486.pimet.pet.PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
         int min = com.xm486.pimet.pet.PetMemoryManager.getProactiveIntervalMin(this);
         if (btnToggleProactiveSettings != null) {
-            btnToggleProactiveSettings.setText(on ? "🗣️ 主动说话: 开启" : "🗣️ 主动说话: 关闭");
+            btnToggleProactiveSettings.setText(on ? "🗣️ 主动说话: 开" : "🗣️ 主动说话: 关");
             btnToggleProactiveSettings.setTextColor(on ? 0xFF34D399 : 0xFF8B949E);
         }
         if (btnAdjustProactiveIntervalSettings != null) {
-            btnAdjustProactiveIntervalSettings.setText(com.xm486.pimet.pet.PetMemoryManager.getActivenessLabel(min));
+            btnAdjustProactiveIntervalSettings.setText(com.xm486.pimet.pet.PetMemoryManager.getActivenessShortLabel(min));
         }
     }
 
@@ -3402,22 +3402,22 @@ public class MainActivity extends AppCompatActivity {
         }
         if (btnPrivilegeShizuku != null) {
             if (DevicePrivilegeManager.isShizukuPermissionGranted()) {
-                btnPrivilegeShizuku.setText("⚡ Shizuku: 已授权 (ADB)");
+                btnPrivilegeShizuku.setText("⚡ Shizuku: 已授权");
                 btnPrivilegeShizuku.setTextColor(0xFF3FB950);
             } else if (DevicePrivilegeManager.isShizukuRunning()) {
-                btnPrivilegeShizuku.setText("⚡ 申请 Shizuku 授权");
+                btnPrivilegeShizuku.setText("⚡ 申请 Shizuku");
                 btnPrivilegeShizuku.setTextColor(0xFF58A6FF);
             } else if (DevicePrivilegeManager.isShizukuInstalled(this)) {
-                btnPrivilegeShizuku.setText("⚡ Shizuku: 启动服务");
+                btnPrivilegeShizuku.setText("⚡ Shizuku 未启动");
                 btnPrivilegeShizuku.setTextColor(0xFFD29922);
             } else {
-                btnPrivilegeShizuku.setText("⚡ Shizuku 特权");
+                btnPrivilegeShizuku.setText("⚡ Shizuku 授权");
                 btnPrivilegeShizuku.setTextColor(0xFFC9D1D9);
             }
         }
         if (settingsShizukuStatusTv != null) {
             if (DevicePrivilegeManager.isShizukuPermissionGranted()) {
-                settingsShizukuStatusTv.setText("Shizuku 状态: ✔ 已获得特权授权 (ADB 级免 Root 权限)");
+                settingsShizukuStatusTv.setText("Shizuku 状态: ✔ 已获得特权授权 (ADB 免Root)");
                 settingsShizukuStatusTv.setTextColor(0xFF3FB950);
             } else if (DevicePrivilegeManager.isShizukuRunning()) {
                 settingsShizukuStatusTv.setText("Shizuku 状态: ⚡ 服务运行中 (点击按钮立即授权)");

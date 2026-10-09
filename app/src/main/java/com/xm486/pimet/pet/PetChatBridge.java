@@ -150,6 +150,12 @@ public class PetChatBridge {
                 new Thread(new ConnectionTest(service, config)).start();
                 return true;
             }
+            if ("#reset".equals(input) || "#new".equals(input) || "#clear".equals(input)) {
+                ChatConfig config = ChatConfig.load(service);
+                config.clearHistory(service);
+                showReply("🐾 已重置桌宠专属会话，开启全新的对话啦~");
+                return true;
+            }
             if (switchMode(input, "#operit", ChatConfig.MODE_OPERIT, "已切换为 Operit 本地模式")) return true;
             if (switchMode(input, "#piweb", ChatConfig.MODE_PIWEB, "已切换为 pi-web 对话模式")) return true;
             if (switchMode(input, "#clawbench", ChatConfig.MODE_CLAWBENCH, "已切换为 ClawBench 对话模式")) return true;
@@ -705,103 +711,90 @@ public class PetChatBridge {
 
     /**
      * pi-web 对话接口：
-     * 1. 尝试从 /api/sessions 找到最近修改的活跃会话；
-     * 2. POST 提交 prompt（无会话时创建）；
+     * 1. 采用桌宠专属独立会话 (config.piwebSessionId)，绝对不扫描或污染用户的当前编码会话；
+     * 2. 会话不存在或失效时，经 /api/agent/new 自动创建专属会话并落盘；
      * 3. 订阅 SSE 事件流收集 assistant 消息直至完成。
      */
     private List<String> sendViaPiWeb(ChatConfig config, String message, boolean forceNew) {
         int port = PetRegistry.getPiWebPort(service);
         HttpURLConnection conn = null;
         try {
-            String sessionId = null;
-            // 1. 获取会话列表，找最近修改的有效会话（若 forceNew 则跳过直接建新会话）
-            if (!forceNew) {
+            // 独立专属会话逻辑：桌宠始终使用独立的专属会话 ID，绝不扫描或复用用户的编码会话
+            String sessionId = forceNew ? null : config.piwebSessionId;
+            if (sessionId != null && sessionId.trim().isEmpty()) {
+                sessionId = null;
+            }
+
+            // 1. 如果已有保存的专属会话，先尝试直接投递消息
+            if (sessionId != null) {
                 try {
-                    URL sUrl = new URL("http://127.0.0.1:" + port + "/api/sessions");
-                    conn = (HttpURLConnection) sUrl.openConnection();
-                    conn.setConnectTimeout(3000);
-                    conn.setReadTimeout(4000);
-                    conn.setRequestProperty("Accept", "application/json");
-                    if (conn.getResponseCode() == 200) {
-                        String body = readStream(conn.getInputStream());
-                        JSONObject root = new JSONObject(body);
-                        JSONArray arr = root.optJSONArray("sessions");
-                        if (arr != null && arr.length() > 0) {
-                            long bestMod = -1;
-                            for (int i = 0; i < arr.length(); i++) {
-                                JSONObject s = arr.optJSONObject(i);
-                                if (s == null) continue;
-                                String id = s.optString("id", "");
-                                if (id.isEmpty()) continue;
-                                int count = s.optInt("messageCount", 0);
-                                if (count == 0) continue;
-                                String mod = s.optString("modified", "");
-                                long t = 0;
-                                try {
-                                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat(
-                                            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US);
-                                    sdf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
-                                    java.util.Date d = sdf.parse(mod);
-                                    if (d != null) t = d.getTime();
-                                } catch (Throwable ignored) {}
-                                if (t > bestMod) {
-                                    bestMod = t;
-                                    sessionId = id;
-                                }
-                            }
-                        }
+                    URL promptUrl = new URL("http://127.0.0.1:" + port + "/api/agent/" + sessionId);
+                    conn = (HttpURLConnection) promptUrl.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(4000);
+                    conn.setReadTimeout(10000);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    JSONObject req = new JSONObject();
+                    req.put("type", "prompt");
+                    String piWebMsg = message;
+                    if (PetMemoryManager.isProgressQuery(message)) {
+                        piWebMsg = message + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
+                    }
+                    req.put("message", piWebMsg);
+                    conn.getOutputStream().write(req.toString().getBytes("UTF-8"));
+                    int code = conn.getResponseCode();
+                    if (code == 404) {
+                        // 远端会话已失效/过期，重置并重新建立专属会话
+                        sessionId = null;
+                        config.piwebSessionId = "";
+                        config.save(service);
+                    } else if (code < 200 || code >= 300) {
+                        String err = readErrorStream(conn);
+                        return Collections.singletonList("pi-web 专属会话发送异常 HTTP " + code + " · " + firstLine(err));
                     }
                 } catch (Throwable t) {
-                    Log.d(TAG, "pi-web list sessions failed: " + t.getMessage());
+                    Log.d(TAG, "pi-web send to existing session failed: " + t.getMessage());
+                    sessionId = null;
                 } finally {
                     if (conn != null) { conn.disconnect(); conn = null; }
                 }
             }
 
-            // 2. 提交消息
+            // 2. 如果未持有有效会话或上述会话已失效，新建专属桌宠会话
             if (sessionId == null) {
                 URL newUrl = new URL("http://127.0.0.1:" + port + "/api/agent/new");
                 conn = (HttpURLConnection) newUrl.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(4000);
-                conn.setReadTimeout(8000);
+                conn.setReadTimeout(10000);
                 conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "application/json");
                 JSONObject req = new JSONObject();
                 req.put("cwd", "/root");
                 req.put("type", "prompt");
-                String piWebMsg = message;
+
+                String customPrompt = config.piWebPrompt != null && !config.piWebPrompt.trim().isEmpty()
+                        ? config.piWebPrompt.trim()
+                        : "【系统设定】你是常驻在手机屏幕上的动态桌宠伴侣。性格活泼、软萌体贴。请以桌宠伴侣语气与主人交谈，回答控制在1-3句以内（50字内），多用表情符号，简明可爱，不要擅自执行复杂或危险的系统命令。";
+
+                String piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
                 if (PetMemoryManager.isProgressQuery(message)) {
-                    piWebMsg = message + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
+                    piWebMsg = piWebMsg + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
                 }
                 req.put("message", piWebMsg);
                 conn.getOutputStream().write(req.toString().getBytes("UTF-8"));
                 int code = conn.getResponseCode();
                 if (code < 200 || code >= 300) {
                     String err = readErrorStream(conn);
-                    return Collections.singletonList("pi-web 新建会话失败 HTTP " + code + " · " + firstLine(err));
+                    return Collections.singletonList("pi-web 新建专属会话失败 HTTP " + code + " · " + firstLine(err));
                 }
                 String resp = readStream(conn.getInputStream());
                 JSONObject respObj = new JSONObject(resp);
                 sessionId = respObj.optString("sessionId", "");
-                conn.disconnect();
-                conn = null;
-            } else {
-                URL promptUrl = new URL("http://127.0.0.1:" + port + "/api/agent/" + sessionId);
-                conn = (HttpURLConnection) promptUrl.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setConnectTimeout(4000);
-                conn.setReadTimeout(8000);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json");
-                JSONObject req = new JSONObject();
-                req.put("type", "prompt");
-                req.put("message", message);
-                conn.getOutputStream().write(req.toString().getBytes("UTF-8"));
-                int code = conn.getResponseCode();
-                if (code < 200 || code >= 300) {
-                    String err = readErrorStream(conn);
-                    return Collections.singletonList("pi-web 提交消息失败 HTTP " + code + " · " + firstLine(err));
+                if (!sessionId.isEmpty()) {
+                    config.piwebSessionId = sessionId;
+                    config.save(service);
                 }
                 conn.disconnect();
                 conn = null;

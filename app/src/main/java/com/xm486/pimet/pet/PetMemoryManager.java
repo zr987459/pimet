@@ -251,6 +251,13 @@ public final class PetMemoryManager {
         return "🤫 安静守护 (" + minutes + "分钟)";
     }
 
+    public static String getActivenessShortLabel(int minutes) {
+        if (minutes <= 1) return "🌟 话痨 (1m)";
+        if (minutes <= 3) return "😊 适度 (3m)";
+        if (minutes <= 8) return "🍵 偶尔 (8m)";
+        return "🤫 安静 (" + minutes + "m)";
+    }
+
     /**
      * 获取常用预设话题库（可点击直接发起对话或执行）
      */
