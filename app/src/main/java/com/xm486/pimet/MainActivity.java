@@ -455,6 +455,14 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_terminal", false)) {
             mainHandler.postDelayed(this::openTerminalInWorkbench, 300);
         }
+        if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_pet_chat", false)) {
+            mainHandler.postDelayed(() -> togglePetChatCard(true), 300);
+        }
+
+        // 初始化并启动 App 与 AI 宿主控制桥 (AppBridgeManager)
+        com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
+        com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).attachActivity(this);
+        PluginManager.ensureAndroidBridgeExtension(this);
     }
 
     private String getPiWebUrl() {
@@ -940,14 +948,15 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void togglePetChatCard(Boolean forceShow) {
+    public void togglePetChatCard(Boolean forceShow) {
         if (floatingPetChatCard == null) return;
         boolean willShow = forceShow != null ? forceShow : (floatingPetChatCard.getVisibility() != View.VISIBLE);
         if (willShow) {
+            floatingPetChatCard.bringToFront();
             floatingPetChatCard.setVisibility(View.VISIBLE);
             floatingPetChatCard.setAlpha(0f);
-            floatingPetChatCard.setScaleX(0.92f);
-            floatingPetChatCard.setScaleY(0.92f);
+            floatingPetChatCard.setScaleX(0.96f);
+            floatingPetChatCard.setScaleY(0.96f);
             floatingPetChatCard.animate()
                     .alpha(1f).scaleX(1f).scaleY(1f)
                     .setDuration(160)
@@ -958,7 +967,7 @@ public class MainActivity extends AppCompatActivity {
             updateFloatingPetChatCardStatus();
         } else {
             floatingPetChatCard.animate()
-                    .alpha(0f).scaleX(0.92f).scaleY(0.92f)
+                    .alpha(0f).scaleX(0.96f).scaleY(0.96f)
                     .setDuration(120)
                     .withEndAction(() -> floatingPetChatCard.setVisibility(View.GONE))
                     .start();
@@ -1051,11 +1060,15 @@ public class MainActivity extends AppCompatActivity {
         piWebMonitor.start();
     }
 
-    private void showPetMenuDialog() {
+    public void showPetMenuDialog() {
         showPetHudMenu();
     }
 
-    private void showPetHudMenu() {
+    public void showPetHudMenu() {
+        new com.xm486.pimet.pet.PetMenu(this).show();
+    }
+
+    private void showPetHudMenuLegacy() {
         if (petHudDialog != null && petHudDialog.isShowing()) {
             petHudDialog.dismiss();
         }
@@ -1538,7 +1551,7 @@ public class MainActivity extends AppCompatActivity {
         inAppFlingAnimator.start();
     }
 
-    private void showPetParamsDialog() {
+    public void showPetParamsDialog() {
         new PetParamsDialog(this, this::applyPetParams).show();
     }
 
@@ -1797,6 +1810,17 @@ public class MainActivity extends AppCompatActivity {
 
         if (floatingPetView != null) {
             floatingPetView.playOneShot("waving");
+        }
+
+        // 0. 自然语言宿主桥接 (控制桌宠大小/角色/动作/全局开关/切换Tab/配置端口等)
+        String nlFeedback = com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).tryHandleNaturalLanguage(q);
+        if (nlFeedback != null) {
+            showPetBubble(nlFeedback);
+            if (tvPetCardStream != null) {
+                tvPetCardStream.setVisibility(View.VISIBLE);
+                tvPetCardStream.setText(nlFeedback);
+            }
+            return;
         }
 
         // 1. #test 端口连通性全面诊断
@@ -4695,6 +4719,9 @@ public class MainActivity extends AppCompatActivity {
         if (intent != null && intent.getBooleanExtra("pimet.open_terminal", false)) {
             openTerminalInWorkbench();
         }
+        if (intent != null && intent.getBooleanExtra("pimet.open_pet_chat", false)) {
+            togglePetChatCard(true);
+        }
     }
 
     @Override
@@ -4716,6 +4743,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).detachActivity(this);
         try {
             unregisterReceiver(overlayStateReceiver);
         } catch (Throwable ignored) {}

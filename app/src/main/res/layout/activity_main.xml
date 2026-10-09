@@ -983,196 +983,6 @@
                         android:layout_height="78dp"
                         android:visibility="gone" />
 
-                    <!-- 桌宠下方交互聊天卡片 (点击桌宠展开/收起) -->
-                    <LinearLayout
-                        android:id="@+id/floatingPetChatCard"
-                        android:layout_width="260dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:background="@drawable/bg_pet_chat_card"
-                        android:elevation="8dp"
-                        android:orientation="vertical"
-                        android:padding="10dp"
-                        android:visibility="gone">
-
-                        <!-- 状态顶栏 -->
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:gravity="center_vertical"
-                            android:orientation="horizontal">
-
-                            <View
-                                android:id="@+id/viewPetStatusDot"
-                                android:layout_width="8dp"
-                                android:layout_height="8dp"
-                                android:background="@drawable/bg_status_dot_green" />
-
-                            <TextView
-                                android:id="@+id/tvPetStatusText"
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_marginStart="6dp"
-                                android:layout_weight="1"
-                                android:text="🟢 随时待命"
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-
-                            <TextView
-                                android:id="@+id/btnHidePetChatCard"
-                                android:layout_width="24dp"
-                                android:layout_height="24dp"
-                                android:gravity="center"
-                                android:text="✕"
-                                android:textColor="#8B949E"
-                                android:textSize="12sp" />
-                        </LinearLayout>
-
-                        <!-- 快捷短语与互动芯片 -->
-                        <HorizontalScrollView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:clipToPadding="false"
-                            android:overScrollMode="never"
-                            android:scrollbars="none">
-
-                            <LinearLayout
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:gravity="center_vertical"
-                                android:orientation="horizontal">
-
-                                <TextView
-                                    android:id="@+id/btnPetChipPiWeb"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="🚀 直达工作台"
-                                    android:textColor="#38BDF8"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipCustomPorts"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="🌐 自定义端口"
-                                    android:textColor="#F59E0B"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipDance"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="💃 跳舞"
-                                    android:textColor="#58A6FF"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipWave"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="👋 挥手"
-                                    android:textColor="#58A6FF"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipJump"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="✨ 翻跟斗"
-                                    android:textColor="#58A6FF"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipTest"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="🔍 #test"
-                                    android:textColor="#3FB950"
-                                    android:textSize="10.5sp" />
-
-                                <TextView
-                                    android:id="@+id/btnPetChipSwitch"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="24dp"
-                                    android:layout_marginStart="4dp"
-                                    android:background="@drawable/bg_btn_secondary"
-                                    android:gravity="center"
-                                    android:paddingStart="8dp"
-                                    android:paddingEnd="8dp"
-                                    android:text="🔄 切换角色"
-                                    android:textColor="#D29922"
-                                    android:textSize="10.5sp" />
-                            </LinearLayout>
-                        </HorizontalScrollView>
-
-                        <!-- 输入框与发送行 -->
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:gravity="center_vertical"
-                            android:orientation="horizontal">
-
-                            <EditText
-                                android:id="@+id/inputFloatPetChat"
-                                android:layout_width="0dp"
-                                android:layout_height="34dp"
-                                android:layout_weight="1"
-                                android:background="#22FFFFFF"
-                                android:hint="对桌宠说点什么..."
-                                android:imeOptions="actionSend"
-                                android:inputType="text"
-                                android:maxLines="1"
-                                android:paddingStart="10dp"
-                                android:paddingEnd="10dp"
-                                android:singleLine="true"
-                                android:textColor="#F0F6FC"
-                                android:textColorHint="#6E7681"
-                                android:textSize="12sp" />
-
-                            <TextView
-                                android:id="@+id/btnSendFloatPetChat"
-                                android:layout_width="40dp"
-                                android:layout_height="34dp"
-                                android:layout_marginStart="6dp"
-                                android:background="@drawable/bg_btn_primary"
-                                android:gravity="center"
-                                android:text="➤"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp" />
-                        </LinearLayout>
-                    </LinearLayout>
-
                     <!-- 可拖拽移动的微型主悬浮球 (非桌宠模式时手势抓手) -->
                     <TextView
                         android:id="@+id/floatingBall"
@@ -2614,6 +2424,288 @@
                 </LinearLayout>
             </LinearLayout>
         </ScrollView>
+        <!-- 桌宠全屏交互聊天工作台 (点击桌宠或聊天按钮展开/收起) -->
+        <LinearLayout
+            android:id="@+id/floatingPetChatCard"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#F50D1117"
+            android:clickable="true"
+            android:elevation="45dp"
+            android:focusable="true"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingTop="36dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="16dp"
+            android:visibility="gone">
+
+            <!-- 顶栏：返回/收起 + 标题 + 状态指示 + 快捷操作 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnHidePetChatCard"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="#F0F6FC"
+                    android:textSize="14sp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="🐾 桌宠 AI 对话助手"
+                        android:textColor="#F0F6FC"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <View
+                            android:id="@+id/viewPetStatusDot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:background="@drawable/bg_status_dot_green" />
+
+                        <TextView
+                            android:id="@+id/tvPetStatusText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:text="🟢 随时待命"
+                            android:textColor="#8B949E"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btnPetChipPiWeb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="🚀 直达工作台"
+                    android:textColor="#38BDF8"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/btnPetChipCustomPorts"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="🌐 端口"
+                    android:textColor="#F59E0B"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- 消息与流式输出展示区域 (居中大视野滚动) -->
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="10dp"
+                android:layout_weight="1"
+                android:fadeScrollbars="false"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <!-- 欢迎引导提示 -->
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#161B22"
+                        android:padding="12dp"
+                        android:text="💬 可以向桌宠提问、执行任务，或直接用自然语言让我调整桌宠（例如：'把桌宠放大到100'、'换成女仆装'、'跳个舞'、'切换到终端'）"
+                        android:textColor="#8B949E"
+                        android:textSize="12sp" />
+
+                    <!-- 深度思考卡片 -->
+                    <TextView
+                        android:id="@+id/tvPetThinking"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:background="#1C1F2E"
+                        android:lineSpacingMultiplier="1.2"
+                        android:padding="10dp"
+                        android:textColor="#A5B4FC"
+                        android:textSize="11.5sp"
+                        android:visibility="gone" />
+
+                    <!-- 工具执行卡片 -->
+                    <TextView
+                        android:id="@+id/tvPetToolStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#1F241E"
+                        android:padding="10dp"
+                        android:textColor="#86EFAC"
+                        android:textSize="11.5sp"
+                        android:visibility="gone" />
+
+                    <!-- AI 回复流式渲染卡片 -->
+                    <TextView
+                        android:id="@+id/tvPetCardStream"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:background="#161B22"
+                        android:lineSpacingMultiplier="1.25"
+                        android:padding="12dp"
+                        android:textColor="#F0F6FC"
+                        android:textIsSelectable="true"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- 快捷短语与互动芯片 -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:clipToPadding="false"
+                android:overScrollMode="never"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btnPetChipDance"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="💃 跳舞"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnPetChipWave"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="👋 挥手"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnPetChipJump"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="✨ 翻跟斗"
+                        android:textColor="#58A6FF"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnPetChipTest"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="🔍 #test"
+                        android:textColor="#3FB950"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/btnPetChipSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="28dp"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="🔄 切换角色"
+                        android:textColor="#D29922"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <!-- 底部输入框与发送行 (全宽舒适输入) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="6dp">
+
+                <EditText
+                    android:id="@+id/inputFloatPetChat"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:background="#0D1117"
+                    android:hint="对桌宠说点什么，或让它修改自身/切换界面..."
+                    android:imeOptions="actionSend"
+                    android:inputType="text"
+                    android:maxLines="3"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:textColor="#F0F6FC"
+                    android:textColorHint="#6E7681"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btnSendFloatPetChat"
+                    android:layout_width="56dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_btn_primary"
+                    android:gravity="center"
+                    android:text="发送"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
     </FrameLayout>
 
     <View

@@ -84,6 +84,22 @@ public class StatusCardView extends LinearLayout {
         header.addView(modeView, new LayoutParams(LayoutParams.WRAP_CONTENT,
                 LayoutParams.WRAP_CONTENT));
 
+        TextView fullScreenBtn = new TextView(context);
+        fullScreenBtn.setText(" ⛶ 全屏");
+        fullScreenBtn.setTextSize(10f);
+        fullScreenBtn.setTextColor(0xFF38BDF8);
+        fullScreenBtn.setPadding(dp(6), 0, dp(2), 0);
+        fullScreenBtn.setOnClickListener(v -> {
+            try {
+                Intent intent = new Intent(context, com.xm486.pimet.MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                intent.putExtra("pimet.open_pet_chat", true);
+                context.startActivity(intent);
+            } catch (Throwable ignored) {}
+        });
+        header.addView(fullScreenBtn, new LayoutParams(LayoutParams.WRAP_CONTENT,
+                LayoutParams.WRAP_CONTENT));
+
         // ---- 输入框 + 发送按钮 ----
         LinearLayout inputRow = new LinearLayout(context);
         inputRow.setOrientation(HORIZONTAL);
