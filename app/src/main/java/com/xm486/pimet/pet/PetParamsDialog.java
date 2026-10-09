@@ -91,8 +91,8 @@ public class PetParamsDialog {
                     PetRegistry.DEFAULT_CARD_SCALE);
             int curBubbleWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH,
                     PetRegistry.DEFAULT_BUBBLE_WIDTH);
-            int curMenuWidth = PetRegistry.getIntPref(context, "pref_menu_width",
-                    PetRegistry.DEFAULT_MENU_WIDTH);
+            int curMenuWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_MENU_WIDTH,
+                    PetRegistry.getIntPref(context, "pref_menu_width", PetRegistry.DEFAULT_MENU_WIDTH));
 
             int curBounce = PetRegistry.getIntPref(context, PetRegistry.KEY_BOUNCE,
                     PetRegistry.DEFAULT_BOUNCE);
@@ -151,8 +151,9 @@ public class PetParamsDialog {
                 if (onChangeCallback != null) onChangeCallback.run();
             }));
 
-            // 9. 菜单宽度: 120 ~ 260 dp (min 120)
-            root.addView(createCompactSlider("菜单面板宽", curMenuWidth, "dp", 120, 260, 120, (val) -> {
+            // 9. 菜单宽度: 120 ~ 240 dp (min 120)
+            root.addView(createCompactSlider("菜单面板宽", curMenuWidth, "dp", 120, 240, 120, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_WIDTH, val);
                 PetRegistry.setIntPref(context, "pref_menu_width", val);
                 if (onChangeCallback != null) onChangeCallback.run();
             }));

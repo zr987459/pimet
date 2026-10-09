@@ -23,6 +23,7 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.Editable;
+import android.text.InputType;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.TextWatcher;
@@ -3337,18 +3338,44 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
+        View btnCheckUpdates = findViewById(R.id.btnCheckUpdates);
+        if (btnCheckUpdates != null) {
+            btnCheckUpdates.setOnClickListener(v -> {
+                Toast.makeText(this, "正在联网检查最新插件版本...", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    List<PluginManager.PluginItem> all = PluginManager.getInstalledPlugins(this);
+                    PluginManager.checkUpdatesAsync(this, all, updateCount -> {
+                        mainHandler.post(() -> {
+                            cachedPluginItems = all;
+                            if (updateCount > 0) {
+                                Toast.makeText(this, "发现 " + updateCount + " 个插件有新版本发布！", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(this, "已检查：当前所有插件均为最新版本 ✔", Toast.LENGTH_SHORT).show();
+                            }
+                            updatePluginListView(all, currentPluginCategory);
+                        });
+                    });
+                }).start();
+            });
+        }
+
         View btnUpdateAllPlugins = findViewById(R.id.btnUpdateAllPlugins);
         if (btnUpdateAllPlugins != null) {
             btnUpdateAllPlugins.setOnClickListener(v -> {
-                Toast.makeText(this, "正在更新容器内所有插件与依赖包...", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "正在更新容器内插件与依赖包...", Toast.LENGTH_LONG).show();
                 new Thread(() -> {
                     boolean ok = PluginManager.updateAllPlugins(this);
                     mainHandler.post(() -> {
-                        Toast.makeText(this, ok ? "✔ 所有插件更新完成！" : "插件更新流程结束", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, ok ? "✔ 插件更新流程完成！" : "插件更新结束", Toast.LENGTH_SHORT).show();
                         refreshPluginsList(currentPluginCategory);
                     });
                 }).start();
             });
+        }
+
+        View btnAddPluginConfig = findViewById(R.id.btnAddPluginConfig);
+        if (btnAddPluginConfig != null) {
+            btnAddPluginConfig.setOnClickListener(v -> showAddPluginConfigDialog());
         }
 
         if (btnInstallCustomPlugin != null) {
@@ -3405,37 +3432,55 @@ public class MainActivity extends AppCompatActivity {
         refreshPluginsList(index);
     }
 
+    private List<PluginManager.PluginItem> cachedPluginItems = new ArrayList<>();
+
     private void refreshPluginsList(int category) {
         currentPluginCategory = category;
         new Thread(() -> {
-            List<PluginManager.PluginItem> all = PluginManager.getInstalledPlugins(this);
-            List<PluginManager.PluginItem> filtered = new ArrayList<>();
-            for (PluginManager.PluginItem item : all) {
-                if (category == 0) {
-                    filtered.add(item);
-                } else if (category == 1 && item.type == PluginManager.PluginItem.TYPE_EXTENSION) {
-                    filtered.add(item);
-                } else if (category == 2 && item.type == PluginManager.PluginItem.TYPE_SKILL) {
-                    filtered.add(item);
-                } else if (category == 3 && item.type == PluginManager.PluginItem.TYPE_MCP) {
-                    filtered.add(item);
-                } else if (category == 4 && item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
-                    filtered.add(item);
-                }
-            }
-            mainHandler.post(() -> {
-                if (layoutPluginItems == null) return;
-                layoutPluginItems.removeAllViews();
-                if (filtered.isEmpty()) {
-                    if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.VISIBLE);
-                } else {
-                    if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
-                    for (PluginManager.PluginItem item : filtered) {
-                        layoutPluginItems.addView(createPluginItemView(item));
+            List<PluginManager.PluginItem> fresh = PluginManager.getInstalledPlugins(this);
+            if (cachedPluginItems != null && !cachedPluginItems.isEmpty()) {
+                for (PluginManager.PluginItem item : fresh) {
+                    for (PluginManager.PluginItem cached : cachedPluginItems) {
+                        if (item.name.equals(cached.name) && item.type == cached.type) {
+                            item.hasUpdate = cached.hasUpdate;
+                            item.latestVersion = cached.latestVersion;
+                            break;
+                        }
                     }
                 }
-            });
+            }
+            cachedPluginItems = fresh;
+            updatePluginListView(fresh, category);
         }).start();
+    }
+
+    private void updatePluginListView(List<PluginManager.PluginItem> all, int category) {
+        List<PluginManager.PluginItem> filtered = new ArrayList<>();
+        for (PluginManager.PluginItem item : all) {
+            if (category == 0) {
+                filtered.add(item);
+            } else if (category == 1 && item.type == PluginManager.PluginItem.TYPE_EXTENSION) {
+                filtered.add(item);
+            } else if (category == 2 && item.type == PluginManager.PluginItem.TYPE_SKILL) {
+                filtered.add(item);
+            } else if (category == 3 && item.type == PluginManager.PluginItem.TYPE_MCP) {
+                filtered.add(item);
+            } else if (category == 4 && item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
+                filtered.add(item);
+            }
+        }
+        mainHandler.post(() -> {
+            if (layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            if (filtered.isEmpty()) {
+                if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.VISIBLE);
+            } else {
+                if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+                for (PluginManager.PluginItem item : filtered) {
+                    layoutPluginItems.addView(createPluginItemView(item));
+                }
+            }
+        });
     }
 
     private View createPluginItemView(PluginManager.PluginItem item) {
@@ -3469,6 +3514,25 @@ public class MainActivity extends AppCompatActivity {
         badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
         header.addView(badge);
 
+        if (item.version != null && !item.version.isEmpty()) {
+            TextView vBadge = new TextView(this);
+            if (item.hasUpdate && item.latestVersion != null && !item.latestVersion.isEmpty()) {
+                vBadge.setText("v" + item.version + " ➔ v" + item.latestVersion);
+                vBadge.setTextColor(0xFF3FB950);
+            } else {
+                vBadge.setText("v" + item.version);
+                vBadge.setTextColor(0xFF8B949E);
+            }
+            vBadge.setTextSize(10.5f);
+            vBadge.setBackgroundResource(R.drawable.bg_badge_port);
+            vBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+            LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            vbLp.leftMargin = dpToPx(6);
+            vBadge.setLayoutParams(vbLp);
+            header.addView(vBadge);
+        }
+
         card.addView(header);
 
         TextView desc = new TextView(this);
@@ -3489,35 +3553,51 @@ public class MainActivity extends AppCompatActivity {
         aLp.topMargin = dpToPx(8);
         actions.setLayoutParams(aLp);
 
-        TextView btnUpdate = new TextView(this);
-        btnUpdate.setText("🆙 更新插件");
-        btnUpdate.setTextColor(0xFF58A6FF);
-        btnUpdate.setTextSize(12f);
-        btnUpdate.setBackgroundResource(R.drawable.bg_btn_secondary);
-        btnUpdate.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
-        btnUpdate.setOnClickListener(v -> {
-            Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
-            new Thread(() -> {
-                boolean ok = PluginManager.updatePlugin(this, item);
-                mainHandler.post(() -> {
-                    Toast.makeText(this, ok ? "✔ 插件已更新: " + item.name : "更新流程完成或无需更新", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                });
-            }).start();
-        });
-        actions.addView(btnUpdate);
+        // 1. ⚙️ 配置/查看按钮
+        TextView btnConfig = new TextView(this);
+        btnConfig.setText("⚙️ 配置/详情");
+        btnConfig.setTextColor(0xFFC9D1D9);
+        btnConfig.setTextSize(11.5f);
+        btnConfig.setBackgroundResource(R.drawable.bg_btn_secondary);
+        btnConfig.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnConfig.setOnClickListener(v -> showEditPluginConfigDialog(item));
+        actions.addView(btnConfig);
 
-        View spacing = new View(this);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(dpToPx(8), 1);
-        spacing.setLayoutParams(sLp);
-        actions.addView(spacing);
+        // 2. 🆙 更新按钮 (仅当有明确新版本时显示)
+        if (item.hasUpdate) {
+            View spacing1 = new View(this);
+            actions.addView(spacing1, new LinearLayout.LayoutParams(dpToPx(6), 1));
 
+            TextView btnUpdate = new TextView(this);
+            btnUpdate.setText(item.latestVersion.isEmpty() ? "🆙 更新插件" : ("🆙 升级至 v" + item.latestVersion));
+            btnUpdate.setTextColor(0xFF3FB950);
+            btnUpdate.setTextSize(11.5f);
+            btnUpdate.setBackgroundResource(R.drawable.bg_btn_secondary);
+            btnUpdate.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+            btnUpdate.setOnClickListener(v -> {
+                Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    boolean ok = PluginManager.updatePlugin(this, item);
+                    mainHandler.post(() -> {
+                        Toast.makeText(this, ok ? "✔ 插件已更新: " + item.name : "更新失败，请在终端查看输出", Toast.LENGTH_SHORT).show();
+                        item.hasUpdate = false;
+                        refreshPluginsList(currentPluginCategory);
+                    });
+                }).start();
+            });
+            actions.addView(btnUpdate);
+        }
+
+        View spacing2 = new View(this);
+        actions.addView(spacing2, new LinearLayout.LayoutParams(dpToPx(6), 1));
+
+        // 3. 🗑️ 移除按钮
         TextView btnDelete = new TextView(this);
-        btnDelete.setText("🗑️ 移除此插件");
+        btnDelete.setText("🗑️ 移除");
         btnDelete.setTextColor(0xFFF85149);
-        btnDelete.setTextSize(12f);
+        btnDelete.setTextSize(11.5f);
         btnDelete.setBackgroundResource(R.drawable.bg_btn_secondary);
-        btnDelete.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        btnDelete.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
         btnDelete.setOnClickListener(v -> {
             new AlertDialog.Builder(this)
                     .setTitle("确认移除插件")
@@ -3538,6 +3618,228 @@ public class MainActivity extends AppCompatActivity {
         card.addView(actions);
 
         return card;
+    }
+
+    private void showAddPluginConfigDialog() {
+        String[] options = new String[]{
+                "🌐 添加 MCP 外部服务 (mcp.json)",
+                "🧠 新建 Skill 专家技能 (SKILL.md)",
+                "🤖 新建 Subagent 子智能体 (.md)",
+                "📄 编辑 settings.json (全局配置)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("添加生态配置")
+                .setItems(options, (dialog, which) -> {
+                    switch (which) {
+                        case 0:
+                            showAddMcpDialog();
+                            break;
+                        case 1:
+                            showAddSkillDialog();
+                            break;
+                        case 2:
+                            showAddSubagentDialog();
+                            break;
+                        case 3:
+                            showEditGlobalSettingsDialog();
+                            break;
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showAddMcpDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+
+        final EditText nameInput = createDialogInput("服务名称 (如 fetch)", false);
+        final EditText cmdInput = createDialogInput("启动命令 (如 uvx, npx, python3)", false);
+        final EditText argsInput = createDialogInput("参数 (如 mcp-server-fetch)", false);
+        final EditText envInput = createDialogInput("环境变量 JSON (可选, 如 {\"API_KEY\":\"...\"})", true);
+
+        layout.addView(createDialogLabel("服务标识名:"));
+        layout.addView(nameInput);
+        layout.addView(createDialogLabel("执行命令:"));
+        layout.addView(cmdInput);
+        layout.addView(createDialogLabel("运行参数 (空格隔开):"));
+        layout.addView(argsInput);
+        layout.addView(createDialogLabel("环境变量 (JSON 格式):"));
+        layout.addView(envInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("添加 MCP 外部服务")
+                .setView(layout)
+                .setPositiveButton("保存并生效", (dialog, which) -> {
+                    String name = nameInput.getText().toString().trim();
+                    String cmd = cmdInput.getText().toString().trim();
+                    String args = argsInput.getText().toString().trim();
+                    String env = envInput.getText().toString().trim();
+                    if (name.isEmpty() || cmd.isEmpty()) {
+                        Toast.makeText(this, "服务名称与执行命令为必填项", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    boolean ok = PluginManager.saveMcpServer(this, name, cmd, args, env);
+                    Toast.makeText(this, ok ? "✔ MCP 服务已添加！" : "添加失败", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showAddSkillDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+
+        final EditText nameInput = createDialogInput("技能目录名 (如 code-review)", false);
+        final EditText contentInput = createDialogInput("# 技能描述与流程规范\n\n## When to use\n...", true);
+        contentInput.setMinLines(6);
+
+        layout.addView(createDialogLabel("技能名称:"));
+        layout.addView(nameInput);
+        layout.addView(createDialogLabel("SKILL.md Markdown 内容:"));
+        layout.addView(contentInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("新建 Skill 专家技能")
+                .setView(layout)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String name = nameInput.getText().toString().trim();
+                    String md = contentInput.getText().toString().trim();
+                    if (name.isEmpty() || md.isEmpty()) {
+                        Toast.makeText(this, "技能名称与内容不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    boolean ok = PluginManager.saveSkill(this, name, md);
+                    Toast.makeText(this, ok ? "✔ Skill 技能已创建！" : "创建失败", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showAddSubagentDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+
+        final EditText nameInput = createDialogInput("智能体标识 (如 librarian)", false);
+        final EditText contentInput = createDialogInput("You are a specialized agent...\n", true);
+        contentInput.setMinLines(6);
+
+        layout.addView(createDialogLabel("智能体名称:"));
+        layout.addView(nameInput);
+        layout.addView(createDialogLabel("系统提示词 / 流程定义:"));
+        layout.addView(contentInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("新建 Subagent 子智能体")
+                .setView(layout)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String name = nameInput.getText().toString().trim();
+                    String prompt = contentInput.getText().toString().trim();
+                    if (name.isEmpty() || prompt.isEmpty()) {
+                        Toast.makeText(this, "名称与提示词不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    boolean ok = PluginManager.saveSubagent(this, name, prompt);
+                    Toast.makeText(this, ok ? "✔ Subagent 已创建！" : "创建失败", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showEditGlobalSettingsDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+
+        String currentJson = PluginManager.getGlobalSettings(this);
+        final EditText contentInput = createDialogInput("", true);
+        contentInput.setText(currentJson);
+        contentInput.setMinLines(8);
+        contentInput.setTypeface(Typeface.MONOSPACE);
+
+        layout.addView(createDialogLabel("编辑 ~/.pi/agent/settings.json:"));
+        layout.addView(contentInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("全局 settings.json 配置")
+                .setView(layout)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String json = contentInput.getText().toString().trim();
+                    boolean ok = PluginManager.saveGlobalSettings(this, json);
+                    Toast.makeText(this, ok ? "✔ settings.json 已更新" : "保存失败，请检查 JSON 格式", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void showEditPluginConfigDialog(PluginManager.PluginItem item) {
+        String content = PluginManager.getPluginConfig(this, item);
+        if (content == null || content.isEmpty()) {
+            Toast.makeText(this, "该插件暂无文本配置文件，路径: " + item.path, Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+
+        final EditText contentInput = createDialogInput("", true);
+        contentInput.setText(content);
+        contentInput.setMinLines(8);
+        contentInput.setTypeface(Typeface.MONOSPACE);
+
+        layout.addView(createDialogLabel("配置/内容 (" + item.getTypeName() + "):"));
+        layout.addView(contentInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("配置: " + item.name)
+                .setView(layout)
+                .setPositiveButton("保存修改", (dialog, which) -> {
+                    String newContent = contentInput.getText().toString().trim();
+                    boolean ok = PluginManager.savePluginConfig(this, item, newContent);
+                    Toast.makeText(this, ok ? "✔ 配置已保存并更新" : "保存失败", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                })
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private TextView createDialogLabel(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(0xFF8B949E);
+        tv.setTextSize(11.5f);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dpToPx(6);
+        lp.bottomMargin = dpToPx(2);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    private EditText createDialogInput(String hint, boolean multiline) {
+        EditText et = new EditText(this);
+        et.setHint(hint);
+        et.setTextColor(0xFFF0F6FC);
+        et.setHintTextColor(0xFF484F58);
+        et.setTextSize(12f);
+        et.setBackgroundColor(0xFF0D1117);
+        et.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        if (multiline) {
+            et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            et.setGravity(Gravity.TOP | Gravity.START);
+        } else {
+            et.setInputType(InputType.TYPE_CLASS_TEXT);
+            et.setSingleLine(true);
+        }
+        return et;
     }
 
     public void refreshSettingsPortFields() {

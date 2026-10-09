@@ -51,6 +51,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     public static volatile boolean isRunning = false;
     public static boolean isRunning() { return isRunning; }
+    private static volatile PetOverlayService sInstance = null;
+    public static PetOverlayService getInstance() { return sInstance; }
     public static final String ACTION_OVERLAY_STATE_CHANGED = "com.xm486.pimet.OVERLAY_STATE_CHANGED";
 
     private static final String TAG = "DevPetM.PetSvc";
@@ -153,6 +155,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     @Override
     public void onCreate() {
         super.onCreate();
+        sInstance = this;
         isRunning = true;
         try {
             sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
@@ -574,7 +577,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     /** 长按桌宠：弹出快捷菜单（宠物大小滑块 + 设置/关闭 + 指令说明） */
     public void showPetMenu() {
         if (petMenu == null) {
-            petMenu = new PetMenu(this);
+            petMenu = new PetMenu(this, this);
         }
         petMenu.show();
     }
@@ -1381,6 +1384,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             overlayRoot = null;
         }
         isRunning = false;
+        if (sInstance == this) {
+            sInstance = null;
+        }
         try {
             sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
         } catch (Throwable ignored) {}
