@@ -122,12 +122,15 @@ public class MainActivity extends AppCompatActivity {
     private boolean isTermMaximized = false;
 
     // 桌面宠物组件
-    private SpritePetView floatingPetView;
+    public SpritePetView floatingPetView;
     private LinearLayout petBubbleLayout;
     private TextView petBubbleTv;
-    private LinearLayout floatingPetChatCard;
-    private View viewPetStatusDot;
-    private TextView tvPetStatusText;
+    public LinearLayout floatingPetChatCard;
+    public View viewPetStatusDot;
+    public TextView tvPetStatusText;
+    public TextView tvPetCardStream;
+    public TextView tvPetThinking;
+    public TextView tvPetToolStatus;
     private View btnHidePetChatCard;
     private View btnPetChipDance;
     private View btnPetChipWave;
@@ -639,7 +642,7 @@ public class MainActivity extends AppCompatActivity {
         tabSettings.setOnClickListener(v -> switchTab(3));
     }
 
-    private void switchTab(int index) {
+    public void switchTab(int index) {
         viewLaunch.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
         if (viewPlugins != null) viewPlugins.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
@@ -714,7 +717,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void showPetBubble(String msg) {
+    public void showPetBubble(String msg) {
         if (petBubbleLayout == null || petBubbleTv == null) return;
         petBubbleHandler.removeCallbacks(petBubbleDismissRunnable);
         int maxW = dpToPx(PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH));
@@ -746,7 +749,7 @@ public class MainActivity extends AppCompatActivity {
         petBubbleHandler.post(typer);
     }
 
-    private void updatePetDisplay(boolean isPetEnabled) {
+    public void updatePetDisplay(boolean isPetEnabled) {
         if (floatingMenuContainer == null) return;
         // 核心单桌宠互斥机制：系统全局悬浮窗运行时，应用内桌宠与悬浮球彻底隐匿，杜绝同屏双桌宠冲突
         if (PetOverlayService.isRunning()) {
@@ -1013,7 +1016,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void initPetMonitor() {
+    public void initPetMonitor() {
         int port = PiMetConfig.getWebPort(this);
         if (piWebMonitor != null) {
             piWebMonitor.stop();
@@ -1714,7 +1717,7 @@ public class MainActivity extends AppCompatActivity {
         return et;
     }
 
-    private void applyPetParams() {
+    public void applyPetParams() {
         int petSize = PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
         int bubbleWidth = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
         if (floatingPetView != null) {
@@ -2717,6 +2720,9 @@ public class MainActivity extends AppCompatActivity {
         floatingPetChatCard = findViewById(R.id.floatingPetChatCard);
         viewPetStatusDot = findViewById(R.id.viewPetStatusDot);
         tvPetStatusText = findViewById(R.id.tvPetStatusText);
+        tvPetCardStream = findViewById(R.id.tvPetCardStream);
+        tvPetThinking = findViewById(R.id.tvPetThinking);
+        tvPetToolStatus = findViewById(R.id.tvPetToolStatus);
         btnHidePetChatCard = findViewById(R.id.btnHidePetChatCard);
         btnPetChipDance = findViewById(R.id.btnPetChipDance);
         btnPetChipWave = findViewById(R.id.btnPetChipWave);
@@ -4681,7 +4687,7 @@ public class MainActivity extends AppCompatActivity {
         return card;
     }
 
-    private void refreshSettingsPortFields() {
+    public void refreshSettingsPortFields() {
         if (settingsPortInput != null) {
             settingsPortInput.setText(String.valueOf(PiMetConfig.getWebPort(this)));
         }

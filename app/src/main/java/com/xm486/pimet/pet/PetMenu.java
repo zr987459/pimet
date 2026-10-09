@@ -209,8 +209,8 @@ public class PetMenu {
             petHeader.setTextSize(10f);
             petSwitchRow.addView(petHeader, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-            allPets = PetRegistry.getAllPets(context);
-            String currentDir = PetRegistry.getStringPref(context, PetRegistry.KEY_PET_DIR, PetRegistry.DEFAULT_PET_DIR);
+            allPets = PetRegistry.loadPets(context);
+            String currentDir = PetRegistry.getPetDir(context);
             currentPetIndex = 0;
             for (int i = 0; i < allPets.size(); i++) {
                 if (allPets.get(i).dir.equals(currentDir)) {
@@ -264,7 +264,7 @@ public class PetMenu {
                     sizeLabel.setText("📏 宠物大小: " + val + " dp");
                     PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, val);
                     if (service != null) {
-                        service.applyPetWidth(val);
+                        service.applyPetSize(val);
                     }
                     if (activity != null) {
                         activity.applyPetParams();
@@ -505,7 +505,15 @@ public class PetMenu {
 
     private void cycleChatMode() {
         ChatConfig cfg = ChatConfig.load(context);
-        cfg.cycleMode();
+        if (ChatConfig.MODE_PIWEB.equals(cfg.mode)) {
+            cfg.mode = ChatConfig.MODE_OPERIT;
+        } else if (ChatConfig.MODE_OPERIT.equals(cfg.mode)) {
+            cfg.mode = ChatConfig.MODE_CLAWBENCH;
+        } else if (ChatConfig.MODE_CLAWBENCH.equals(cfg.mode)) {
+            cfg.mode = ChatConfig.MODE_CUSTOM_API;
+        } else {
+            cfg.mode = ChatConfig.MODE_PIWEB;
+        }
         cfg.save(context);
         if (chatModeBtn != null) {
             chatModeBtn.setText(cfg.modeLabel());
@@ -541,7 +549,7 @@ public class PetMenu {
         if (allPets == null || allPets.isEmpty()) return;
         PetRegistry.PetInfo curPet = allPets.get(currentPetIndex);
         ChatConfig cfg = ChatConfig.load(context);
-        cfg.bindPetToCurrentMode(context, curPet.dir);
+        PetRegistry.setPetDirForMode(context, cfg.mode, curPet.dir);
         String msg = "✨ 已将「" + curPet.displayName + "」绑定到 " + cfg.modeLabel() + "！";
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show();
         if (service != null) service.showReplyBubble(msg);
