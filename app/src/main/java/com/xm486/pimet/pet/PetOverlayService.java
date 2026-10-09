@@ -100,6 +100,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     /** 任务完成气泡：上一状态 + 定时隐藏 */
     private OperitState lastState = OperitState.UNKNOWN;
+    private int preBubbleX = -1;
+    private int preBubbleY = -1;
     private final Handler bubbleHandler = new Handler(Looper.getMainLooper());
     private final Runnable bubbleHideRunnable = () -> {
         if (bubbleView != null && petView != null && statusCard != null) {
@@ -111,15 +113,31 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             cardLp.topMargin = petLp.height + dp(8);
             statusCard.setLayoutParams(cardLp);
 
-            bubbleView.animate().alpha(0f).setDuration(400)
+            bubbleView.animate().alpha(0f).setDuration(350)
                     .withEndAction(() -> {
                         bubbleView.setVisibility(View.GONE);
-                        try {
-                            WindowManager.LayoutParams lp =
-                                    (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
-                            windowManager.updateViewLayout(overlayRoot, lp);
-                        } catch (Exception ignored) {}
-                        overlayRoot.post(this::clampToScreen);
+                        if (preBubbleX != -1 && overlayRoot != null) {
+                            try {
+                                WindowManager.LayoutParams lp =
+                                        (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                                if (lp != null) {
+                                    lp.x = preBubbleX;
+                                    lp.y = preBubbleY;
+                                    windowManager.updateViewLayout(overlayRoot, lp);
+                                }
+                            } catch (Exception ignored) {}
+                            preBubbleX = -1;
+                            preBubbleY = -1;
+                        } else if (overlayRoot != null) {
+                            try {
+                                WindowManager.LayoutParams lp =
+                                        (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                                windowManager.updateViewLayout(overlayRoot, lp);
+                            } catch (Exception ignored) {}
+                        }
+                        if (overlayRoot != null) {
+                            overlayRoot.post(this::clampToScreen);
+                        }
                     })
                     .start();
         }
@@ -253,11 +271,41 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         if (bubbleView == null || msg == null || msg.trim().isEmpty()) return;
         this.lastProactiveMsg = msg;
         bubbleHandler.removeCallbacks(bubbleHideRunnable);
+
+        // 记录弹出前桌宠坐标，待气泡隐藏后平滑恢复（若用户中途拖拽则取消恢复）
+        if (overlayRoot != null) {
+            WindowManager.LayoutParams curLp =
+                    (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            if (curLp != null && preBubbleX == -1) {
+                preBubbleX = curLp.x;
+                preBubbleY = curLp.y;
+            }
+        }
+
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxW = Math.min(dp(220), (int)(dm.widthPixels * 0.78f));
+        bubbleView.setMaxWidth(maxW);
         bubbleView.setText("💬 " + msg + "\n(👉 点击进入互动)");
+
+        // 核心：测量气泡高度并将桌宠顶开至气泡下方，杜绝气泡遮挡桌宠
+        layoutChatBubble();
+
         bubbleView.setVisibility(View.VISIBLE);
         bubbleView.setAlpha(0f);
         bubbleView.animate().alpha(1f).setDuration(200).start();
         bubbleHandler.postDelayed(bubbleHideRunnable, 8500);
+
+        // 核心：重新测量窗口包裹范围并贴合屏幕四周安全边界，杜绝溢出屏幕
+        if (overlayRoot != null) {
+            overlayRoot.post(() -> {
+                try {
+                    WindowManager.LayoutParams lp =
+                            (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                    windowManager.updateViewLayout(overlayRoot, lp);
+                } catch (Exception ignored) {}
+                overlayRoot.post(this::clampToScreen);
+            });
+        }
     }
 
     /**
@@ -648,8 +696,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void layoutChatBubble() {
         if (bubbleView == null || petView == null || statusCard == null) return;
         int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
-        int wSpec = View.MeasureSpec.makeMeasureSpec(dp(bw), View.MeasureSpec.AT_MOST);
-        int hSpec = View.MeasureSpec.makeMeasureSpec(dp(160), View.MeasureSpec.AT_MOST);
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int maxW = Math.min(dp(bw), (int)(dm.widthPixels * 0.78f));
+        bubbleView.setMaxWidth(maxW);
+        int wSpec = View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST);
+        int hSpec = View.MeasureSpec.makeMeasureSpec(dp(180), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
         int shift = bubbleH + dp(6);
@@ -659,6 +710,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         FrameLayout.LayoutParams cardLp = (FrameLayout.LayoutParams) statusCard.getLayoutParams();
         cardLp.topMargin = shift + petLp.height + dp(8);
         statusCard.setLayoutParams(cardLp);
+        clampToScreen();
     }
 
     public void cancelBubbleHide() {
@@ -801,6 +853,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                         wmStart[1] = downLp.y;
                         dragging[0] = false;
                         downTime[0] = event.getDownTime();
+                        preBubbleX = -1;
+                        preBubbleY = -1;
                         return true;
                     }
                     case MotionEvent.ACTION_MOVE: {
@@ -809,6 +863,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                         float dy = event.getRawY() - touchStart[1];
                         if (Math.abs(dx) > dp(8) || Math.abs(dy) > dp(8)) {
                             dragging[0] = true;
+                            preBubbleX = -1;
+                            preBubbleY = -1;
                         }
                         if (dragging[0]) {
                             // 拖动中：按方向播放跑动动画
@@ -1001,7 +1057,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             int rootH = overlayRoot != null ? overlayRoot.getHeight() : 0;
             visibleH = cardB > 0 ? cardB : (rootH > 0 ? rootH : dp(240));
         } else {
-            // 卡片收起时：真实可见区域仅到桌宠底部（若气泡弹出，桌宠会被顶开向下，petView.getBottom() 依然是真实底部）
+            // 卡片收起时：真实可见区域到桌宠底部（若气泡弹出，桌宠会被顶开向下）
             int petB = petView != null ? petView.getBottom() : 0;
             if (petB <= 0 && petView != null && petView.getHeight() > 0) {
                 petB = petView.getHeight();
@@ -1010,20 +1066,32 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 petB = petView.getLayoutParams().height;
             }
             visibleH = petB > 0 ? petB : dp(80);
+
+            // 若气泡正在显示，计算气泡 + 桌宠顶开后的总可见高度
+            if (bubbleView != null && bubbleView.getVisibility() == View.VISIBLE) {
+                int bubbleH = bubbleView.getHeight() > 0 ? bubbleView.getHeight() : bubbleView.getMeasuredHeight();
+                int petH = petView != null && petView.getHeight() > 0 ? petView.getHeight() : dp(80);
+                visibleH = Math.max(visibleH, bubbleH + petH + dp(12));
+            }
         }
 
         int w = petView != null && petView.getWidth() > 0 ? petView.getWidth() : dp(80);
         if (cardVisible && statusCard != null && statusCard.getVisibility() == View.VISIBLE) {
             int rootW = overlayRoot != null ? overlayRoot.getWidth() : 0;
             w = rootW > 0 ? rootW : (lp.width > 0 ? lp.width : dp(160));
+        } else if (bubbleView != null && bubbleView.getVisibility() == View.VISIBLE) {
+            int bubbleW = bubbleView.getWidth() > 0 ? bubbleView.getWidth() : bubbleView.getMeasuredWidth();
+            if (bubbleW > 0) {
+                w = Math.max(w, bubbleW);
+            }
         }
 
         int edge = dp(4);
         int minX = -edge;
         int maxX = Math.max(minX, screenW - w + edge);
-        int minY = -edge;
-        // 允许桌宠完全划到屏幕最底部贴底
-        int maxY = Math.max(minY, screenH - visibleH);
+        int minY = dp(24); // 避开顶部状态栏与挖孔
+        // 允许桌宠完全划到屏幕最底部，并预留系统导航栏安全边距
+        int maxY = Math.max(minY, screenH - visibleH - dp(6));
         return new int[]{minX, maxX, minY, maxY};
     }
 
@@ -1086,7 +1154,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     }
 
     /** 将窗口位置限制在屏幕内（配合状态卡展开/收起） */
-    private void clampToScreen() {
+    public void clampToScreen() {
         if (overlayRoot == null) return;
         try {
             WindowManager.LayoutParams lp =

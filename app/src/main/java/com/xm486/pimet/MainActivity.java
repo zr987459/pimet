@@ -2415,40 +2415,12 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
-                    // 深度草稿保护：监听输入框，切换页面或刷新不丢字
+                    // 清理历史残留的输入草稿缓存，防止旧消息重复回填至输入框
                     view.evaluateJavascript(
                         "(function() { " +
-                        "  if (window.__pimetDraftHookInstalled) return; " +
-                        "  window.__pimetDraftHookInstalled = true; " +
-                        "  document.addEventListener('input', function(e) { " +
-                        "    var t = e.target; " +
-                        "    if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'text') || t.isContentEditable)) { " +
-                        "      try { " +
-                        "        var val = t.isContentEditable ? t.innerHTML : t.value; " +
-                        "        if (val && val.trim().length > 0) { " +
-                        "          sessionStorage.setItem('__pimet_chat_draft', val); " +
-                        "        } " +
-                        "      } catch(e) {} " +
-                        "    } " +
-                        "  }, true); " +
-                        "  document.addEventListener('keydown', function(e) { " +
-                        "    if (e.key === 'Enter' && !e.shiftKey) { " +
-                        "      setTimeout(function() { sessionStorage.removeItem('__pimet_chat_draft'); }, 200); " +
-                        "    } " +
-                        "  }, true); " +
                         "  try { " +
-                        "    var draft = sessionStorage.getItem('__pimet_chat_draft'); " +
-                        "    if (draft) { " +
-                        "      var el = document.querySelector('textarea, [contenteditable=\"true\"], input[type=\"text\"]'); " +
-                        "      if (el) { " +
-                        "        var cur = el.isContentEditable ? el.innerHTML : el.value; " +
-                        "        if (!cur || cur.trim().length === 0) { " +
-                        "          if (el.isContentEditable) el.innerHTML = draft; " +
-                        "          else el.value = draft; " +
-                        "          el.dispatchEvent(new Event('input', { bubbles: true })); " +
-                        "        } " +
-                        "      } " +
-                        "    } " +
+                        "    sessionStorage.removeItem('__pimet_chat_draft'); " +
+                        "    localStorage.removeItem('__pimet_chat_draft'); " +
                         "  } catch(e) {} " +
                         "})()",
                         null
@@ -2864,37 +2836,13 @@ public class MainActivity extends AppCompatActivity {
                     showPiWebOffline(false);
                     if (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port)) {
                         piWebWebView.loadUrl(url);
-                    } else {
-                        // 目标网页已正确加载，切勿调用 reload()，以完整保留用户正在输入的文字与草稿！
-                        restoreChatDraftInWebView();
                     }
+                    // 目标网页已正确加载，切勿调用 reload()，以完整保留 WebView 内存状态
                 } else {
                     showPiWebOffline(true);
                 }
             });
         }).start();
-    }
-
-    private void restoreChatDraftInWebView() {
-        if (piWebWebView == null) return;
-        piWebWebView.evaluateJavascript(
-            "(function() { " +
-            "  try { " +
-            "    var draft = sessionStorage.getItem('__pimet_chat_draft'); " +
-            "    if (!draft) return; " +
-            "    var el = document.querySelector('textarea, [contenteditable=\"true\"], input[type=\"text\"]'); " +
-            "    if (el) { " +
-            "      var cur = el.isContentEditable ? el.innerHTML : el.value; " +
-            "      if (!cur || cur.trim().length === 0) { " +
-            "        if (el.isContentEditable) el.innerHTML = draft; " +
-            "        else el.value = draft; " +
-            "        el.dispatchEvent(new Event('input', { bubbles: true })); " +
-            "      } " +
-            "    } " +
-            "  } catch(e) {} " +
-            "})()",
-            null
-        );
     }
 
     private void handlePiWebOfflineDetected() {
