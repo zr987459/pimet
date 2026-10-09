@@ -85,11 +85,22 @@ public class StatusCardView extends LinearLayout {
         header.addView(modeView, new LayoutParams(LayoutParams.WRAP_CONTENT,
                 LayoutParams.WRAP_CONTENT));
 
-        TextView fullScreenBtn = new TextView(context);
-        fullScreenBtn.setText(" ⛶ 全屏");
-        fullScreenBtn.setTextSize(10f);
+        // ---- 输入框 + 发送按钮 ----
+        LinearLayout inputRow = new LinearLayout(context);
+        inputRow.setOrientation(HORIZONTAL);
+        inputRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button fullScreenBtn = new Button(context);
+        fullScreenBtn.setText("⛶");
+        fullScreenBtn.setTextSize(15f);
         fullScreenBtn.setTextColor(0xFF38BDF8);
-        fullScreenBtn.setPadding(dp(6), 0, dp(2), 0);
+        fullScreenBtn.setPadding(0, 0, 0, 0);
+        fullScreenBtn.setMinHeight(0);
+        fullScreenBtn.setMinWidth(0);
+        GradientDrawable fsBg = new GradientDrawable();
+        fsBg.setColor(0x2238BDF8);
+        fsBg.setCornerRadius(dp(12));
+        fullScreenBtn.setBackground(fsBg);
         fullScreenBtn.setOnClickListener(v -> {
             try {
                 Intent intent = new Intent(context, com.xm486.pimet.MainActivity.class);
@@ -101,28 +112,9 @@ public class StatusCardView extends LinearLayout {
                 }
             } catch (Throwable ignored) {}
         });
-        header.addView(fullScreenBtn, new LayoutParams(LayoutParams.WRAP_CONTENT,
-                LayoutParams.WRAP_CONTENT));
-
-        // ---- 输入框 + 发送按钮 ----
-        LinearLayout inputRow = new LinearLayout(context);
-        inputRow.setOrientation(HORIZONTAL);
-        inputRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        attachButton = new Button(context);
-        attachButton.setText("📎");
-        attachButton.setTextSize(13f);
-        attachButton.setTextColor(0xFFFFFFFF);
-        attachButton.setPadding(0, 0, 0, 0);
-        attachButton.setMinHeight(0);
-        attachButton.setMinWidth(0);
-        GradientDrawable attachBg = new GradientDrawable();
-        attachBg.setColor(0x22FFFFFF);
-        attachBg.setCornerRadius(dp(12));
-        attachButton.setBackground(attachBg);
-        LayoutParams attachLp = new LayoutParams(dp(36), dp(36));
-        attachLp.rightMargin = dp(6);
-        inputRow.addView(attachButton, attachLp);
+        LayoutParams fsLp = new LayoutParams(dp(36), dp(36));
+        fsLp.rightMargin = dp(6);
+        inputRow.addView(fullScreenBtn, fsLp);
 
         chatInput = new EditText(context);
         chatInput.setHint("和我说说话…");

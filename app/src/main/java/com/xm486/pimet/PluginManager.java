@@ -5,6 +5,7 @@ import android.util.Log;
 
 import com.xm486.pimet.proot.ProotManager;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -12,12 +13,14 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Pi-Web 插件、技能与 MCP 服务管理类
- * 负责与 PRoot 容器文件系统内（/root/.pi/agent/）真实插件生态双向同步，杜绝预设污染与配置打架。
+ * 深度扫描并管理 PRoot 容器环境内完整生态（NPM 包、本地扩展、Agent 技能树、子代理、MCP 服务等）。
  */
 public final class PluginManager {
     private static final String TAG = "PluginManager";
@@ -32,12 +35,18 @@ public final class PluginManager {
         public final String name;
         public final String path;
         public final String description;
+        public final String rawPkgName;
 
         public PluginItem(int type, String name, String path, String description) {
+            this(type, name, path, description, name);
+        }
+
+        public PluginItem(int type, String name, String path, String description, String rawPkgName) {
             this.type = type;
             this.name = name;
             this.path = path;
             this.description = description;
+            this.rawPkgName = rawPkgName;
         }
 
         public String getTypeName() {
@@ -52,62 +61,18 @@ public final class PluginManager {
     }
 
     /**
-     * 清理所有历史自动注入的自定义预设插件，确保容器内干净、不打架
+     * 清理保护：不再误删用户的真实技能与插件
      */
     public static void cleanSelfAddedPlugins(Context context) {
-        new Thread(() -> {
-            try {
-                File rootfs = ProotManager.getRootfsDir(context);
-                if (!rootfs.exists()) return;
-
-                File piAgentDir = new File(rootfs, "root/.pi/agent");
-                if (piAgentDir.exists()) {
-                    // 1. 删除自动注入的 android-bridge.ts
-                    File bridgeExt = new File(piAgentDir, "extensions/android-bridge.ts");
-                    if (bridgeExt.exists()) bridgeExt.delete();
-
-                    // 2. 删除自动注入的预设技能
-                    String[] presetSkills = {"android-dev", "linux-ops", "git-master", "web-scraper", "system-admin.md", "package-deploy.md", "device-control.md"};
-                    for (String s : presetSkills) {
-                        File sDir = new File(piAgentDir, "skills/" + s);
-                        if (sDir.exists()) deleteRecursively(sDir);
-                    }
-
-                    // 3. 删除自动注入的预设子代理
-                    String[] presetSubagents = {"code-reviewer.md", "system-architect.md"};
-                    for (String sa : presetSubagents) {
-                        File saFile = new File(piAgentDir, "subagents/" + sa);
-                        if (saFile.exists()) saFile.delete();
-                    }
-
-                    // 4. 清理默认注入的 dummy mcp.json (如果只包含 filesystem/memory 模板且无其它用户服务)
-                    File mcpFile = new File(piAgentDir, "mcp.json");
-                    if (mcpFile.exists()) {
-                        String mcpContent = readFile(mcpFile);
-                        if (mcpContent != null && mcpContent.contains("@modelcontextprotocol/server-filesystem") && !mcpContent.contains("user-custom")) {
-                            mcpFile.delete();
-                        }
-                    }
-                }
-
-                // 5. 清理 /usr/local/bin 注入的桥接脚本
-                File pimetDev = new File(rootfs, "usr/local/bin/pimet-device");
-                if (pimetDev.exists()) pimetDev.delete();
-                File pimetShizuku = new File(rootfs, "usr/local/bin/pimet-shizuku");
-                if (pimetShizuku.exists()) pimetShizuku.delete();
-
-                Log.i(TAG, "Self-added preset plugins cleaned successfully.");
-            } catch (Throwable t) {
-                Log.w(TAG, "Failed to clean self-added plugins", t);
-            }
-        }).start();
+        // 保留接口兼容，避免误删用户技能文件
     }
 
     /**
-     * 动态从容器扫描真实已安装的插件与技能
+     * 深度扫描容器中真实已安装的各类插件、扩展包与技能
      */
     public static List<PluginItem> getInstalledPlugins(Context context) {
         List<PluginItem> list = new ArrayList<>();
+        Set<String> addedPaths = new HashSet<>();
         try {
             File rootfs = ProotManager.getRootfsDir(context);
             if (!rootfs.exists()) return list;
@@ -115,31 +80,131 @@ public final class PluginManager {
             File piAgentDir = new File(rootfs, "root/.pi/agent");
             if (!piAgentDir.exists()) return list;
 
-            // 1. 扫描 Extensions (~/.pi/agent/extensions)
+            // 1. 扫描 NPM 依赖包生态 (~/.pi/agent/npm/package.json & node_modules)
+            File npmDir = new File(piAgentDir, "npm");
+            File npmPkgJson = new File(npmDir, "package.json");
+            File npmNodeModules = new File(npmDir, "node_modules");
+
+            if (npmPkgJson.exists()) {
+                try {
+                    String pkgContent = readFile(npmPkgJson);
+                    if (pkgContent != null) {
+                        JSONObject rootPkg = new JSONObject(pkgContent);
+                        JSONObject deps = rootPkg.optJSONObject("dependencies");
+                        if (deps != null) {
+                            Iterator<String> depKeys = deps.keys();
+                            while (depKeys.hasNext()) {
+                                String pkgName = depKeys.next();
+                                File targetModDir = new File(npmNodeModules, pkgName);
+                                String version = "";
+                                String desc = "NPM 官方扩展包: " + pkgName;
+
+                                if (targetModDir.exists()) {
+                                    File subPkgJson = new File(targetModDir, "package.json");
+                                    if (subPkgJson.exists()) {
+                                        String subContent = readFile(subPkgJson);
+                                        if (subContent != null) {
+                                            JSONObject subObj = new JSONObject(subContent);
+                                            version = subObj.optString("version", "");
+                                            String d = subObj.optString("description", "");
+                                            if (!d.isEmpty()) desc = d;
+                                        }
+                                    }
+                                }
+
+                                String displayName = pkgName + (version.isEmpty() ? "" : " (v" + version + ")");
+                                String modPath = targetModDir.exists() ? targetModDir.getAbsolutePath() : npmPkgJson.getAbsolutePath();
+                                if (addedPaths.add(modPath)) {
+                                    list.add(new PluginItem(PluginItem.TYPE_EXTENSION, displayName, modPath, desc, pkgName));
+                                }
+
+                                // 扫描该 NPM 包内置的技能 (skills/*.md 或 skills/*)
+                                if (targetModDir.exists()) {
+                                    File pkgSkillsDir = new File(targetModDir, "skills");
+                                    if (pkgSkillsDir.exists() && pkgSkillsDir.isDirectory()) {
+                                        scanSkillsRecursive(pkgSkillsDir, list, addedPaths, pkgName);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            // 2. 扫描 settings.json 中声明的 packages
+            File settingsFile = new File(piAgentDir, "settings.json");
+            if (settingsFile.exists()) {
+                try {
+                    String sContent = readFile(settingsFile);
+                    if (sContent != null) {
+                        JSONObject sObj = new JSONObject(sContent);
+                        JSONArray pkgsArr = sObj.optJSONArray("packages");
+                        if (pkgsArr != null) {
+                            for (int i = 0; i < pkgsArr.length(); i++) {
+                                String pName = pkgsArr.optString(i, "");
+                                String cleanPkg = pName.startsWith("npm:") ? pName.substring(4) : pName;
+                                if (!cleanPkg.isEmpty()) {
+                                    File modDir = new File(npmNodeModules, cleanPkg);
+                                    if (!addedPaths.contains(modDir.getAbsolutePath())) {
+                                        addedPaths.add(modDir.getAbsolutePath());
+                                        list.add(new PluginItem(PluginItem.TYPE_EXTENSION, cleanPkg, modDir.getAbsolutePath(), "配置项声明包: " + pName, cleanPkg));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            // 3. 扫描本地手动编写的 Extensions (~/.pi/agent/extensions)
             File extDir = new File(piAgentDir, "extensions");
             if (extDir.exists() && extDir.isDirectory()) {
                 File[] files = extDir.listFiles();
                 if (files != null) {
                     for (File f : files) {
                         if (f.getName().startsWith(".")) continue;
-                        list.add(new PluginItem(PluginItem.TYPE_EXTENSION, f.getName(), f.getAbsolutePath(), "本地扩展: " + f.getName()));
+                        if (addedPaths.add(f.getAbsolutePath())) {
+                            list.add(new PluginItem(PluginItem.TYPE_EXTENSION, f.getName(), f.getAbsolutePath(), "本地脚本扩展: " + f.getName(), f.getName()));
+                        }
                     }
                 }
             }
 
-            // 2. 扫描 Skills (~/.pi/agent/skills)
+            // 4. 扫描独立技能目录 (~/.pi/agent/skills)
             File skillsDir = new File(piAgentDir, "skills");
             if (skillsDir.exists() && skillsDir.isDirectory()) {
-                File[] files = skillsDir.listFiles();
+                scanSkillsRecursive(skillsDir, list, addedPaths, null);
+            }
+
+            // 5. 扫描 Subagents (~/.pi/agent/subagents)
+            File subagentsDir = new File(piAgentDir, "subagents");
+            if (subagentsDir.exists() && subagentsDir.isDirectory()) {
+                File[] files = subagentsDir.listFiles();
                 if (files != null) {
                     for (File f : files) {
                         if (f.getName().startsWith(".")) continue;
-                        list.add(new PluginItem(PluginItem.TYPE_SKILL, f.getName(), f.getAbsolutePath(), "专家技能定义: " + f.getName()));
+                        if (addedPaths.add(f.getAbsolutePath())) {
+                            list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "子代理模板: " + f.getName()));
+                        }
                     }
                 }
             }
 
-            // 3. 扫描 MCP 服务 (~/.pi/agent/mcp.json)
+            // 6. 扫描 Prompts (~/.pi/agent/prompts)
+            File promptsDir = new File(piAgentDir, "prompts");
+            if (promptsDir.exists() && promptsDir.isDirectory()) {
+                File[] files = promptsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".")) continue;
+                        if (addedPaths.add(f.getAbsolutePath())) {
+                            list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "提示词模板: " + f.getName()));
+                        }
+                    }
+                }
+            }
+
+            // 7. 扫描 MCP 服务 (~/.pi/agent/mcp.json)
             File mcpFile = new File(piAgentDir, "mcp.json");
             if (mcpFile.exists() && mcpFile.isFile()) {
                 try {
@@ -158,33 +223,109 @@ public final class PluginManager {
                 } catch (Throwable ignored) {}
             }
 
-            // 4. 扫描 Subagents (~/.pi/agent/subagents)
-            File subagentsDir = new File(piAgentDir, "subagents");
-            if (subagentsDir.exists() && subagentsDir.isDirectory()) {
-                File[] files = subagentsDir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        if (f.getName().startsWith(".")) continue;
-                        list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "子代理模板: " + f.getName()));
+            // 8. 扫描全局 node_modules (/usr/local/lib/node_modules)
+            File globalNm = new File(rootfs, "usr/local/lib/node_modules");
+            if (globalNm.exists() && globalNm.isDirectory()) {
+                File[] gFiles = globalNm.listFiles();
+                if (gFiles != null) {
+                    for (File gf : gFiles) {
+                        String gName = gf.getName();
+                        if (gName.startsWith(".") || gName.equals("npm")) continue;
+                        if (addedPaths.add(gf.getAbsolutePath())) {
+                            list.add(new PluginItem(PluginItem.TYPE_EXTENSION, gName + " (全局)", gf.getAbsolutePath(), "全局 NPM 工具包: " + gName, gName));
+                        }
                     }
                 }
             }
 
-            // 5. 扫描 Prompts (~/.pi/agent/prompts)
-            File promptsDir = new File(piAgentDir, "prompts");
-            if (promptsDir.exists() && promptsDir.isDirectory()) {
-                File[] files = promptsDir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        if (f.getName().startsWith(".")) continue;
-                        list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "提示词模板: " + f.getName()));
-                    }
-                }
-            }
         } catch (Throwable t) {
             Log.e(TAG, "Failed to get installed plugins", t);
         }
         return list;
+    }
+
+    private static void scanSkillsRecursive(File dir, List<PluginItem> list, Set<String> addedPaths, String parentPkg) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            if (f.getName().startsWith(".")) continue;
+            if (f.isFile() && f.getName().endsWith(".md")) {
+                if (addedPaths.add(f.getAbsolutePath())) {
+                    String title = f.getName().replace(".md", "");
+                    String desc = parentPkg != null ? ("来自 " + parentPkg + " 内置技能") : ("本地专家技能: " + f.getName());
+                    list.add(new PluginItem(PluginItem.TYPE_SKILL, title, f.getAbsolutePath(), desc, parentPkg != null ? parentPkg : title));
+                }
+            } else if (f.isDirectory()) {
+                File skillDoc = new File(f, "SKILL.md");
+                if (skillDoc.exists()) {
+                    if (addedPaths.add(f.getAbsolutePath())) {
+                        String desc = parentPkg != null ? ("来自 " + parentPkg + " 技能包") : ("独立技能包: " + f.getName());
+                        list.add(new PluginItem(PluginItem.TYPE_SKILL, f.getName(), f.getAbsolutePath(), desc, parentPkg != null ? parentPkg : f.getName()));
+                    }
+                } else {
+                    scanSkillsRecursive(f, list, addedPaths, parentPkg);
+                }
+            }
+        }
+    }
+
+    /**
+     * 检查并更新指定插件
+     */
+    public static boolean updatePlugin(Context context, PluginItem item) {
+        try {
+            String pkg = item.rawPkgName != null && !item.rawPkgName.isEmpty() ? item.rawPkgName : item.name;
+            if (pkg.contains(" (v")) {
+                pkg = pkg.substring(0, pkg.indexOf(" (v")).trim();
+            }
+            if (pkg.contains(" (全局)")) {
+                pkg = pkg.replace(" (全局)", "").trim();
+            }
+
+            if (item.type == PluginItem.TYPE_EXTENSION) {
+                String cmd1 = "cd /root/.pi/agent/npm && npm install " + pkg + "@latest --registry=https://registry.npmmirror.com";
+                int code1 = ProotManager.executeCommandSync(context, cmd1);
+                if (code1 == 0) return true;
+
+                String cmd2 = "npm install -g " + pkg + "@latest --registry=https://registry.npmmirror.com";
+                int code2 = ProotManager.executeCommandSync(context, cmd2);
+                return code2 == 0;
+            } else if (item.type == PluginItem.TYPE_SKILL) {
+                if (item.rawPkgName != null && !item.rawPkgName.equals(item.name)) {
+                    String cmd = "cd /root/.pi/agent/npm && npm install " + item.rawPkgName + "@latest --registry=https://registry.npmmirror.com";
+                    return ProotManager.executeCommandSync(context, cmd) == 0;
+                }
+                File gitDir = new File(item.path, ".git");
+                if (gitDir.exists()) {
+                    String cmd = "cd " + item.path + " && git pull";
+                    return ProotManager.executeCommandSync(context, cmd) == 0;
+                }
+            }
+
+            String fallbackCmd = "cd /root/.pi/agent/npm && npm update " + pkg + " --registry=https://registry.npmmirror.com";
+            return ProotManager.executeCommandSync(context, fallbackCmd) == 0;
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to update plugin: " + item.name, t);
+        }
+        return false;
+    }
+
+    /**
+     * 一键更新容器内所有插件与依赖包
+     */
+    public static boolean updateAllPlugins(Context context) {
+        try {
+            String cmd1 = "cd /root/.pi/agent/npm && npm update --registry=https://registry.npmmirror.com";
+            int code1 = ProotManager.executeCommandSync(context, cmd1);
+
+            String cmd2 = "npm update -g --registry=https://registry.npmmirror.com";
+            int code2 = ProotManager.executeCommandSync(context, cmd2);
+
+            return code1 == 0 || code2 == 0;
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to update all plugins", t);
+        }
+        return false;
     }
 
     /**
@@ -209,10 +350,18 @@ public final class PluginManager {
                 }
                 return false;
             } else {
+                String pkg = item.rawPkgName != null && !item.rawPkgName.isEmpty() ? item.rawPkgName : item.name;
+                if (pkg.contains(" (v")) {
+                    pkg = pkg.substring(0, pkg.indexOf(" (v")).trim();
+                }
+                if (item.type == PluginItem.TYPE_EXTENSION && !pkg.endsWith(".ts") && !pkg.endsWith(".js")) {
+                    ProotManager.executeCommandSync(context, "cd /root/.pi/agent/npm && npm uninstall " + pkg);
+                }
                 File target = new File(item.path);
                 if (target.exists()) {
                     return deleteRecursively(target);
                 }
+                return true;
             }
         } catch (Throwable t) {
             Log.e(TAG, "Failed to delete plugin: " + item.name, t);
@@ -318,19 +467,17 @@ public final class PluginManager {
                     "    description: \"控制 Android 宿主应用的界面与端口：切换选项卡(工作台/终端/设置/操控台)、配置各服务端口\",\n" +
                     "    parameters: Type.Object({\n" +
                     "      switch_tab: Type.Optional(Type.String({ description: \"切换界面: launch(主页), web(Pi-Web工作台), terminal(终端), settings(设置)\" })),\n" +
-                    "      ports: Type.Optional(\n" +
-                    "        Type.Object({\n" +
-                    "          piweb: Type.Optional(Type.Number()),\n" +
-                    "          operit: Type.Optional(Type.Number()),\n" +
-                    "          clawbench: Type.Optional(Type.Number()),\n" +
-                    "          rikka: Type.Optional(Type.Number()),\n" +
-                    "        })\n" +
-                    "      ),\n" +
+                    "      ports: Type.Optional(Type.Object({\n" +
+                    "        piweb: Type.Optional(Type.Number()),\n" +
+                    "        operit: Type.Optional(Type.Number()),\n" +
+                    "        clawbench: Type.Optional(Type.Number()),\n" +
+                    "        rikka: Type.Optional(Type.Number()),\n" +
+                    "      })),\n" +
                     "    }),\n" +
                     "    async execute(_toolCallId, params) {\n" +
                     "      const result = await sendBridgeAction({ action: \"control_app_ui\", ...params });\n" +
                     "      return {\n" +
-                    "        content: [{ type: \"text\", text: `📱 Android 宿主界面指令已下发！${result}` }],\n" +
+                    "        content: [{ type: \"text\", text: `📱 宿主界面与端口控制指令已执行！${result}` }],\n" +
                     "        details: params,\n" +
                     "      };\n" +
                     "    },\n" +
@@ -338,30 +485,25 @@ public final class PluginManager {
                     "}\n";
 
             writeFile(bridgeFile, code);
-            Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts ensured in container");
+            Log.i(TAG, "PiMet Android Bridge extension ensured at: " + bridgeFile.getAbsolutePath());
         } catch (Throwable t) {
-            Log.w("PiMet.PluginMgr", "Failed to ensure Android bridge extension", t);
+            Log.e(TAG, "Failed to ensure Android Bridge extension", t);
         }
     }
 
     private static String readFile(File file) {
-        try (FileInputStream fis = new FileInputStream(file);
-             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
-            byte[] buf = new byte[2048];
-            int n;
-            while ((n = fis.read(buf)) != -1) {
-                bos.write(buf, 0, n);
-            }
-            return bos.toString("UTF-8");
+        try (FileInputStream fis = new FileInputStream(file)) {
+            byte[] data = new byte[(int) file.length()];
+            fis.read(data);
+            return new String(data, StandardCharsets.UTF_8);
         } catch (Throwable t) {
             return null;
         }
     }
 
     private static void writeFile(File file, String content) {
-        try (FileOutputStream fos = new FileOutputStream(file, false)) {
+        try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(content.getBytes(StandardCharsets.UTF_8));
-            fos.flush();
         } catch (Throwable ignored) {}
     }
 }

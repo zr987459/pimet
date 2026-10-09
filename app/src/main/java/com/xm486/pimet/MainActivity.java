@@ -244,20 +244,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean isFloatDragging = false;
 
     // 设置视图组件
-    private TextView chipProviderDeepSeek;
-    private TextView chipProviderOpenAI;
-    private TextView chipProviderClaude;
-    private TextView chipProviderOpenRouter;
-    private TextView chipProviderCustom;
-    private EditText inputAiApiKey;
-    private View btnToggleKeyVisibility;
-    private EditText inputAiBaseUrl;
-    private EditText inputAiModel;
-    private View btnSaveAiConfig;
-    private View btnFetchAiModels;
-    private String selectedProvider = PiMetConfig.PROVIDER_DEEPSEEK;
-    private boolean isApiKeyVisible = false;
-
     private EditText settingsPortInput;
     private EditText settingsOperitPortInput;
     private EditText settingsOperitTokenInput;
@@ -335,16 +321,6 @@ public class MainActivity extends AppCompatActivity {
         initPiWebView();
         initPluginsPanel();
         initSettingsPanel();
-
-        // 彻底清理历史自动注入的预设插件，杜绝生态污染与配置冲突
-        PluginManager.cleanSelfAddedPlugins(this);
-
-        // 启动时在后台静默尝试从容器反向同步最新 AI 凭据配置
-        new Thread(() -> {
-            if (PiMetConfig.syncFromContainer(this)) {
-                mainHandler.post(this::refreshSettingsUiFields);
-            }
-        }).start();
 
         // 首次状态自检
         checkServiceStatus();
@@ -436,18 +412,6 @@ public class MainActivity extends AppCompatActivity {
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
         // Settings 组件
-        chipProviderDeepSeek = findViewById(R.id.chipProviderDeepSeek);
-        chipProviderOpenAI = findViewById(R.id.chipProviderOpenAI);
-        chipProviderClaude = findViewById(R.id.chipProviderClaude);
-        chipProviderOpenRouter = findViewById(R.id.chipProviderOpenRouter);
-        chipProviderCustom = findViewById(R.id.chipProviderCustom);
-        inputAiApiKey = findViewById(R.id.inputAiApiKey);
-        btnToggleKeyVisibility = findViewById(R.id.btnToggleKeyVisibility);
-        inputAiBaseUrl = findViewById(R.id.inputAiBaseUrl);
-        inputAiModel = findViewById(R.id.inputAiModel);
-        btnSaveAiConfig = findViewById(R.id.btnSaveAiConfig);
-        btnFetchAiModels = findViewById(R.id.btnFetchAiModels);
-
         settingsPortInput = findViewById(R.id.settingsPortInput);
         settingsOperitPortInput = findViewById(R.id.settingsOperitPortInput);
         settingsOperitTokenInput = findViewById(R.id.settingsOperitTokenInput);
@@ -2671,14 +2635,12 @@ public class MainActivity extends AppCompatActivity {
         }
         View decorView = getWindow().getDecorView();
         if (fullscreen) {
+            // 保留顶部系统状态栏（便于查看时间、电量），仅隐藏底部虚拟导航按键与底栏
             decorView.setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    | View.SYSTEM_UI_FLAG_FULLSCREEN
                     | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-            Toast.makeText(this, "已进入工作台全屏沉浸模式", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已进入工作台全屏模式", Toast.LENGTH_SHORT).show();
         } else {
             decorView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
             Toast.makeText(this, "已退出全屏", Toast.LENGTH_SHORT).show();
@@ -2749,64 +2711,6 @@ public class MainActivity extends AppCompatActivity {
 
     // ================= 设置面板 =================
     private void initSettingsPanel() {
-        // AI 模型与 API Key 配置初始化
-        selectedProvider = PiMetConfig.getAiProvider(this);
-        inputAiApiKey.setText(PiMetConfig.getAiApiKey(this));
-        inputAiBaseUrl.setText(PiMetConfig.getAiBaseUrl(this));
-        inputAiModel.setText(PiMetConfig.getAiModel(this));
-        updateProviderChips();
-
-        chipProviderDeepSeek.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_DEEPSEEK, "https://api.deepseek.com", "deepseek-chat"));
-        chipProviderOpenAI.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_OPENAI, "https://api.openai.com/v1", "gpt-4o"));
-        chipProviderClaude.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_CLAUDE, "https://api.anthropic.com", "claude-3-7-sonnet"));
-        chipProviderOpenRouter.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_OPENROUTER, "https://openrouter.ai/api/v1", "anthropic/claude-3.7-sonnet"));
-        chipProviderCustom.setOnClickListener(v -> selectProvider(PiMetConfig.PROVIDER_CUSTOM, "", ""));
-
-        btnToggleKeyVisibility.setOnClickListener(v -> {
-            isApiKeyVisible = !isApiKeyVisible;
-            if (isApiKeyVisible) {
-                inputAiApiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-            } else {
-                inputAiApiKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            }
-            inputAiApiKey.setSelection(inputAiApiKey.getText().length());
-        });
-
-        btnSaveAiConfig.setOnClickListener(v -> {
-            String apiKey = inputAiApiKey.getText().toString().trim();
-            String baseUrl = inputAiBaseUrl.getText().toString().trim();
-            String model = inputAiModel.getText().toString().trim();
-
-            PiMetConfig.setAiProvider(this, selectedProvider);
-            PiMetConfig.setAiApiKey(this, apiKey);
-            PiMetConfig.setAiBaseUrl(this, baseUrl);
-            PiMetConfig.setAiModel(this, model);
-
-            PiMetConfig.syncToContainer(this);
-            updateLaunchModelDesc();
-            Toast.makeText(this, "✔ AI 凭据已保存并安全同步至 PRoot 容器！", Toast.LENGTH_SHORT).show();
-        });
-
-        btnSyncAiFromContainer = findViewById(R.id.btnSyncAiFromContainer);
-        if (btnSyncAiFromContainer != null) {
-            btnSyncAiFromContainer.setOnClickListener(v -> {
-                Toast.makeText(this, "正在从容器 (~/.pi/agent/) 读取配置...", Toast.LENGTH_SHORT).show();
-                new Thread(() -> {
-                    boolean updated = PiMetConfig.syncFromContainer(this);
-                    mainHandler.post(() -> {
-                        refreshSettingsUiFields();
-                        if (updated) {
-                            Toast.makeText(this, "✔ 已成功从容器同步最新 AI 凭据！", Toast.LENGTH_SHORT).show();
-                        } else {
-                            Toast.makeText(this, "容器内部配置已与当前界面保持一致", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                }).start();
-            });
-        }
-
-        btnFetchAiModels.setOnClickListener(v -> fetchAiModels());
-
         refreshSettingsPortFields();
 
         if (btnTestPiWebPort != null) {
@@ -3236,151 +3140,6 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    private void fetchAiModels() {
-        String apiKey = inputAiApiKey.getText().toString().trim();
-        String baseUrl = inputAiBaseUrl.getText().toString().trim();
-
-        if (TextUtils.isEmpty(baseUrl)) {
-            Toast.makeText(this, "⚠️ 请先填写 API Base URL (接口地址)", Toast.LENGTH_SHORT).show();
-            inputAiBaseUrl.requestFocus();
-            return;
-        }
-
-        if (TextUtils.isEmpty(apiKey)) {
-            Toast.makeText(this, "⚠️ 请先填写 API Key (密钥)", Toast.LENGTH_SHORT).show();
-            inputAiApiKey.requestFocus();
-            return;
-        }
-
-        Toast.makeText(this, "🔍 正在连接接口自动获取在线模型...", Toast.LENGTH_SHORT).show();
-
-        new Thread(() -> {
-            HttpURLConnection conn = null;
-            try {
-                String cleanUrl = baseUrl.replaceAll("/+$", "");
-                String requestUrl;
-                if (cleanUrl.endsWith("/v1")) {
-                    requestUrl = cleanUrl + "/models";
-                } else {
-                    requestUrl = cleanUrl + "/v1/models";
-                }
-
-                conn = (HttpURLConnection) new URL(requestUrl).openConnection();
-                conn.setRequestMethod("GET");
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(12000);
-                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
-                conn.setRequestProperty("Content-Type", "application/json");
-
-                int code = conn.getResponseCode();
-                InputStream in = (code >= 200 && code < 400) ? conn.getInputStream() : conn.getErrorStream();
-
-                StringBuilder resp = new StringBuilder();
-                if (in != null) {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            resp.append(line);
-                        }
-                    }
-                }
-
-                if (code >= 200 && code < 400) {
-                    List<String> modelList = parseModelsFromJson(resp.toString());
-                    if (modelList.isEmpty()) {
-                        mainHandler.post(() -> Toast.makeText(this, "接口返回成功，但未解析到模型", Toast.LENGTH_LONG).show());
-                        return;
-                    }
-                    mainHandler.post(() -> showModelSelectDialog(modelList));
-                } else {
-                    String errorMsg = "HTTP " + code + ": " + (resp.length() > 80 ? resp.substring(0, 80) : resp.toString());
-                    mainHandler.post(() -> Toast.makeText(this, "获取模型失败: " + errorMsg, Toast.LENGTH_LONG).show());
-                }
-
-            } catch (Throwable t) {
-                Log.e(TAG, "fetchAiModels error", t);
-                mainHandler.post(() -> Toast.makeText(this, "网络请求异常: " + t.getMessage(), Toast.LENGTH_LONG).show());
-            } finally {
-                if (conn != null) {
-                    try { conn.disconnect(); } catch (Throwable ignored) {}
-                }
-            }
-        }).start();
-    }
-
-    private List<String> parseModelsFromJson(String json) {
-        List<String> list = new ArrayList<>();
-        try {
-            JSONObject obj = new JSONObject(json);
-            if (obj.has("data")) {
-                JSONArray data = obj.getJSONArray("data");
-                for (int i = 0; i < data.length(); i++) {
-                    JSONObject m = data.getJSONObject(i);
-                    if (m.has("id")) {
-                        list.add(m.getString("id"));
-                    }
-                }
-            } else if (obj.has("models")) {
-                JSONArray models = obj.getJSONArray("models");
-                for (int i = 0; i < models.length(); i++) {
-                    JSONObject m = models.getJSONObject(i);
-                    if (m.has("name")) {
-                        list.add(m.getString("name"));
-                    } else if (m.has("model")) {
-                        list.add(m.getString("model"));
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-        Collections.sort(list);
-        return list;
-    }
-
-    private void showModelSelectDialog(List<String> models) {
-        String[] modelArray = models.toArray(new String[0]);
-        new AlertDialog.Builder(this)
-                .setTitle("在线获取成功 (共 " + models.size() + " 个模型)")
-                .setItems(modelArray, (dialog, which) -> {
-                    String chosen = modelArray[which];
-                    inputAiModel.setText(chosen);
-                    btnSaveAiConfig.performClick();
-                    Toast.makeText(this, "🎉 已设定并同步模型: " + chosen, Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void selectProvider(String provider, String defaultBaseUrl, String defaultModel) {
-        selectedProvider = provider;
-        if (!TextUtils.isEmpty(defaultBaseUrl)) {
-            inputAiBaseUrl.setText(defaultBaseUrl);
-        }
-        if (!TextUtils.isEmpty(defaultModel)) {
-            inputAiModel.setText(defaultModel);
-        }
-        updateProviderChips();
-    }
-
-    private void updateProviderChips() {
-        int primaryBg = R.drawable.bg_btn_primary;
-        int secBg = R.drawable.bg_btn_secondary;
-
-        chipProviderDeepSeek.setBackgroundResource(PiMetConfig.PROVIDER_DEEPSEEK.equals(selectedProvider) ? primaryBg : secBg);
-        chipProviderDeepSeek.setTextColor(PiMetConfig.PROVIDER_DEEPSEEK.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
-
-        chipProviderOpenAI.setBackgroundResource(PiMetConfig.PROVIDER_OPENAI.equals(selectedProvider) ? primaryBg : secBg);
-        chipProviderOpenAI.setTextColor(PiMetConfig.PROVIDER_OPENAI.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
-
-        chipProviderClaude.setBackgroundResource(PiMetConfig.PROVIDER_CLAUDE.equals(selectedProvider) ? primaryBg : secBg);
-        chipProviderClaude.setTextColor(PiMetConfig.PROVIDER_CLAUDE.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
-
-        chipProviderOpenRouter.setBackgroundResource(PiMetConfig.PROVIDER_OPENROUTER.equals(selectedProvider) ? primaryBg : secBg);
-        chipProviderOpenRouter.setTextColor(PiMetConfig.PROVIDER_OPENROUTER.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
-
-        chipProviderCustom.setBackgroundResource(PiMetConfig.PROVIDER_CUSTOM.equals(selectedProvider) ? primaryBg : secBg);
-        chipProviderCustom.setTextColor(PiMetConfig.PROVIDER_CUSTOM.equals(selectedProvider) ? 0xFFFFFFFF : 0xFFC9D1D9);
-    }
-
     private void updateRegistryButtons() {
         String currentRegistry = PiMetConfig.getNpmRegistry(this);
         boolean isMirror = currentRegistry.contains("npmmirror");
@@ -3578,6 +3337,20 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
+        View btnUpdateAllPlugins = findViewById(R.id.btnUpdateAllPlugins);
+        if (btnUpdateAllPlugins != null) {
+            btnUpdateAllPlugins.setOnClickListener(v -> {
+                Toast.makeText(this, "正在更新容器内所有插件与依赖包...", Toast.LENGTH_LONG).show();
+                new Thread(() -> {
+                    boolean ok = PluginManager.updateAllPlugins(this);
+                    mainHandler.post(() -> {
+                        Toast.makeText(this, ok ? "✔ 所有插件更新完成！" : "插件更新流程结束", Toast.LENGTH_SHORT).show();
+                        refreshPluginsList(currentPluginCategory);
+                    });
+                }).start();
+            });
+        }
+
         if (btnInstallCustomPlugin != null) {
             btnInstallCustomPlugin.setOnClickListener(v -> {
                 String pkg = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
@@ -3716,6 +3489,29 @@ public class MainActivity extends AppCompatActivity {
         aLp.topMargin = dpToPx(8);
         actions.setLayoutParams(aLp);
 
+        TextView btnUpdate = new TextView(this);
+        btnUpdate.setText("🆙 更新插件");
+        btnUpdate.setTextColor(0xFF58A6FF);
+        btnUpdate.setTextSize(12f);
+        btnUpdate.setBackgroundResource(R.drawable.bg_btn_secondary);
+        btnUpdate.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        btnUpdate.setOnClickListener(v -> {
+            Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
+                boolean ok = PluginManager.updatePlugin(this, item);
+                mainHandler.post(() -> {
+                    Toast.makeText(this, ok ? "✔ 插件已更新: " + item.name : "更新流程完成或无需更新", Toast.LENGTH_SHORT).show();
+                    refreshPluginsList(currentPluginCategory);
+                });
+            }).start();
+        });
+        actions.addView(btnUpdate);
+
+        View spacing = new View(this);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(dpToPx(8), 1);
+        spacing.setLayoutParams(sLp);
+        actions.addView(spacing);
+
         TextView btnDelete = new TextView(this);
         btnDelete.setText("🗑️ 移除此插件");
         btnDelete.setTextColor(0xFFF85149);
@@ -3766,11 +3562,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void refreshSettingsUiFields() {
-        selectedProvider = PiMetConfig.getAiProvider(this);
-        if (inputAiApiKey != null) inputAiApiKey.setText(PiMetConfig.getAiApiKey(this));
-        if (inputAiBaseUrl != null) inputAiBaseUrl.setText(PiMetConfig.getAiBaseUrl(this));
-        if (inputAiModel != null) inputAiModel.setText(PiMetConfig.getAiModel(this));
-        updateProviderChips();
         updateLaunchModelDesc();
         refreshSettingsPortFields();
     }
