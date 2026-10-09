@@ -6,7 +6,11 @@ import android.text.TextUtils;
 
 import com.xm486.pimet.proot.ProotManager;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -164,6 +168,7 @@ public final class PiMetConfig {
 
     /**
      * 将模型环境变量动态注入到 PRoot 启动环境
+     * 严格隔离不同服务商的环境变量，杜绝跨服务商污染与 OpenAI 选项意外弹出
      */
     public static void injectEnvironment(Context context, Map<String, String> env) {
         String provider = getAiProvider(context);
@@ -171,14 +176,29 @@ public final class PiMetConfig {
         String baseUrl = getAiBaseUrl(context);
         String model = getAiModel(context);
 
+        // 彻底清理互斥的环境变量，防止打架
+        env.remove("OPENAI_API_KEY");
+        env.remove("OPENAI_BASE_URL");
+        env.remove("DEEPSEEK_API_KEY");
+        env.remove("DEEPSEEK_BASE_URL");
+        env.remove("ANTHROPIC_API_KEY");
+        env.remove("OPENROUTER_API_KEY");
+        env.remove("PI_MODEL");
+
         if (!TextUtils.isEmpty(apiKey)) {
             switch (provider) {
                 case PROVIDER_DEEPSEEK:
                     env.put("DEEPSEEK_API_KEY", apiKey);
+                    if (!TextUtils.isEmpty(baseUrl) && !baseUrl.contains("api.deepseek.com")) {
+                        env.put("DEEPSEEK_BASE_URL", baseUrl);
+                    }
                     break;
                 case PROVIDER_OPENAI:
-                case PROVIDER_CUSTOM:
+                    // 仅当用户明确配置为官方 OpenAI 时注入
                     env.put("OPENAI_API_KEY", apiKey);
+                    if (!TextUtils.isEmpty(baseUrl)) {
+                        env.put("OPENAI_BASE_URL", baseUrl);
+                    }
                     break;
                 case PROVIDER_CLAUDE:
                     env.put("ANTHROPIC_API_KEY", apiKey);
@@ -186,12 +206,10 @@ public final class PiMetConfig {
                 case PROVIDER_OPENROUTER:
                     env.put("OPENROUTER_API_KEY", apiKey);
                     break;
+                case PROVIDER_CUSTOM:
+                    // 自定义模型由 models.json 接管，绝不注入 OPENAI_API_KEY 避免 Web 端莫名多出 OpenAI
+                    break;
             }
-        }
-
-        if (!TextUtils.isEmpty(baseUrl)) {
-            env.put("OPENAI_BASE_URL", baseUrl);
-            env.put("DEEPSEEK_BASE_URL", baseUrl);
         }
 
         if (!TextUtils.isEmpty(model)) {
@@ -200,7 +218,107 @@ public final class PiMetConfig {
     }
 
     /**
-     * 同步持久化写入容器内部的 /root/.bashrc 和 ~/.pi/agent/auth.json
+     * 反向同步：从容器内部 (~/.pi/agent/) 读取已生效的配置到 App 外部界面
+     * 返回 true 表示检测到配置变更并已更新本地设置
+     */
+    public static boolean syncFromContainer(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            if (!rootfs.exists()) return false;
+            File agentDir = new File(rootfs, "root/.pi/agent");
+            if (!agentDir.exists()) return false;
+
+            File settingsFile = new File(agentDir, "settings.json");
+            File authFile = new File(agentDir, "auth.json");
+            File modelsFile = new File(agentDir, "models.json");
+
+            String provider = null;
+            String model = null;
+            String apiKey = null;
+            String baseUrl = null;
+
+            if (settingsFile.exists()) {
+                try {
+                    JSONObject settings = new JSONObject(readFile(settingsFile));
+                    if (settings.has("defaultProvider")) {
+                        provider = settings.optString("defaultProvider");
+                    }
+                    if (settings.has("defaultModel")) {
+                        model = settings.optString("defaultModel");
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            if (authFile.exists()) {
+                try {
+                    JSONObject auth = new JSONObject(readFile(authFile));
+                    if (provider != null && auth.has(provider)) {
+                        JSONObject pObj = auth.optJSONObject(provider);
+                        if (pObj != null) apiKey = pObj.optString("key");
+                    } else {
+                        for (String p : new String[]{"deepseek", "anthropic", "openrouter", "openai", "custom"}) {
+                            if (auth.has(p)) {
+                                JSONObject pObj = auth.optJSONObject(p);
+                                if (pObj != null && !TextUtils.isEmpty(pObj.optString("key"))) {
+                                    if (provider == null) provider = p;
+                                    apiKey = pObj.optString("key");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            if (modelsFile.exists()) {
+                try {
+                    JSONObject models = new JSONObject(readFile(modelsFile));
+                    JSONObject providers = models.optJSONObject("providers");
+                    if (providers != null && providers.has("custom")) {
+                        JSONObject custom = providers.optJSONObject("custom");
+                        if (custom != null) {
+                            baseUrl = custom.optString("baseUrl");
+                            if (apiKey == null && custom.has("apiKey")) {
+                                apiKey = custom.optString("apiKey");
+                            }
+                            if ("custom".equals(provider)) {
+                                JSONArray mArr = custom.optJSONArray("models");
+                                if (mArr != null && mArr.length() > 0) {
+                                    model = mArr.getJSONObject(0).optString("id");
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+
+            boolean changed = false;
+            if (!TextUtils.isEmpty(provider)) {
+                if ("anthropic".equals(provider)) provider = PROVIDER_CLAUDE;
+                setAiProvider(context, provider);
+                changed = true;
+            }
+            if (!TextUtils.isEmpty(apiKey)) {
+                setAiApiKey(context, apiKey);
+                changed = true;
+            }
+            if (!TextUtils.isEmpty(baseUrl)) {
+                setAiBaseUrl(context, baseUrl);
+                changed = true;
+            }
+            if (!TextUtils.isEmpty(model)) {
+                setAiModel(context, model);
+                changed = true;
+            }
+            return changed;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 同步持久化写入容器内部的 /root/.bashrc, ~/.pi/agent/auth.json, models.json 和 settings.json
+     * 采用增量合并与防打架机制，避免覆盖容器内其它配置，更杜绝污染出错误的 openai 选项
      */
     public static void syncToContainer(Context context) {
         new Thread(() -> {
@@ -216,74 +334,115 @@ public final class PiMetConfig {
                 String baseUrl = getAiBaseUrl(context);
                 String model = getAiModel(context);
 
-                // 1. 写入 /root/.bashrc
+                // 1. 安全净化并写入 /root/.bashrc，不滥用全局环境变量，杜绝打架
                 File bashrc = new File(rootHome, ".bashrc");
                 StringBuilder bashContent = new StringBuilder();
-                bashContent.append("# PiMet Auto-Generated AI Credentials\n");
+                bashContent.append("# PiMet Auto-Generated Environment\n");
                 bashContent.append("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n");
                 bashContent.append("export TERM=xterm-256color\n");
                 bashContent.append("export PI_CODING_AGENT_DIR=/root/.pi/agent\n");
-                if (!TextUtils.isEmpty(apiKey)) {
-                    if (PROVIDER_DEEPSEEK.equals(provider)) {
-                        bashContent.append("export DEEPSEEK_API_KEY=\"").append(apiKey).append("\"\n");
-                    } else if (PROVIDER_CLAUDE.equals(provider)) {
-                        bashContent.append("export ANTHROPIC_API_KEY=\"").append(apiKey).append("\"\n");
-                    } else if (PROVIDER_OPENROUTER.equals(provider)) {
-                        bashContent.append("export OPENROUTER_API_KEY=\"").append(apiKey).append("\"\n");
-                    } else {
-                        bashContent.append("export OPENAI_API_KEY=\"").append(apiKey).append("\"\n");
+                // 仅当用户选中的就是 OpenAI 时，才允许在终端会话导出 OPENAI_API_KEY，其它模型绝不导出
+                if (PROVIDER_OPENAI.equals(provider) && !TextUtils.isEmpty(apiKey)) {
+                    bashContent.append("export OPENAI_API_KEY=\"").append(apiKey).append("\"\n");
+                    if (!TextUtils.isEmpty(baseUrl)) {
+                        bashContent.append("export OPENAI_BASE_URL=\"").append(baseUrl).append("\"\n");
                     }
-                }
-                if (!TextUtils.isEmpty(baseUrl)) {
-                    bashContent.append("export OPENAI_BASE_URL=\"").append(baseUrl).append("\"\n");
+                } else if (PROVIDER_DEEPSEEK.equals(provider) && !TextUtils.isEmpty(apiKey)) {
+                    bashContent.append("export DEEPSEEK_API_KEY=\"").append(apiKey).append("\"\n");
+                } else if (PROVIDER_CLAUDE.equals(provider) && !TextUtils.isEmpty(apiKey)) {
+                    bashContent.append("export ANTHROPIC_API_KEY=\"").append(apiKey).append("\"\n");
+                } else if (PROVIDER_OPENROUTER.equals(provider) && !TextUtils.isEmpty(apiKey)) {
+                    bashContent.append("export OPENROUTER_API_KEY=\"").append(apiKey).append("\"\n");
                 }
                 if (!TextUtils.isEmpty(model)) {
                     bashContent.append("export PI_MODEL=\"").append(model).append("\"\n");
                 }
+                writeFile(bashrc, bashContent.toString());
 
-                try (FileOutputStream fos = new FileOutputStream(bashrc, false)) {
-                    fos.write(bashContent.toString().getBytes(StandardCharsets.UTF_8));
-                }
-
-                // 2. 写入 /root/.pi/agent/auth.json (遵循标准 Pi auth 格式)
                 File agentDir = new File(rootHome, ".pi/agent");
                 agentDir.mkdirs();
-                File authJson = new File(agentDir, "auth.json");
-                StringBuilder authContent = new StringBuilder("{\n");
-                if (!TextUtils.isEmpty(apiKey)) {
-                    String actualProvider = provider;
-                    if (PROVIDER_CLAUDE.equals(provider)) actualProvider = "anthropic";
-                    authContent.append("  \"").append(actualProvider).append("\": {\n");
-                    authContent.append("    \"type\": \"api_key\",\n");
-                    authContent.append("    \"key\": \"").append(apiKey).append("\"\n");
-                    authContent.append("  }\n");
-                }
-                authContent.append("}\n");
 
-                try (FileOutputStream fos = new FileOutputStream(authJson, false)) {
-                    fos.write(authContent.toString().getBytes(StandardCharsets.UTF_8));
+                // 2. 合并写入 /root/.pi/agent/auth.json (增量更新，不覆盖用户已有的其它凭据)
+                File authJsonFile = new File(agentDir, "auth.json");
+                JSONObject authJson = new JSONObject();
+                if (authJsonFile.exists()) {
+                    try {
+                        String existing = readFile(authJsonFile);
+                        if (!TextUtils.isEmpty(existing)) {
+                            authJson = new JSONObject(existing);
+                        }
+                    } catch (Throwable ignored) {}
                 }
 
-                // 3. 写入 /root/.pi/agent/settings.json
-                File settingsJson = new File(agentDir, "settings.json");
-                StringBuilder settingsContent = new StringBuilder("{\n");
-                if (!TextUtils.isEmpty(provider)) {
-                    String actualProvider = provider;
-                    if (PROVIDER_CLAUDE.equals(provider)) actualProvider = "anthropic";
-                    settingsContent.append("  \"defaultProvider\": \"").append(actualProvider).append("\"");
-                    if (!TextUtils.isEmpty(model)) {
-                        settingsContent.append(",\n  \"defaultModel\": \"").append(model).append("\"\n");
-                    } else {
-                        settingsContent.append("\n");
+                // 若当前服务商不是 OpenAI，则清除可能残留的虚假 openai 键，防止 Web 界面莫名多出 openai
+                if (!PROVIDER_OPENAI.equals(provider) && authJson.has("openai")) {
+                    JSONObject openaiObj = authJson.optJSONObject("openai");
+                    if (openaiObj != null && apiKey.equals(openaiObj.optString("key"))) {
+                        authJson.remove("openai");
                     }
                 }
-                settingsContent.append("}\n");
 
-                try (FileOutputStream fos = new FileOutputStream(settingsJson, false)) {
-                    fos.write(settingsContent.toString().getBytes(StandardCharsets.UTF_8));
+                String actualProvider = provider;
+                if (PROVIDER_CLAUDE.equals(provider)) actualProvider = "anthropic";
+                if (!TextUtils.isEmpty(apiKey)) {
+                    JSONObject entry = new JSONObject();
+                    entry.put("type", "api_key");
+                    entry.put("key", apiKey);
+                    authJson.put(actualProvider, entry);
+                }
+                writeFile(authJsonFile, authJson.toString(2));
+
+                // 3. 自定义模型标准写入 /root/.pi/agent/models.json (规范接入，杜绝伪装成 OpenAI)
+                File modelsFile = new File(agentDir, "models.json");
+                JSONObject modelsJson = new JSONObject();
+                if (modelsFile.exists()) {
+                    try {
+                        String existing = readFile(modelsFile);
+                        if (!TextUtils.isEmpty(existing)) {
+                            modelsJson = new JSONObject(existing);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                if (PROVIDER_CUSTOM.equals(provider) && !TextUtils.isEmpty(baseUrl)) {
+                    JSONObject providersObj = modelsJson.optJSONObject("providers");
+                    if (providersObj == null) {
+                        providersObj = new JSONObject();
+                        modelsJson.put("providers", providersObj);
+                    }
+                    JSONObject customObj = new JSONObject();
+                    customObj.put("baseUrl", baseUrl);
+                    customObj.put("api", "openai-completions");
+                    if (!TextUtils.isEmpty(apiKey)) {
+                        customObj.put("apiKey", apiKey);
+                    }
+                    JSONArray modelsArray = new JSONArray();
+                    JSONObject mObj = new JSONObject();
+                    mObj.put("id", !TextUtils.isEmpty(model) ? model : "custom-model");
+                    mObj.put("name", !TextUtils.isEmpty(model) ? model : "Custom Model");
+                    modelsArray.put(mObj);
+                    customObj.put("models", modelsArray);
+                    providersObj.put("custom", customObj);
+                    writeFile(modelsFile, modelsJson.toString(2));
                 }
 
-                // 4. 写入 /usr/local/bin/pi-chat 智能交互终端会话脚本
+                // 4. 合并写入 /root/.pi/agent/settings.json (保留用户其它偏好)
+                File settingsFile = new File(agentDir, "settings.json");
+                JSONObject settingsJson = new JSONObject();
+                if (settingsFile.exists()) {
+                    try {
+                        String existing = readFile(settingsFile);
+                        if (!TextUtils.isEmpty(existing)) {
+                            settingsJson = new JSONObject(existing);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                settingsJson.put("defaultProvider", actualProvider);
+                if (!TextUtils.isEmpty(model)) {
+                    settingsJson.put("defaultModel", model);
+                }
+                writeFile(settingsFile, settingsJson.toString(2));
+
+                // 5. 写入 /usr/local/bin/pi-chat 智能交互终端会话脚本
                 File binDir = new File(rootfs, "usr/local/bin");
                 binDir.mkdirs();
                 File piChatScript = new File(binDir, "pi-chat");
@@ -319,24 +478,38 @@ public final class PiMetConfig {
                 chatScript.append("    echo \"\"\n");
                 chatScript.append("done\n");
 
-                try (FileOutputStream fos = new FileOutputStream(piChatScript, false)) {
-                    fos.write(chatScript.toString().getBytes(StandardCharsets.UTF_8));
-                }
+                writeFile(piChatScript, chatScript.toString());
                 piChatScript.setExecutable(true, false);
 
-                // 5. 若设备存在 Root 二进制文件，写入 /usr/local/bin/su-exec 宿主提权代理
+                // 6. 若设备存在 Root 二进制文件，写入 /usr/local/bin/su-exec 宿主提权代理
                 if (DevicePrivilegeManager.isRootBinaryPresent()) {
                     File suExecScript = new File(binDir, "su-exec");
                     String suContent = "#!/bin/bash\n/system/bin/su -c \"$@\"\n";
-                    try (FileOutputStream fos = new FileOutputStream(suExecScript, false)) {
-                        fos.write(suContent.getBytes(StandardCharsets.UTF_8));
-                    }
+                    writeFile(suExecScript, suContent);
                     suExecScript.setExecutable(true, false);
                 }
-
-                // 6. 同步 Pi-Web 适配插件生态 (android-bridge, skills, MCP, subagents)
-                PluginManager.syncAllPresets(context);
             } catch (Throwable ignored) {}
         }).start();
+    }
+
+    private static String readFile(File file) {
+        try (FileInputStream fis = new FileInputStream(file);
+             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+            }
+            return bos.toString("UTF-8");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void writeFile(File file, String content) {
+        try (FileOutputStream fos = new FileOutputStream(file, false)) {
+            fos.write(content.getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+        } catch (Throwable ignored) {}
     }
 }

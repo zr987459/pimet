@@ -8,6 +8,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -20,6 +21,7 @@ import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -127,23 +129,20 @@ public class MainActivity extends AppCompatActivity {
     };
     private int petInteractionCount = 0;
 
-    // 插件面板组件
-    private View btnSyncPluginsAll;
+    // 插件生态管理组件
+    private View btnRefreshPlugins;
+    private TextView chipCatAll;
     private TextView chipCatExtensions;
     private TextView chipCatSkills;
     private TextView chipCatMcp;
     private TextView chipCatSubagents;
-    private View containerCatExtensions;
-    private View containerCatSkills;
-    private View containerCatMcp;
-    private View containerCatSubagents;
-    private View btnDeployBridge;
+    private LinearLayout layoutPluginItems;
+    private TextView tvPluginEmpty;
     private EditText inputCustomPlugin;
     private View btnInstallCustomPlugin;
-    private View btnDeployAllSkills;
-    private View btnDeployAllMcp;
-    private View btnDeployAllSubagents;
+    private int currentPluginCategory = 0;
     private TextView settingsShizukuStatusTv;
+    private View btnSyncAiFromContainer;
 
     // Launch (启动/仪表盘) 视图组件
     private View launchStatusDot;
@@ -349,8 +348,15 @@ public class MainActivity extends AppCompatActivity {
         initTerminalPanel();
         initSettingsPanel();
 
-        // 异步全量同步 Pi-Web 适配扩展、技能与子代理生态
-        PluginManager.syncAllPresets(this);
+        // 彻底清理历史自动注入的预设插件，杜绝生态污染与配置冲突
+        PluginManager.cleanSelfAddedPlugins(this);
+
+        // 启动时在后台静默尝试从容器反向同步最新 AI 凭据配置
+        new Thread(() -> {
+            if (PiMetConfig.syncFromContainer(this)) {
+                mainHandler.post(this::refreshSettingsUiFields);
+            }
+        }).start();
 
         // 启动主终端会话
         if (ProotManager.isRootfsInstalled(this)) {
@@ -532,9 +538,15 @@ public class MainActivity extends AppCompatActivity {
             updatePiWebDisplay();
         } else if (index == 2) {
             // 插件与生态中心
+            refreshPluginsList(currentPluginCategory);
         } else if (index == 3) {
             refreshStorageSize();
             refreshPrivilegeStatus();
+            new Thread(() -> {
+                if (PiMetConfig.syncFromContainer(this)) {
+                    mainHandler.post(this::refreshSettingsUiFields);
+                }
+            }).start();
             if (tvCurrentPetName != null) {
                 tvCurrentPetName.setText("当前角色: " + PetRegistry.getPetDir(this) + " (全屏时悬浮桌宠互动/拖动有奔跑动作)");
             }
@@ -2354,8 +2366,26 @@ public class MainActivity extends AppCompatActivity {
 
             PiMetConfig.syncToContainer(this);
             updateLaunchModelDesc();
-            Toast.makeText(this, "✔ AI 凭据已保存并同步至 PRoot 容器！", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "✔ AI 凭据已保存并安全同步至 PRoot 容器！", Toast.LENGTH_SHORT).show();
         });
+
+        btnSyncAiFromContainer = findViewById(R.id.btnSyncAiFromContainer);
+        if (btnSyncAiFromContainer != null) {
+            btnSyncAiFromContainer.setOnClickListener(v -> {
+                Toast.makeText(this, "正在从容器 (~/.pi/agent/) 读取配置...", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    boolean updated = PiMetConfig.syncFromContainer(this);
+                    mainHandler.post(() -> {
+                        refreshSettingsUiFields();
+                        if (updated) {
+                            Toast.makeText(this, "✔ 已成功从容器同步最新 AI 凭据！", Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(this, "容器内部配置已与当前界面保持一致", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }).start();
+            });
+        }
 
         btnFetchAiModels.setOnClickListener(v -> fetchAiModels());
 
@@ -3107,69 +3137,30 @@ public class MainActivity extends AppCompatActivity {
             };
 
     private void initPluginsPanel() {
-        btnSyncPluginsAll = findViewById(R.id.btnSyncPluginsAll);
+        btnRefreshPlugins = findViewById(R.id.btnRefreshPlugins);
+        chipCatAll = findViewById(R.id.chipCatAll);
         chipCatExtensions = findViewById(R.id.chipCatExtensions);
         chipCatSkills = findViewById(R.id.chipCatSkills);
         chipCatMcp = findViewById(R.id.chipCatMcp);
         chipCatSubagents = findViewById(R.id.chipCatSubagents);
-        containerCatExtensions = findViewById(R.id.containerCatExtensions);
-        containerCatSkills = findViewById(R.id.containerCatSkills);
-        containerCatMcp = findViewById(R.id.containerCatMcp);
-        containerCatSubagents = findViewById(R.id.containerCatSubagents);
-        btnDeployBridge = findViewById(R.id.btnDeployBridge);
+        layoutPluginItems = findViewById(R.id.layoutPluginItems);
+        tvPluginEmpty = findViewById(R.id.tvPluginEmpty);
         inputCustomPlugin = findViewById(R.id.inputCustomPlugin);
         btnInstallCustomPlugin = findViewById(R.id.btnInstallCustomPlugin);
-        btnDeployAllSkills = findViewById(R.id.btnDeployAllSkills);
-        btnDeployAllMcp = findViewById(R.id.btnDeployAllMcp);
-        btnDeployAllSubagents = findViewById(R.id.btnDeployAllSubagents);
 
-        // 分类切换点击
-        if (chipCatExtensions != null) chipCatExtensions.setOnClickListener(v -> selectPluginCategory(0));
-        if (chipCatSkills != null) chipCatSkills.setOnClickListener(v -> selectPluginCategory(1));
-        if (chipCatMcp != null) chipCatMcp.setOnClickListener(v -> selectPluginCategory(2));
-        if (chipCatSubagents != null) chipCatSubagents.setOnClickListener(v -> selectPluginCategory(3));
+        if (chipCatAll != null) chipCatAll.setOnClickListener(v -> selectPluginCategory(0));
+        if (chipCatExtensions != null) chipCatExtensions.setOnClickListener(v -> selectPluginCategory(1));
+        if (chipCatSkills != null) chipCatSkills.setOnClickListener(v -> selectPluginCategory(2));
+        if (chipCatMcp != null) chipCatMcp.setOnClickListener(v -> selectPluginCategory(3));
+        if (chipCatSubagents != null) chipCatSubagents.setOnClickListener(v -> selectPluginCategory(4));
 
-        // 一键全量同步
-        if (btnSyncPluginsAll != null) {
-            btnSyncPluginsAll.setOnClickListener(v -> {
-                PluginManager.syncAllPresets(this);
-                Toast.makeText(this, "🎉 扩展、技能、MCP与子代理已全量同步至 Pi-Web！", Toast.LENGTH_LONG).show();
+        if (btnRefreshPlugins != null) {
+            btnRefreshPlugins.setOnClickListener(v -> {
+                Toast.makeText(this, "正在重新扫描容器内部插件...", Toast.LENGTH_SHORT).show();
+                refreshPluginsList(currentPluginCategory);
             });
         }
 
-        // 部署 Android 桥接插件
-        if (btnDeployBridge != null) {
-            btnDeployBridge.setOnClickListener(v -> {
-                PluginManager.syncAllPresets(this);
-                Toast.makeText(this, "✔ android-bridge 插件已部署，已注入 Shizuku/Root/剪贴板原生工具", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        // 部署技能
-        if (btnDeployAllSkills != null) {
-            btnDeployAllSkills.setOnClickListener(v -> {
-                PluginManager.syncAllPresets(this);
-                Toast.makeText(this, "✔ 预置 4 项专家技能 (android-dev, linux-ops 等) 已写入 Pi-Web！", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        // 部署 MCP
-        if (btnDeployAllMcp != null) {
-            btnDeployAllMcp.setOnClickListener(v -> {
-                PluginManager.syncAllPresets(this);
-                Toast.makeText(this, "✔ MCP 文件系统与记忆服务配置已生效！", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        // 部署子代理
-        if (btnDeployAllSubagents != null) {
-            btnDeployAllSubagents.setOnClickListener(v -> {
-                PluginManager.syncAllPresets(this);
-                Toast.makeText(this, "✔ 代码审查员与系统架构师子代理已就绪！", Toast.LENGTH_SHORT).show();
-            });
-        }
-
-        // 安装自定义 npm / 插件
         if (btnInstallCustomPlugin != null) {
             btnInstallCustomPlugin.setOnClickListener(v -> {
                 String pkg = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
@@ -3177,43 +3168,168 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "请输入需要安装的 npm 包名或插件名称", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                openTerminalInWorkbench(); // 唤出工作台抽屉终端
+                openTerminalInWorkbench();
                 TerminalTab active = getActiveTab();
                 if (active != null && active.session != null) {
                     active.session.write("npm install -g " + pkg + " --registry=" + PiMetConfig.getNpmRegistry(this) + "\n");
-                    Toast.makeText(this, "正在终端中拉取安装: " + pkg, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "已发送至终端安装: " + pkg, Toast.LENGTH_SHORT).show();
                 }
             });
         }
+
+        refreshPluginsList(0);
     }
 
     private void selectPluginCategory(int index) {
-        if (containerCatExtensions != null) containerCatExtensions.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
-        if (containerCatSkills != null) containerCatSkills.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
-        if (containerCatMcp != null) containerCatMcp.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
-        if (containerCatSubagents != null) containerCatSubagents.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
-
+        currentPluginCategory = index;
         int activeBg = R.drawable.bg_btn_primary;
         int normalBg = R.drawable.bg_btn_secondary;
         int activeText = 0xFFFFFFFF;
         int normalText = 0xFFC9D1D9;
 
+        if (chipCatAll != null) {
+            chipCatAll.setBackgroundResource(index == 0 ? activeBg : normalBg);
+            chipCatAll.setTextColor(index == 0 ? activeText : normalText);
+        }
         if (chipCatExtensions != null) {
-            chipCatExtensions.setBackgroundResource(index == 0 ? activeBg : normalBg);
-            chipCatExtensions.setTextColor(index == 0 ? activeText : normalText);
+            chipCatExtensions.setBackgroundResource(index == 1 ? activeBg : normalBg);
+            chipCatExtensions.setTextColor(index == 1 ? activeText : normalText);
         }
         if (chipCatSkills != null) {
-            chipCatSkills.setBackgroundResource(index == 1 ? activeBg : normalBg);
-            chipCatSkills.setTextColor(index == 1 ? activeText : normalText);
+            chipCatSkills.setBackgroundResource(index == 2 ? activeBg : normalBg);
+            chipCatSkills.setTextColor(index == 2 ? activeText : normalText);
         }
         if (chipCatMcp != null) {
-            chipCatMcp.setBackgroundResource(index == 2 ? activeBg : normalBg);
-            chipCatMcp.setTextColor(index == 2 ? activeText : normalText);
+            chipCatMcp.setBackgroundResource(index == 3 ? activeBg : normalBg);
+            chipCatMcp.setTextColor(index == 3 ? activeText : normalText);
         }
         if (chipCatSubagents != null) {
-            chipCatSubagents.setBackgroundResource(index == 3 ? activeBg : normalBg);
-            chipCatSubagents.setTextColor(index == 3 ? activeText : normalText);
+            chipCatSubagents.setBackgroundResource(index == 4 ? activeBg : normalBg);
+            chipCatSubagents.setTextColor(index == 4 ? activeText : normalText);
         }
+
+        refreshPluginsList(index);
+    }
+
+    private void refreshPluginsList(int category) {
+        currentPluginCategory = category;
+        new Thread(() -> {
+            List<PluginManager.PluginItem> all = PluginManager.getInstalledPlugins(this);
+            List<PluginManager.PluginItem> filtered = new ArrayList<>();
+            for (PluginManager.PluginItem item : all) {
+                if (category == 0) {
+                    filtered.add(item);
+                } else if (category == 1 && item.type == PluginManager.PluginItem.TYPE_EXTENSION) {
+                    filtered.add(item);
+                } else if (category == 2 && item.type == PluginManager.PluginItem.TYPE_SKILL) {
+                    filtered.add(item);
+                } else if (category == 3 && item.type == PluginManager.PluginItem.TYPE_MCP) {
+                    filtered.add(item);
+                } else if (category == 4 && item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
+                    filtered.add(item);
+                }
+            }
+            mainHandler.post(() -> {
+                if (layoutPluginItems == null) return;
+                layoutPluginItems.removeAllViews();
+                if (filtered.isEmpty()) {
+                    if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.VISIBLE);
+                } else {
+                    if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+                    for (PluginManager.PluginItem item : filtered) {
+                        layoutPluginItems.addView(createPluginItemView(item));
+                    }
+                }
+            });
+        }).start();
+    }
+
+    private View createPluginItemView(PluginManager.PluginItem item) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundResource(R.drawable.bg_card_modern);
+        card.setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dpToPx(8);
+        card.setLayoutParams(lp);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(item.name);
+        title.setTextColor(0xFFF0F6FC);
+        title.setTextSize(14f);
+        title.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+        title.setLayoutParams(tLp);
+        header.addView(title);
+
+        TextView badge = new TextView(this);
+        badge.setText(item.getTypeName());
+        badge.setTextColor(0xFF58A6FF);
+        badge.setTextSize(11f);
+        badge.setBackgroundResource(R.drawable.bg_badge_port);
+        badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
+        header.addView(badge);
+
+        card.addView(header);
+
+        TextView desc = new TextView(this);
+        desc.setText(item.description + "\n路径: " + item.path);
+        desc.setTextColor(0xFF8B949E);
+        desc.setTextSize(12f);
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        dLp.topMargin = dpToPx(6);
+        desc.setLayoutParams(dLp);
+        card.addView(desc);
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        aLp.topMargin = dpToPx(8);
+        actions.setLayoutParams(aLp);
+
+        TextView btnDelete = new TextView(this);
+        btnDelete.setText("🗑️ 移除此插件");
+        btnDelete.setTextColor(0xFFF85149);
+        btnDelete.setTextSize(12f);
+        btnDelete.setBackgroundResource(R.drawable.bg_btn_secondary);
+        btnDelete.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        btnDelete.setOnClickListener(v -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("确认移除插件")
+                    .setMessage("确定要从容器中删除 " + item.name + " (" + item.getTypeName() + ") 吗？")
+                    .setPositiveButton("移除", (d, w) -> {
+                        boolean ok = PluginManager.deletePlugin(this, item);
+                        if (ok) {
+                            Toast.makeText(this, "已移除: " + item.name, Toast.LENGTH_SHORT).show();
+                            refreshPluginsList(currentPluginCategory);
+                        } else {
+                            Toast.makeText(this, "移除失败，请在终端中检查权限", Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
+        actions.addView(btnDelete);
+        card.addView(actions);
+
+        return card;
+    }
+
+    private void refreshSettingsUiFields() {
+        selectedProvider = PiMetConfig.getAiProvider(this);
+        if (inputAiApiKey != null) inputAiApiKey.setText(PiMetConfig.getAiApiKey(this));
+        if (inputAiBaseUrl != null) inputAiBaseUrl.setText(PiMetConfig.getAiBaseUrl(this));
+        if (inputAiModel != null) inputAiModel.setText(PiMetConfig.getAiModel(this));
+        updateProviderChips();
+        updateLaunchModelDesc();
     }
 
     @Override

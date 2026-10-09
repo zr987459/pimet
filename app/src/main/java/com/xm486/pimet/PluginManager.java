@@ -5,241 +5,245 @@ import android.util.Log;
 
 import com.xm486.pimet.proot.ProotManager;
 
+import org.json.JSONObject;
+
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 
 /**
- * Pi-Web 插件、技能、MCP 服务与子代理深度管理类
- * 负责在 PRoot 容器文件系统内（/root/.pi/agent/）管理和同步适配 Pi-Web 的扩展生态
+ * Pi-Web 插件、技能与 MCP 服务管理类
+ * 负责与 PRoot 容器文件系统内（/root/.pi/agent/）真实插件生态双向同步，杜绝预设污染与配置打架。
  */
 public final class PluginManager {
     private static final String TAG = "PluginManager";
 
+    public static class PluginItem {
+        public static final int TYPE_EXTENSION = 0;
+        public static final int TYPE_SKILL = 1;
+        public static final int TYPE_MCP = 2;
+        public static final int TYPE_SUBAGENT = 3;
+
+        public final int type;
+        public final String name;
+        public final String path;
+        public final String description;
+
+        public PluginItem(int type, String name, String path, String description) {
+            this.type = type;
+            this.name = name;
+            this.path = path;
+            this.description = description;
+        }
+
+        public String getTypeName() {
+            switch (type) {
+                case TYPE_EXTENSION: return "扩展 (Extension)";
+                case TYPE_SKILL: return "技能 (Skill)";
+                case TYPE_MCP: return "MCP 服务";
+                case TYPE_SUBAGENT: return "子代理 / 提示词";
+                default: return "插件";
+            }
+        }
+    }
+
     /**
-     * 将全部深度适配 Pi-Web 的原生扩展、专家技能、MCP 服务及子代理一键同步至容器
+     * 清理所有历史自动注入的自定义预设插件，确保容器内干净、不打架
      */
-    public static void syncAllPresets(Context context) {
+    public static void cleanSelfAddedPlugins(Context context) {
         new Thread(() -> {
             try {
                 File rootfs = ProotManager.getRootfsDir(context);
                 if (!rootfs.exists()) return;
 
                 File piAgentDir = new File(rootfs, "root/.pi/agent");
-                if (!piAgentDir.exists()) piAgentDir.mkdirs();
+                if (piAgentDir.exists()) {
+                    // 1. 删除自动注入的 android-bridge.ts
+                    File bridgeExt = new File(piAgentDir, "extensions/android-bridge.ts");
+                    if (bridgeExt.exists()) bridgeExt.delete();
 
-                // 1. 同步原生 Android 桥接插件 (android-bridge.ts)
-                syncAndroidBridgeExtension(piAgentDir);
+                    // 2. 删除自动注入的预设技能
+                    String[] presetSkills = {"android-dev", "linux-ops", "git-master", "web-scraper", "system-admin.md", "package-deploy.md", "device-control.md"};
+                    for (String s : presetSkills) {
+                        File sDir = new File(piAgentDir, "skills/" + s);
+                        if (sDir.exists()) deleteRecursively(sDir);
+                    }
 
-                // 2. 同步专家技能库 (Skills)
-                syncSkills(piAgentDir);
+                    // 3. 删除自动注入的预设子代理
+                    String[] presetSubagents = {"code-reviewer.md", "system-architect.md"};
+                    for (String sa : presetSubagents) {
+                        File saFile = new File(piAgentDir, "subagents/" + sa);
+                        if (saFile.exists()) saFile.delete();
+                    }
 
-                // 3. 同步 MCP 服务配置文件 (mcp.json)
-                syncMcpConfig(piAgentDir);
+                    // 4. 清理默认注入的 dummy mcp.json (如果只包含 filesystem/memory 模板且无其它用户服务)
+                    File mcpFile = new File(piAgentDir, "mcp.json");
+                    if (mcpFile.exists()) {
+                        String mcpContent = readFile(mcpFile);
+                        if (mcpContent != null && mcpContent.contains("@modelcontextprotocol/server-filesystem") && !mcpContent.contains("user-custom")) {
+                            mcpFile.delete();
+                        }
+                    }
+                }
 
-                // 4. 同步专业子代理模板 (Sub-agents)
-                syncSubagents(piAgentDir);
+                // 5. 清理 /usr/local/bin 注入的桥接脚本
+                File pimetDev = new File(rootfs, "usr/local/bin/pimet-device");
+                if (pimetDev.exists()) pimetDev.delete();
+                File pimetShizuku = new File(rootfs, "usr/local/bin/pimet-shizuku");
+                if (pimetShizuku.exists()) pimetShizuku.delete();
 
-                // 5. 注入 Shizuku 与 Su 宿主桥接脚本到 /usr/local/bin
-                syncHostExecBridges(rootfs);
-
-                Log.i(TAG, "All Pi-Web plugins, skills, MCP, and subagents synced successfully.");
+                Log.i(TAG, "Self-added preset plugins cleaned successfully.");
             } catch (Throwable t) {
-                Log.e(TAG, "Failed to sync presets: " + t.getMessage(), t);
+                Log.w(TAG, "Failed to clean self-added plugins", t);
             }
         }).start();
     }
 
-    private static void syncAndroidBridgeExtension(File piAgentDir) {
+    /**
+     * 动态从容器扫描真实已安装的插件与技能
+     */
+    public static List<PluginItem> getInstalledPlugins(Context context) {
+        List<PluginItem> list = new ArrayList<>();
         try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            if (!rootfs.exists()) return list;
+
+            File piAgentDir = new File(rootfs, "root/.pi/agent");
+            if (!piAgentDir.exists()) return list;
+
+            // 1. 扫描 Extensions (~/.pi/agent/extensions)
             File extDir = new File(piAgentDir, "extensions");
-            if (!extDir.exists()) extDir.mkdirs();
+            if (extDir.exists() && extDir.isDirectory()) {
+                File[] files = extDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".")) continue;
+                        list.add(new PluginItem(PluginItem.TYPE_EXTENSION, f.getName(), f.getAbsolutePath(), "本地扩展: " + f.getName()));
+                    }
+                }
+            }
 
-            File bridgeFile = new File(extDir, "android-bridge.ts");
-            String code = "import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\n" +
-                    "import { exec } from \"node:child_process\";\n" +
-                    "import { promisify } from \"node:util\";\n" +
-                    "const execAsync = promisify(exec);\n\n" +
-                    "export default function androidBridgeExtension(pi: ExtensionAPI) {\n" +
-                    "  // 1. Android Shizuku / ADB 级免 Root 指令执行工具\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"android_shizuku\",\n" +
-                    "    label: \"Android Shizuku ADB\",\n" +
-                    "    description: \"通过 Shizuku 服务在 Android 系统上执行高权限 ADB Shell 命令\",\n" +
-                    "    parameters: {\n" +
-                    "      type: \"object\",\n" +
-                    "      properties: {\n" +
-                    "        command: { type: \"string\", description: \"需要执行的 adb shell 指令\" }\n" +
-                    "      },\n" +
-                    "      required: [\"command\"]\n" +
-                    "    },\n" +
-                    "    async execute(_id, params: { command: string }) {\n" +
-                    "      try {\n" +
-                    "        const { stdout, stderr } = await execAsync(`/usr/local/bin/shizuku-exec \"${params.command.replace(/\"/g, '\\\\\"')}\"`);\n" +
-                    "        return { content: [{ type: \"text\", text: stdout || stderr || \"执行完成\" }] };\n" +
-                    "      } catch (e: any) {\n" +
-                    "        return { content: [{ type: \"text\", text: `Shizuku 执行异常: ${e.message}` }], isError: true };\n" +
-                    "      }\n" +
-                    "    }\n" +
-                    "  });\n\n" +
-                    "  // 2. Android 宿主 Root (su) 执行工具\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"android_root\",\n" +
-                    "    label: \"Android Root Exec\",\n" +
-                    "    description: \"通过宿主 Root (su) 执行底层系统特权命令\",\n" +
-                    "    parameters: {\n" +
-                    "      type: \"object\",\n" +
-                    "      properties: {\n" +
-                    "        command: { type: \"string\", description: \"Root shell 命令\" }\n" +
-                    "      },\n" +
-                    "      required: [\"command\"]\n" +
-                    "    },\n" +
-                    "    async execute(_id, params: { command: string }) {\n" +
-                    "      try {\n" +
-                    "        const { stdout, stderr } = await execAsync(`/usr/local/bin/su-exec \"${params.command.replace(/\"/g, '\\\\\"')}\"`);\n" +
-                    "        return { content: [{ type: \"text\", text: stdout || stderr || \"执行完成\" }] };\n" +
-                    "      } catch (e: any) {\n" +
-                    "        return { content: [{ type: \"text\", text: `Root 失败: ${e.message}` }], isError: true };\n" +
-                    "      }\n" +
-                    "    }\n" +
-                    "  });\n\n" +
-                    "  // 3. 手机剪贴板读取与写入工具\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"android_clipboard\",\n" +
-                    "    label: \"Android 剪贴板\",\n" +
-                    "    description: \"读取或设置宿主 Android 系统的剪贴板内容\",\n" +
-                    "    parameters: {\n" +
-                    "      type: \"object\",\n" +
-                    "      properties: {\n" +
-                    "        action: { type: \"string\", enum: [\"read\", \"write\"], description: \"操作类型\" },\n" +
-                    "        text: { type: \"string\", description: \"写入内容 (write 模式)\" }\n" +
-                    "      },\n" +
-                    "      required: [\"action\"]\n" +
-                    "    },\n" +
-                    "    async execute(_id, params: { action: string; text?: string }) {\n" +
-                    "      const fs = await import(\"node:fs/promises\");\n" +
-                    "      const clipPath = \"/root/.clipboard.txt\";\n" +
-                    "      if (params.action === \"read\") {\n" +
-                    "        try {\n" +
-                    "          const text = await fs.readFile(clipPath, \"utf-8\");\n" +
-                    "          return { content: [{ type: \"text\", text }] };\n" +
-                    "        } catch {\n" +
-                    "          return { content: [{ type: \"text\", text: \"(剪贴板缓存为空)\" }] };\n" +
-                    "        }\n" +
-                    "      } else {\n" +
-                    "        await fs.writeFile(clipPath, params.text || \"\", \"utf-8\");\n" +
-                    "        return { content: [{ type: \"text\", text: \"已同步写入系统剪贴板缓存\" }] };\n" +
-                    "      }\n" +
-                    "    }\n" +
-                    "  });\n\n" +
-                    "  // 4. Android 手机运行状态与硬件信息\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"android_device_info\",\n" +
-                    "    label: \"Android 设备状态\",\n" +
-                    "    description: \"获取 Android 手机的 Linux 内核版本、系统运行时长及容器存储占用\",\n" +
-                    "    parameters: { type: \"object\", properties: {} },\n" +
-                    "    async execute() {\n" +
-                    "      try {\n" +
-                    "        const { stdout } = await execAsync(\"uname -a && uptime && df -h /root\");\n" +
-                    "        return { content: [{ type: \"text\", text: stdout }] };\n" +
-                    "      } catch (e: any) {\n" +
-                    "        return { content: [{ type: \"text\", text: e.message }], isError: true };\n" +
-                    "      }\n" +
-                    "    }\n" +
-                    "  });\n" +
-                    "}\n";
-
-            writeFile(bridgeFile, code);
-        } catch (Throwable ignored) {}
-    }
-
-    private static void syncSkills(File piAgentDir) {
-        try {
+            // 2. 扫描 Skills (~/.pi/agent/skills)
             File skillsDir = new File(piAgentDir, "skills");
-            if (!skillsDir.exists()) skillsDir.mkdirs();
+            if (skillsDir.exists() && skillsDir.isDirectory()) {
+                File[] files = skillsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".")) continue;
+                        list.add(new PluginItem(PluginItem.TYPE_SKILL, f.getName(), f.getAbsolutePath(), "专家技能定义: " + f.getName()));
+                    }
+                }
+            }
 
-            // Skill 1: Android 开发与逆向助手
-            writeSkill(skillsDir, "android-dev",
-                    "Android 逆向开发、Gradle 构建、ADB 调试与原生开发专家技能。当需要编写 Android 代码、分析 APK 或调试 Android 系统时使用。",
-                    "# Android 开发专家技能\n\n具备 Android 架构设计、NDK 开发、Shizuku 提权、PRoot 容器调用与系统服务的全面分析能力。\n");
-
-            // Skill 2: Linux 容器运维与自动化
-            writeSkill(skillsDir, "linux-ops",
-                    "PRoot 容器运维、Linux Shell 自动化与 Node.js 服务调优专家技能。当需要管理容器、编写自动化脚本或排查进程时使用。",
-                    "# Linux 运维自动化技能\n\n精通 Alpine/Debian Linux 容器运维、apt/apk 包管理、网络探活与后台守护机制。\n");
-
-            // Skill 3: Git 工作流大师
-            writeSkill(skillsDir, "git-master",
-                    "Git 分支管理、代码重构、规范化 Commit 与冲突解决技能。当需要提交代码、发布版本或处理 Git 仓库操作时使用。",
-                    "# Git Master 技能\n\n自动化 Git 操作、版本打标、Cherry-pick 与 GitHub CI/CD 流水线编写。\n");
-
-            // Skill 4: Web 全栈与数据抓取
-            writeSkill(skillsDir, "web-scraper",
-                    "网络数据采集、API 逆向分析与 HTML 结构提取技能。当需要爬取网页内容、解析接口时使用。",
-                    "# 网页与数据抓取技能\n\n使用 curl、node-fetch 与 cheerio 进行高效合规的数据提取。\n");
-
-        } catch (Throwable ignored) {}
-    }
-
-    private static void writeSkill(File skillsDir, String name, String desc, String body) {
-        try {
-            File dir = new File(skillsDir, name);
-            if (!dir.exists()) dir.mkdirs();
-            File skillMd = new File(dir, "SKILL.md");
-            String content = "---\nname: " + name + "\ndescription: " + desc + "\n---\n\n" + body;
-            writeFile(skillMd, content);
-        } catch (Throwable ignored) {}
-    }
-
-    private static void syncMcpConfig(File piAgentDir) {
-        try {
+            // 3. 扫描 MCP 服务 (~/.pi/agent/mcp.json)
             File mcpFile = new File(piAgentDir, "mcp.json");
-            String json = "{\n" +
-                    "  \"mcpServers\": {\n" +
-                    "    \"filesystem\": {\n" +
-                    "      \"command\": \"npx\",\n" +
-                    "      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/root\", \"/sdcard\"]\n" +
-                    "    },\n" +
-                    "    \"memory\": {\n" +
-                    "      \"command\": \"npx\",\n" +
-                    "      \"args\": [\"-y\", \"@modelcontextprotocol/server-memory\"]\n" +
-                    "    }\n" +
-                    "  }\n" +
-                    "}\n";
-            writeFile(mcpFile, json);
-        } catch (Throwable ignored) {}
-    }
+            if (mcpFile.exists() && mcpFile.isFile()) {
+                try {
+                    String jsonStr = readFile(mcpFile);
+                    if (jsonStr != null) {
+                        JSONObject root = new JSONObject(jsonStr);
+                        JSONObject servers = root.optJSONObject("mcpServers");
+                        if (servers != null) {
+                            Iterator<String> keys = servers.keys();
+                            while (keys.hasNext()) {
+                                String sName = keys.next();
+                                list.add(new PluginItem(PluginItem.TYPE_MCP, sName, mcpFile.getAbsolutePath(), "MCP 外部协议服务"));
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
 
-    private static void syncSubagents(File piAgentDir) {
-        try {
+            // 4. 扫描 Subagents (~/.pi/agent/subagents)
             File subagentsDir = new File(piAgentDir, "subagents");
-            if (!subagentsDir.exists()) subagentsDir.mkdirs();
+            if (subagentsDir.exists() && subagentsDir.isDirectory()) {
+                File[] files = subagentsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".")) continue;
+                        list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "子代理模板: " + f.getName()));
+                    }
+                }
+            }
 
-            File reviewer = new File(subagentsDir, "code-reviewer.md");
-            writeFile(reviewer, "# 代码审查专家 (Code Reviewer)\n专注于代码安全性、性能瓶颈、潜在并发漏洞与代码规范审查。\n");
-
-            File architect = new File(subagentsDir, "system-architect.md");
-            writeFile(architect, "# 系统架构师 (System Architect)\n负责模块解耦、技术选型方案对比与企业级高可用架构设计。\n");
-        } catch (Throwable ignored) {}
+            // 5. 扫描 Prompts (~/.pi/agent/prompts)
+            File promptsDir = new File(piAgentDir, "prompts");
+            if (promptsDir.exists() && promptsDir.isDirectory()) {
+                File[] files = promptsDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.getName().startsWith(".")) continue;
+                        list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "提示词模板: " + f.getName()));
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to get installed plugins", t);
+        }
+        return list;
     }
 
-    private static void syncHostExecBridges(File rootfs) {
+    /**
+     * 删除指定插件或技能
+     */
+    public static boolean deletePlugin(Context context, PluginItem item) {
         try {
-            File binDir = new File(rootfs, "usr/local/bin");
-            if (!binDir.exists()) binDir.mkdirs();
+            if (item.type == PluginItem.TYPE_MCP) {
+                File rootfs = ProotManager.getRootfsDir(context);
+                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+                if (mcpFile.exists()) {
+                    String jsonStr = readFile(mcpFile);
+                    if (jsonStr != null) {
+                        JSONObject root = new JSONObject(jsonStr);
+                        JSONObject servers = root.optJSONObject("mcpServers");
+                        if (servers != null && servers.has(item.name)) {
+                            servers.remove(item.name);
+                            writeFile(mcpFile, root.toString(2));
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            } else {
+                File target = new File(item.path);
+                if (target.exists()) {
+                    return deleteRecursively(target);
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to delete plugin: " + item.name, t);
+        }
+        return false;
+    }
 
-            // su-exec 脚本
-            File suExec = new File(binDir, "su-exec");
-            String suContent = "#!/bin/bash\n/system/bin/su -c \"$@\"\n";
-            writeFile(suExec, suContent);
-            suExec.setExecutable(true, false);
+    private static boolean deleteRecursively(File file) {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        return file.delete();
+    }
 
-            // shizuku-exec 脚本
-            File shizukuExec = new File(binDir, "shizuku-exec");
-            String shizukuContent = "#!/bin/bash\n# PiMet Shizuku Bridge Executable\n/system/bin/sh -c \"$@\"\n";
-            writeFile(shizukuExec, shizukuContent);
-            shizukuExec.setExecutable(true, false);
-        } catch (Throwable ignored) {}
+    private static String readFile(File file) {
+        try (FileInputStream fis = new FileInputStream(file);
+             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = fis.read(buf)) != -1) {
+                bos.write(buf, 0, n);
+            }
+            return bos.toString("UTF-8");
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private static void writeFile(File file, String content) {

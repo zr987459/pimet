@@ -1146,7 +1146,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="🧩 Pi-Web 扩展与技能生态中心"
+                        android:text="🧩 容器插件与生态管理器"
                         android:textColor="#F0F6FC"
                         android:textSize="16sp"
                         android:textStyle="bold" />
@@ -1156,24 +1156,76 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
                         android:lineSpacingExtra="2dp"
-                        android:text="深度适配 Pi-Web 设置中心，提供原生 Android 桥接插件、专家技能库 (Skills)、MCP 服务与专业子代理 (Subagents)。"
+                        android:text="实时双向同步 PRoot 容器 (~/.pi/agent/) 内的真实插件生态，杜绝外部预设污染与配置打架。"
                         android:textColor="#8B949E"
                         android:textSize="12sp" />
 
                     <TextView
-                        android:id="@+id/btnSyncPluginsAll"
+                        android:id="@+id/btnRefreshPlugins"
                         android:layout_width="match_parent"
                         android:layout_height="40dp"
                         android:layout_marginTop="14dp"
                         android:background="@drawable/bg_btn_primary"
                         android:gravity="center"
-                        android:text="🔄 一键全量同步并生效至 Pi-Web"
+                        android:text="🔄 扫描并同步容器插件"
                         android:textColor="#FFFFFF"
                         android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <!-- 四大分类筛选 Chip 栏 (与 Pi-Web 设置完全对应) -->
+                <!-- 自定义插件 / npm 模块安装卡片 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="📦 安装扩展或 NPM 插件包"
+                        android:textColor="#F0F6FC"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="在 PRoot 容器内运行 npm install -g 安装扩展模块："
+                        android:textColor="#8B949E"
+                        android:textSize="12sp" />
+
+                    <EditText
+                        android:id="@+id/inputCustomPlugin"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginTop="8dp"
+                        android:background="#0D1117"
+                        android:fontFamily="monospace"
+                        android:hint="例如 @modelcontextprotocol/server-fetch"
+                        android:inputType="text"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:textColor="#F0F6FC"
+                        android:textColorHint="#484F58"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/btnInstallCustomPlugin"
+                        android:layout_width="match_parent"
+                        android:layout_height="36dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/bg_btn_secondary"
+                        android:gravity="center"
+                        android:text="⬇️ 在容器终端中拉取安装"
+                        android:textColor="#C9D1D9"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!-- 分类筛选 Chip 栏 -->
                 <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -1186,7 +1238,7 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:id="@+id/chipCatExtensions"
+                            android:id="@+id/chipCatAll"
                             android:layout_width="wrap_content"
                             android:layout_height="32dp"
                             android:layout_marginEnd="8dp"
@@ -1194,10 +1246,23 @@
                             android:gravity="center"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="🧩 插件 (Extensions)"
+                            android:text="全部"
                             android:textColor="#FFFFFF"
                             android:textSize="12sp"
                             android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/chipCatExtensions"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginEnd="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="🧩 扩展 (Extensions)"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
 
                         <TextView
                             android:id="@+id/chipCatSkills"
@@ -1233,260 +1298,33 @@
                             android:gravity="center"
                             android:paddingStart="14dp"
                             android:paddingEnd="14dp"
-                            android:text="🤖 子代理 (Subagents)"
+                            android:text="🤖 子代理/提示词"
                             android:textColor="#C9D1D9"
                             android:textSize="12sp" />
                     </LinearLayout>
                 </HorizontalScrollView>
 
-                <!-- 容器 1: 插件面板 (Extensions) -->
+                <!-- 容器内真实插件动态列表容器 -->
                 <LinearLayout
-                    android:id="@+id/containerCatExtensions"
+                    android:id="@+id/layoutPluginItems"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:orientation="vertical">
+                    android:orientation="vertical" />
 
-                    <!-- android-bridge 插件卡片 -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_card_modern"
-                        android:orientation="vertical"
-                        android:padding="14dp">
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:gravity="center_vertical"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="📱 android-bridge (系统原生桥接插件)"
-                                android:textColor="#F0F6FC"
-                                android:textSize="14sp"
-                                android:textStyle="bold" />
-
-                            <TextView
-                                android:id="@+id/badgeBridgeStatus"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:background="@drawable/bg_badge_info"
-                                android:paddingStart="8dp"
-                                android:paddingTop="2dp"
-                                android:paddingEnd="8dp"
-                                android:paddingBottom="2dp"
-                                android:text="已内置就绪"
-                                android:textColor="#58A6FF"
-                                android:textSize="10sp" />
-                        </LinearLayout>
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:lineSpacingExtra="2dp"
-                            android:text="专为 Pi-Web 深度定制！为 AI 注入 4 项原生 Android 核心工具：Shizuku 免 Root ADB 指令、Root 底层执行、剪贴板实时读写、手机硬件状态监控。"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnDeployBridge"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="10dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="🚀 一键部署并生效到 Pi-Web"
-                            android:textColor="#58A6FF"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <!-- 自定义插件安装卡片 -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:background="@drawable/bg_card_modern"
-                        android:orientation="vertical"
-                        android:padding="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="📦 安装自定义 npm / Git 插件"
-                            android:textColor="#F0F6FC"
-                            android:textSize="13sp"
-                            android:textStyle="bold" />
-
-                        <EditText
-                            android:id="@+id/inputCustomPlugin"
-                            android:layout_width="match_parent"
-                            android:layout_height="38dp"
-                            android:layout_marginTop="8dp"
-                            android:background="#0D1117"
-                            android:fontFamily="monospace"
-                            android:hint="npm 包名或 GitHub 仓库地址"
-                            android:inputType="text"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:textColor="#F0F6FC"
-                            android:textColorHint="#484F58"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnInstallCustomPlugin"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="8dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="⬇️ 拉取并安装到容器"
-                            android:textColor="#C9D1D9"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <!-- 容器 2: 技能面板 (Skills) -->
-                <LinearLayout
-                    android:id="@+id/containerCatSkills"
+                <!-- 空状态提示 -->
+                <TextView
+                    android:id="@+id/tvPluginEmpty"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="vertical"
-                    android:visibility="gone">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_card_modern"
-                        android:orientation="vertical"
-                        android:padding="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="⚡ 预置专家技能套件 (内置 4 项)"
-                            android:textColor="#F0F6FC"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:lineSpacingExtra="2dp"
-                            android:text="• android-dev: Android 逆向分析、ADB 调试与原生架构\n• linux-ops: PRoot 容器运维、Shell 与进程监控\n• git-master: Git 分支规范化管理与 CI/CD\n• web-scraper: 网页数据采集与接口逆向提取"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnDeployAllSkills"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="10dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="⚡ 一键将全部技能写入 Pi-Web"
-                            android:textColor="#3FB950"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <!-- 容器 3: MCP 面板 -->
-                <LinearLayout
-                    android:id="@+id/containerCatMcp"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="vertical"
-                    android:visibility="gone">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_card_modern"
-                        android:orientation="vertical"
-                        android:padding="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="🔌 MCP (Model Context Protocol) 预置服务"
-                            android:textColor="#F0F6FC"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:lineSpacingExtra="2dp"
-                            android:text="• filesystem: 全盘文件深度操作 MCP\n• memory: 长期会话图谱记忆 MCP"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnDeployAllMcp"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="10dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="🔌 写入 MCP 配置至 Pi-Web"
-                            android:textColor="#A371F7"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <!-- 容器 4: 子代理面板 (Subagents) -->
-                <LinearLayout
-                    android:id="@+id/containerCatSubagents"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="vertical"
-                    android:visibility="gone">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_card_modern"
-                        android:orientation="vertical"
-                        android:padding="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="🤖 专业子代理角色模板 (Sub-agents)"
-                            android:textColor="#F0F6FC"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:lineSpacingExtra="2dp"
-                            android:text="• code-reviewer: 代码安全审计与性能优化专家\n• system-architect: 模块解耦与架构设计专家"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnDeployAllSubagents"
-                            android:layout_width="match_parent"
-                            android:layout_height="36dp"
-                            android:layout_marginTop="10dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="🤖 一键注入子代理模板至 Pi-Web"
-                            android:textColor="#F0883E"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </LinearLayout>
+                    android:layout_marginTop="24dp"
+                    android:gravity="center"
+                    android:lineSpacingExtra="3dp"
+                    android:padding="20dp"
+                    android:text="容器内暂无已安装的插件或技能。\n您可通过上方输入 npm 包名在终端中安装，或直接在工作台 / 终端中通过 pi install 安装。"
+                    android:textColor="#8B949E"
+                    android:textSize="13sp"
+                    android:visibility="gone" />
             </LinearLayout>
         </ScrollView>
 
@@ -1715,18 +1553,39 @@
                         android:textColorHint="#484F58"
                         android:textSize="13sp" />
 
-                    <!-- 保存按钮 -->
-                    <TextView
-                        android:id="@+id/btnSaveAiConfig"
+                    <!-- 双向同步按钮栏: 从容器读取 + 保存同步 -->
+                    <LinearLayout
                         android:layout_width="match_parent"
-                        android:layout_height="40dp"
+                        android:layout_height="wrap_content"
                         android:layout_marginTop="14dp"
-                        android:background="@drawable/bg_btn_primary"
-                        android:gravity="center"
-                        android:text="💾 保存并同步到容器"
-                        android:textColor="#FFFFFF"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnSyncAiFromContainer"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="6dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:text="🔄 从容器读取"
+                            android:textColor="#58A6FF"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/btnSaveAiConfig"
+                            android:layout_width="0dp"
+                            android:layout_height="40dp"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_btn_primary"
+                            android:gravity="center"
+                            android:text="💾 保存并同步"
+                            android:textColor="#FFFFFF"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
                 </LinearLayout>
 
                 <!-- 端口设置卡片 -->
