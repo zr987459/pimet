@@ -16,12 +16,17 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -128,11 +133,11 @@ public final class ProotManager {
     }
 
     /**
-     * 端口存活检测
+     * 端口存活检测 (超时设为 1200ms，适配低端设备与冷启动高负载)
      */
     public static boolean isPiWebPortAlive(int port) {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", port), 400);
+            socket.connect(new InetSocketAddress("127.0.0.1", port), 1200);
             return true;
         } catch (Throwable ignored) {
             return false;
@@ -151,8 +156,8 @@ public final class ProotManager {
         try {
             URL url = new URL("http://127.0.0.1:" + port + "/manifest.webmanifest");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(600);
-            conn.setReadTimeout(1000);
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(2000);
             conn.setRequestMethod("GET");
             conn.setInstanceFollowRedirects(false);
             int code = conn.getResponseCode();
@@ -161,8 +166,8 @@ public final class ProotManager {
             try {
                 URL url2 = new URL("http://127.0.0.1:" + port + "/");
                 HttpURLConnection conn2 = (HttpURLConnection) url2.openConnection();
-                conn2.setConnectTimeout(600);
-                conn2.setReadTimeout(1000);
+                conn2.setConnectTimeout(1500);
+                conn2.setReadTimeout(2000);
                 conn2.setRequestMethod("GET");
                 conn2.setInstanceFollowRedirects(false);
                 int code2 = conn2.getResponseCode();
@@ -234,18 +239,64 @@ public final class ProotManager {
     public static long getDirectorySize(File dir) {
         if (dir == null || !dir.exists()) return 0;
         if (!dir.isDirectory()) return dir.length();
-        long size = 0;
+
+        // 1. 优先尝试系统底层 du 命令 (Toybox du，毫秒级快速统计真实磁盘占用且防符号链接死循环)
+        try {
+            Process process = Runtime.getRuntime().exec(new String[]{"du", "-sk", dir.getAbsolutePath()});
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line = reader.readLine();
+                if (line != null && !line.trim().isEmpty()) {
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length > 0) {
+                        long kb = Long.parseLong(parts[0]);
+                        if (kb > 0) {
+                            return kb * 1024L;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // 2. 备选方案：防符号链接循环、防无限递归的安全 Java 递归计算
+        return calculateDirSizeSafe(dir, 0);
+    }
+
+    private static long calculateDirSizeSafe(File dir, int depth) {
+        if (dir == null || !dir.exists() || depth > 18) return 0;
+        if (isSymbolicLink(dir)) {
+            return 0;
+        }
+        if (!dir.isDirectory()) {
+            return dir.length();
+        }
+
+        long total = 0;
         File[] files = dir.listFiles();
         if (files != null) {
             for (File file : files) {
-                if (file.isDirectory()) {
-                    size += getDirectorySize(file);
+                if (isSymbolicLink(file)) {
+                    total += file.length();
+                } else if (file.isDirectory()) {
+                    total += calculateDirSizeSafe(file, depth + 1);
                 } else {
-                    size += file.length();
+                    total += file.length();
                 }
             }
         }
-        return size;
+        return total;
+    }
+
+    public static boolean isSymbolicLink(File file) {
+        if (file == null) return false;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                return Files.isSymbolicLink(file.toPath());
+            }
+            StructStat stat = Os.lstat(file.getAbsolutePath());
+            return OsConstants.S_ISLNK(stat.st_mode);
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public static String formatSize(long bytes) {
@@ -253,6 +304,7 @@ public final class ProotManager {
         final String[] units = new String[]{"B", "KB", "MB", "GB", "TB"};
         int digitGroups = (int) (Math.log10(bytes) / Math.log10(1024));
         if (digitGroups >= units.length) digitGroups = units.length - 1;
+        if (digitGroups < 0) digitGroups = 0;
         return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024, digitGroups), units[digitGroups]);
     }
 

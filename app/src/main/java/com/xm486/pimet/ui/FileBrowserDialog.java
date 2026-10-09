@@ -83,6 +83,14 @@ public class FileBrowserDialog {
                 if (resolved != null && resolved.exists() && resolved.isDirectory()) {
                     isDir = true;
                     symlink = true;
+                } else if (resolved != null && resolved != file) {
+                    symlink = true;
+                }
+            } else {
+                if (ProotManager.isSymbolicLink(file)) {
+                    symlink = true;
+                    File target = resolveSymlink(rootfs, file);
+                    if (target != null) resolved = target;
                 }
             }
             this.isDirectory = isDir;
@@ -96,7 +104,8 @@ public class FileBrowserDialog {
                 this.size = 0;
             } else {
                 this.childCount = 0;
-                this.size = file.length();
+                long realSize = (resolved != null && resolved.exists()) ? resolved.length() : file.length();
+                this.size = realSize;
             }
         }
     }
@@ -198,6 +207,13 @@ public class FileBrowserDialog {
             if (agentDir.exists()) {
                 shortcutBar.addView(buildChipBtn("🤖 .pi/agent", v -> navigateTo(agentDir)));
             }
+            File piWeb1 = new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web");
+            File piWeb2 = new File(rootfs, "usr/lib/node_modules/@agegr/pi-web");
+            if (piWeb1.exists()) {
+                shortcutBar.addView(buildChipBtn("🌐 pi-web", v -> navigateTo(piWeb1)));
+            } else if (piWeb2.exists()) {
+                shortcutBar.addView(buildChipBtn("🌐 pi-web", v -> navigateTo(piWeb2)));
+            }
             File etcDir = new File(rootfs, "etc");
             if (etcDir.exists()) {
                 shortcutBar.addView(buildChipBtn("⚙️ /etc", v -> navigateTo(etcDir)));
@@ -277,6 +293,15 @@ public class FileBrowserDialog {
             } else {
                 showFilePreviewDialog(item.file);
             }
+        });
+
+        listView.setOnItemLongClickListener((parent, view, position, id) -> {
+            if (position >= 0 && position < fileItems.size()) {
+                FileItem item = fileItems.get(position);
+                showItemDetailDialog(item);
+                return true;
+            }
+            return false;
         });
 
         LinearLayout.LayoutParams lvLp = new LinearLayout.LayoutParams(
@@ -388,9 +413,15 @@ public class FileBrowserDialog {
                 fileItems.addAll(list);
                 if (adapter != null) adapter.notifyDataSetChanged();
                 if (tvPathSummary != null) {
-                    tvPathSummary.setText(String.format(Locale.getDefault(),
-                            "📊 统计: %d 个文件夹 · %d 个文件 · 当前层占用约 %s",
-                            fDirCount, fFileCount, formatSize(fTotalSize)));
+                    if (fFileCount == 0 && fDirCount > 0) {
+                        tvPathSummary.setText(String.format(Locale.getDefault(),
+                                "📊 %d 个目录 · 0 个直接文件 · (长按项目可查看深度属性与递归大小)",
+                                fDirCount));
+                    } else {
+                        tvPathSummary.setText(String.format(Locale.getDefault(),
+                                "📊 %d 个目录 · %d 个文件 · 直接文件共 %s · (长按项目可查看详情)",
+                                fDirCount, fFileCount, formatSize(fTotalSize)));
+                    }
                 }
                 if (list.isEmpty()) {
                     Toast.makeText(context, "当前目录为空", Toast.LENGTH_SHORT).show();
@@ -542,6 +573,118 @@ public class FileBrowserDialog {
 
     private static boolean isDataOrConfig(String ext) {
         return ext.equals("json") || ext.equals("yaml") || ext.equals("yml") || ext.equals("xml") || ext.equals("conf") || ext.equals("md") || ext.equals("txt") || ext.equals("log");
+    }
+
+    /**
+     * 弹出目录/文件详细属性对话框（支持长按调出，毫秒级异步递归计算真实目录总大小）
+     */
+    private void showItemDetailDialog(FileItem item) {
+        if (item == null || item.file == null) return;
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0D1117);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+
+        TextView tvTitle = new TextView(context);
+        tvTitle.setText(item.isDirectory ? "📁 目录详细属性" : "📄 文件详细属性");
+        tvTitle.setTextColor(0xFFF0F6FC);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        View divider = new View(context);
+        divider.setBackgroundColor(0xFF30363D);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        dlp.topMargin = dp(10);
+        dlp.bottomMargin = dp(10);
+        root.addView(divider, dlp);
+
+        createDetailRow(root, "名称", item.name);
+        createDetailRow(root, "当前路径", item.file.getAbsolutePath());
+        if (item.isSymlink) {
+            createDetailRow(root, "符号链接指向", item.resolvedTarget != null ? item.resolvedTarget.getAbsolutePath() : "未解析");
+        }
+
+        String timeStr = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date(item.lastModified));
+        createDetailRow(root, "修改时间", timeStr);
+
+        if (item.isDirectory) {
+            createDetailRow(root, "直接子项数量", item.childCount + " 项");
+            final TextView tvSize = createDetailRow(root, "目录递归总占用", "正在后台计算磁盘总占用...");
+            new Thread(() -> {
+                File target = item.resolvedTarget != null ? item.resolvedTarget : item.file;
+                long totalBytes = ProotManager.getDirectorySize(target);
+                String formatted = ProotManager.formatSize(totalBytes);
+                mainHandler.post(() -> {
+                    tvSize.setText(formatted + " (约 " + totalBytes + " 字节)");
+                });
+            }).start();
+        } else {
+            createDetailRow(root, "真实文件大小", formatSize(item.size) + " (" + item.size + " 字节)");
+        }
+
+        LinearLayout btnRow = new LinearLayout(context);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.END);
+        btnRow.setPadding(0, dp(14), 0, 0);
+
+        AlertDialog d = builder.setView(root).create();
+
+        TextView btnCopy = buildActionBtn("📋 复制路径", 0x223B82F6, 0xFF93C5FD, v -> {
+            ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("FilePath", item.file.getAbsolutePath()));
+                Toast.makeText(context, "已复制完整路径", Toast.LENGTH_SHORT).show();
+            }
+        });
+        btnRow.addView(btnCopy);
+
+        View sp1 = new View(context);
+        btnRow.addView(sp1, new LinearLayout.LayoutParams(dp(8), 1));
+
+        if (item.isDirectory) {
+            TextView btnEnter = buildActionBtn("📂 进入目录", 0x2210B981, 0xFFA7F3D0, v -> {
+                d.dismiss();
+                navigateTo(item.resolvedTarget != null ? item.resolvedTarget : item.file);
+            });
+            btnRow.addView(btnEnter);
+            View sp2 = new View(context);
+            btnRow.addView(sp2, new LinearLayout.LayoutParams(dp(8), 1));
+        } else {
+            TextView btnPreview = buildActionBtn("🔍 预览文件", 0x2210B981, 0xFFA7F3D0, v -> {
+                d.dismiss();
+                showFilePreviewDialog(item.file);
+            });
+            btnRow.addView(btnPreview);
+            View sp2 = new View(context);
+            btnRow.addView(sp2, new LinearLayout.LayoutParams(dp(8), 1));
+        }
+
+        TextView btnClose = buildActionBtn("关闭", 0x2230363D, 0xFF8B949E, v -> d.dismiss());
+        btnRow.addView(btnClose);
+
+        root.addView(btnRow);
+        d.show();
+    }
+
+    private TextView createDetailRow(LinearLayout parent, String label, String value) {
+        TextView tvLabel = new TextView(context);
+        tvLabel.setText(label + ":");
+        tvLabel.setTextColor(0xFF8B949E);
+        tvLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvLabel.setPadding(0, dp(4), 0, 0);
+        parent.addView(tvLabel);
+
+        TextView tvVal = new TextView(context);
+        tvVal.setText(value);
+        tvVal.setTextColor(0xFFE6EDF3);
+        tvVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvVal.setTypeface(Typeface.MONOSPACE);
+        tvVal.setPadding(0, dp(1), 0, dp(4));
+        tvVal.setTextIsSelectable(true);
+        parent.addView(tvVal);
+        return tvVal;
     }
 
     /**

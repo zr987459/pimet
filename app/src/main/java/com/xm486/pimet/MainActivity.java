@@ -522,6 +522,7 @@ public class MainActivity extends AppCompatActivity {
         if (index == 0) {
             checkServiceStatus();
             refreshLaunchLog();
+            refreshStorageSize();
         } else if (index == 1) {
             updatePiWebDisplay();
         } else if (index == 2) {
@@ -2220,6 +2221,23 @@ public class MainActivity extends AppCompatActivity {
             launchSubtitleTv.setText("Pi-Web 守护进程正常监听中，可进入工作台或外部浏览器使用");
             btnLaunchMain.setText("🌐 进入 Pi-Web 工作台");
             btnLaunchMain.setBackgroundResource(R.drawable.bg_btn_primary);
+
+            if (btnLaunchStop != null) {
+                btnLaunchStop.setEnabled(true);
+                btnLaunchStop.setAlpha(1.0f);
+                btnLaunchStop.setBackgroundResource(R.drawable.bg_btn_danger);
+                if (btnLaunchStop instanceof TextView) {
+                    ((TextView) btnLaunchStop).setTextColor(0xFFFCA5A5);
+                }
+            }
+            if (btnLaunchRestart != null) {
+                btnLaunchRestart.setEnabled(true);
+                btnLaunchRestart.setAlpha(1.0f);
+                btnLaunchRestart.setBackgroundResource(R.drawable.bg_btn_secondary);
+                if (btnLaunchRestart instanceof TextView) {
+                    ((TextView) btnLaunchRestart).setTextColor(0xFFC9D1D9);
+                }
+            }
         } else {
             launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_gray);
             launchStateTv.setText("服务已停止");
@@ -2227,6 +2245,23 @@ public class MainActivity extends AppCompatActivity {
             launchSubtitleTv.setText("内置 PRoot 容器环境已就绪，点击下方按钮启动 Pi-Web 守护服务");
             btnLaunchMain.setText("🚀 启动 Pi-Web 服务");
             btnLaunchMain.setBackgroundResource(R.drawable.bg_btn_success);
+
+            if (btnLaunchStop != null) {
+                btnLaunchStop.setEnabled(false);
+                btnLaunchStop.setAlpha(0.35f);
+                btnLaunchStop.setBackgroundResource(R.drawable.bg_btn_secondary);
+                if (btnLaunchStop instanceof TextView) {
+                    ((TextView) btnLaunchStop).setTextColor(0xFF6E7681);
+                }
+            }
+            if (btnLaunchRestart != null) {
+                btnLaunchRestart.setEnabled(false);
+                btnLaunchRestart.setAlpha(0.35f);
+                btnLaunchRestart.setBackgroundResource(R.drawable.bg_btn_secondary);
+                if (btnLaunchRestart instanceof TextView) {
+                    ((TextView) btnLaunchRestart).setTextColor(0xFF6E7681);
+                }
+            }
         }
     }
 
@@ -2270,6 +2305,11 @@ public class MainActivity extends AppCompatActivity {
                 updateLaunchStatusUI(true);
                 Toast.makeText(MainActivity.this, "🎉 Pi-Web 服务已成功启动！", Toast.LENGTH_SHORT).show();
                 refreshLaunchLog();
+
+                // 核心预加载：服务一就绪，后台立刻触发静默渲染，用户点击进入工作台秒开呈现
+                if (piWebWebView != null) {
+                    piWebWebView.loadUrl(getPiWebUrl());
+                }
             }
 
             @Override
@@ -2285,31 +2325,77 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void restartPiWebService() {
+        if (isDeploying) {
+            Toast.makeText(this, "正在部署中，请稍候...", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (isPiWebActionInProgress) {
-            Toast.makeText(this, "正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "服务正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
             return;
         }
         isPiWebActionInProgress = true;
-        Toast.makeText(this, "正在安全重启 Pi-Web...", Toast.LENGTH_SHORT).show();
         launchProgressBar.setVisibility(View.VISIBLE);
-        launchStateTv.setText("正在终止旧服务并释放端口...");
+        launchStateTv.setText("正在重启服务...");
         launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_yellow);
+        Toast.makeText(this, "正在安全重启 Pi-Web...", Toast.LENGTH_SHORT).show();
 
-        // 切断当前 WebView 内部 Socket/WebSocket 连接，防止客户端长连接锁定端口
+        // 断开当前 WebView 连接，防止长连接锁定端口
         if (piWebWebView != null) {
             piWebWebView.stopLoading();
             piWebWebView.loadUrl("about:blank");
         }
 
-        PiWebManager.stopPiWeb(this, () -> {
-            isPiWebAlive = false;
-            updateLaunchStatusUI(false);
-            isPiWebActionInProgress = false;
-            startPiWebService();
+        PiWebManager.restart(this, new PiWebManager.StateListener() {
+            @Override
+            public void onLog(String log) {
+                appendLaunchLog(log);
+            }
+
+            @Override
+            public void onProgress(String message, int percent) {
+                mainHandler.post(() -> {
+                    if (percent >= 0) {
+                        launchSubtitleTv.setText(message + " (" + percent + "%)");
+                    } else {
+                        launchSubtitleTv.setText(message);
+                    }
+                });
+            }
+
+            @Override
+            public void onStarted() {
+                isPiWebActionInProgress = false;
+                launchProgressBar.setVisibility(View.GONE);
+                isPiWebAlive = true;
+                PiMetService.start(MainActivity.this);
+                updateLaunchStatusUI(true);
+                Toast.makeText(MainActivity.this, "🎉 Pi-Web 服务已成功重启！", Toast.LENGTH_SHORT).show();
+                refreshLaunchLog();
+
+                // 核心预加载：服务就绪瞬间立即静默加载 WebView，进入工作台 0 秒呈现
+                if (piWebWebView != null) {
+                    piWebWebView.loadUrl(getPiWebUrl());
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                isPiWebActionInProgress = false;
+                launchProgressBar.setVisibility(View.GONE);
+                isPiWebAlive = false;
+                updateLaunchStatusUI(false);
+                Toast.makeText(MainActivity.this, "重启失败: " + error, Toast.LENGTH_LONG).show();
+                refreshLaunchLog();
+            }
         });
     }
 
     private void stopPiWebService() {
+        if (!isPiWebAlive) {
+            Toast.makeText(this, "服务当前未在运行", Toast.LENGTH_SHORT).show();
+            updateLaunchStatusUI(false);
+            return;
+        }
         if (isPiWebActionInProgress) {
             Toast.makeText(this, "正在处理中，请稍候...", Toast.LENGTH_SHORT).show();
             return;
@@ -2331,7 +2417,7 @@ public class MainActivity extends AppCompatActivity {
             isPiWebActionInProgress = false;
             launchProgressBar.setVisibility(View.GONE);
             updateLaunchStatusUI(false);
-            Toast.makeText(this, "Pi-Web 服务已成功停止", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Pi-Web 服务已安全停止", Toast.LENGTH_SHORT).show();
             refreshLaunchLog();
         });
     }
@@ -2817,6 +2903,14 @@ public class MainActivity extends AppCompatActivity {
         int port = PiMetConfig.getWebPort(this);
         String url = getPiWebUrl();
 
+        // 关键秒开优化：若服务已知在运行，或者 WebView 已在目标地址，主线程同步直接切出工作台，毫秒级即现！
+        if (isPiWebAlive || (piWebWebView != null && piWebWebView.getUrl() != null && piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
+            showPiWebOffline(false);
+            if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
+                piWebWebView.loadUrl(url);
+            }
+        }
+
         new Thread(() -> {
             boolean alive = ProotManager.isPiWebHttpReady(port);
             if (!alive && ProotManager.isPiWebPortAlive(port)) {
@@ -2834,7 +2928,7 @@ public class MainActivity extends AppCompatActivity {
                 isPiWebAlive = isReady;
                 if (isReady) {
                     showPiWebOffline(false);
-                    if (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port)) {
+                    if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
                         piWebWebView.loadUrl(url);
                     }
                     // 目标网页已正确加载，切勿调用 reload()，以完整保留 WebView 内存状态

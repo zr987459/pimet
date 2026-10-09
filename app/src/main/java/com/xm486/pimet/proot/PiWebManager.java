@@ -34,29 +34,57 @@ public final class PiWebManager {
     private PiWebManager() {}
 
     /**
+     * 重启 Pi-Web（安全杀掉旧进程并释放端口后拉起新实例）
+     */
+    public static void restart(Context context, StateListener listener) {
+        startInternal(context, true, listener);
+    }
+
+    /**
      * 启动或部署 Pi-Web
      */
     public static void startOrDeploy(Context context, StateListener listener) {
-        new Thread(() -> {
-            Handler mainHandler = new Handler(Looper.getMainLooper());
-            try {
-                int port = PiMetConfig.getWebPort(context);
-                if (ProotManager.isPiWebPortAlive(port)) {
-                    mainHandler.post(() -> {
-                        if (listener != null) {
-                            listener.onLog("\u001B[32m✔ Pi-Web 已在本地端口 " + port + " 运行中\u001B[0m\n");
-                            listener.onStarted();
-                        }
-                    });
-                    return;
-                }
+        startInternal(context, false, listener);
+    }
 
-                // 检查 Rootfs 是否已就绪
+    private static void startInternal(Context context, boolean isRestart, StateListener listener) {
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+        new Thread(() -> {
+            try {
                 if (!ProotManager.isRootfsInstalled(context)) {
                     mainHandler.post(() -> {
                         if (listener != null) listener.onLog("正在准备 Linux 容器系统...\n");
                     });
                     ProotManager.installRootfs(context, new ProotManager.InstallCallback() {
+                        @Override
+                        public void onProgress(String message, int percent) {
+                            mainHandler.post(() -> {
+                                if (listener != null) listener.onProgress(message, percent);
+                            });
+                        }
+
+                        @Override
+                        public void onSuccess() {
+                            // 递归拉起 Pi-Web
+                            startInternal(context, isRestart, listener);
+                        }
+
+                        @Override
+                        public void onError(String error) {
+                            mainHandler.post(() -> {
+                                if (listener != null) listener.onError("初始化容器失败: " + error);
+                            });
+                        }
+                    });
+                    return;
+                }
+
+                // 检查并部署 Pi 核心命令行
+                if (!ProotManager.isPiCoreInstalled(context)) {
+                    mainHandler.post(() -> {
+                        if (listener != null) listener.onLog("• 正在初始化容器运行时核心...\n");
+                    });
+                    ProotManager.installPiCore(context, new ProotManager.InstallCallback() {
                         @Override
                         public void onProgress(String message, int percent) {
                             mainHandler.post(() -> {
@@ -67,7 +95,7 @@ public final class PiWebManager {
                         @Override
                         public void onSuccess() {
                             // 递归拉起 Pi-Web
-                            startOrDeploy(context, listener);
+                            startInternal(context, isRestart, listener);
                         }
 
                         @Override
@@ -75,6 +103,19 @@ public final class PiWebManager {
                             mainHandler.post(() -> {
                                 if (listener != null) listener.onError("初始化容器失败: " + error);
                             });
+                        }
+                    });
+                    return;
+                }
+
+                int port = PiMetConfig.getWebPort(context);
+
+                // 若非强制重启模式且服务已就绪响应 HTTP，直接成功返回
+                if (!isRestart && ProotManager.isPiWebHttpReady(port)) {
+                    mainHandler.post(() -> {
+                        if (listener != null) {
+                            listener.onLog("\u001B[32m✔ Pi-Web 已在本地端口 " + port + " 正常运行中\u001B[0m\n");
+                            listener.onStarted();
                         }
                     });
                     return;
@@ -153,17 +194,33 @@ public final class PiWebManager {
                 // 防御 Service Worker 离线误判与过早超时
                 ProotManager.optimizePiWebOffline(context);
 
-                // 后台启动守护服务
+                // 彻底停止旧服务并确保端口释放
                 mainHandler.post(() -> {
-                    if (listener != null) listener.onLog("\u001B[36m• 正在拉起 Pi-Web 服务 (PORT " + port + ")...\u001B[0m\n");
+                    if (listener != null) {
+                        listener.onLog(isRestart ? "\u001B[33m• 正在终止旧服务并彻底释放端口 " + port + "...\u001B[0m\n" : "\u001B[36m• 正在准备端口 " + port + "...\u001B[0m\n");
+                        listener.onProgress(isRestart ? "正在清理旧实例与端口..." : "正在释放端口...", -1);
+                    }
+                });
+
+                stopPiWebSync(context);
+
+                // 后台启动全新守护服务
+                mainHandler.post(() -> {
+                    if (listener != null) {
+                        listener.onLog("\u001B[36m• 正在拉起全新 Pi-Web 守护进程 (PORT " + port + ")...\u001B[0m\n");
+                        listener.onProgress("正在拉起守护进程...", -1);
+                    }
                 });
 
                 List<String> startCmd = Arrays.asList(
                         "/bin/bash", "-c",
-                        "export PORT=" + port + "; if command -v pi-web >/dev/null 2>&1; then exec pi-web --no-open -p " + port + " -H 127.0.0.1; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; fi"
+                        "export PORT=" + port + "; " +
+                        "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
+                        "if command -v pi-web >/dev/null 2>&1; then exec pi-web --no-open -p " + port + " -H 127.0.0.1; " +
+                        "elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; " +
+                        "else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; fi"
                 );
 
-                stopPiWebSync(context);
                 ProcessBuilder pbStart = ProotManager.buildProotProcess(context, "/root", startCmd);
                 File logFile = new File(ProotManager.getRootfsDir(context), "root/pi-web.log");
                 logFile.getParentFile().mkdirs();
@@ -171,20 +228,30 @@ public final class PiWebManager {
                 pbStart.redirectError(ProcessBuilder.Redirect.appendTo(logFile));
                 daemonProcess = pbStart.start();
 
-                // 端口与 HTTP 接口深度探活 (最多 20 秒)
+                // 端口与 HTTP 接口深度探活 (最多 30 秒，兼容各配置设备冷启动)
                 boolean alive = false;
-                for (int i = 0; i < 20; i++) {
-                    Thread.sleep(1000);
+                for (int i = 0; i < 30; i++) {
+                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
                     if (ProotManager.isPiWebHttpReady(port)) {
                         alive = true;
                         break;
                     } else if (ProotManager.isPiWebPortAlive(port)) {
-                        // 端口已通但 HTTP 握手仍在编译启动中，多缓冲 1 秒
-                        Thread.sleep(1200);
+                        // 端口已通但 HTTP 握手仍在编译启动中，缓冲等待
+                        try { Thread.sleep(800); } catch (InterruptedException ignored) {}
                         if (ProotManager.isPiWebHttpReady(port)) {
                             alive = true;
                             break;
                         }
+                    }
+
+                    // 如果守护进程已经提前崩溃退出，立即中断等待
+                    if (daemonProcess != null && !daemonProcess.isAlive()) {
+                        break;
+                    }
+
+                    if (listener != null && i % 3 == 0) {
+                        final int elapsed = i + 1;
+                        mainHandler.post(() -> listener.onProgress("正在加载并初始化 Web 运行环境 (已耗时 " + elapsed + "s)...", -1));
                     }
                 }
 
@@ -199,7 +266,7 @@ public final class PiWebManager {
                     mainHandler.post(() -> {
                         if (listener != null) {
                             listener.onLog("\u001B[31m✘ 端口尚未连通，最近日志:\u001B[0m\n" + readLastLog(context));
-                            listener.onError("Pi-Web 启动超时，请查看日志");
+                            listener.onError("Pi-Web 启动超时，请查看诊断日志");
                         }
                     });
                 }
@@ -230,45 +297,51 @@ public final class PiWebManager {
 
         try {
             int port = PiMetConfig.getWebPort(context);
-            // 杀死容器内残留的 pi-web 与 Node 监听实例（避免在 PRoot 中调用易卡死的 fuser/lsof）
+
+            // 在容器内部暴力杀死所有相关的 node 与 pi-web 实例
             List<String> killCmd = Arrays.asList(
                     "/bin/bash", "-c",
-                    "pkill -9 -f pi-web 2>/dev/null || true; " +
+                    "kill -9 $(pidof node) 2>/dev/null || true; " +
                     "pkill -9 -f 'node.*pi-web' 2>/dev/null || true; " +
-                    "killall -9 node 2>/dev/null || true"
+                    "pkill -9 -f pi-web 2>/dev/null || true; " +
+                    "pkill -9 -f node 2>/dev/null || true; " +
+                    "fuser -k -9 " + port + "/tcp 2>/dev/null || true"
             );
             ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", killCmd);
             pb.redirectOutput(new File("/dev/null"));
             pb.redirectError(new File("/dev/null"));
             Process p = pb.start();
-            boolean finished = false;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                try {
-                    finished = p.waitFor(2000, java.util.concurrent.TimeUnit.MILLISECONDS);
-                } catch (InterruptedException ignored) {}
-            } else {
-                long start = System.currentTimeMillis();
-                while (System.currentTimeMillis() - start < 2000) {
-                    try {
-                        p.exitValue();
-                        finished = true;
-                        break;
-                    } catch (IllegalThreadStateException e) {
-                        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
-                    }
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    p.waitFor(2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } else {
+                    p.waitFor();
                 }
-            }
-            if (!finished) {
-                p.destroy();
+            } catch (Throwable ignored) {}
+            try {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                     p.destroyForcibly();
+                } else {
+                    p.destroy();
                 }
-            }
+            } catch (Throwable ignored) {}
 
-            // 等待端口彻底释放（最多 2 秒）
-            for (int i = 0; i < 8; i++) {
+            // 严密等待端口彻底释放（最多 4 秒，每 200ms 检测一次）
+            for (int i = 0; i < 20; i++) {
                 if (!ProotManager.isPiWebPortAlive(port)) break;
-                try { Thread.sleep(250); } catch (InterruptedException ignored) {}
+                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                if (i == 7) {
+                    try {
+                        ProcessBuilder pbRetry = ProotManager.buildProotProcess(context, "/root",
+                                Arrays.asList("/bin/bash", "-c", "kill -9 $(pidof node) 2>/dev/null || true; pkill -9 -f node 2>/dev/null || true"));
+                        Process pr = pbRetry.start();
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            pr.waitFor(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        } else {
+                            pr.waitFor();
+                        }
+                    } catch (Throwable ignored) {}
+                }
             }
         } catch (Throwable ignored) {}
     }
