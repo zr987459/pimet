@@ -907,7 +907,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return Math.max(min, Math.min(max, v));
     }
 
-    private void toggleCard() {
+    public void toggleCard() {
         cardVisible = !cardVisible;
         // 展开/收起用 180ms 的淡入+轻微缩放（只动 alpha/scale，不触发布局重排）；
         // 动画从桌宠位置向下展开（锚点在顶部中心），保持空间连续性。
