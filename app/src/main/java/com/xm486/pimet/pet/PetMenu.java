@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -21,7 +22,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.MainActivity;
+import com.xm486.pimet.PiWebActivity;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -37,6 +40,7 @@ public class PetMenu {
     private TextView petNameTv;
     private List<PetRegistry.PetInfo> allPets;
     private int currentPetIndex = 0;
+    private final List<TextView> targetButtons = new ArrayList<>();
 
     public PetMenu(Context context) {
         this(context, PetOverlayService.getInstance());
@@ -114,6 +118,84 @@ public class PetMenu {
             divLp1.topMargin = dp(4);
             divLp1.bottomMargin = dp(5);
             root.addView(div1, divLp1);
+
+            // ---- 监控目标标签行 (点按一键切换监控AI · 长按直达Web界面) ----
+            TextView targetHeader = new TextView(context);
+            targetHeader.setText("🎯 监控AI (点按切换 · 长按进入)");
+            targetHeader.setTextColor(0xFF94A3B8);
+            targetHeader.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+            LinearLayout.LayoutParams thLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            thLp.bottomMargin = dp(3);
+            root.addView(targetHeader, thLp);
+
+            targetButtons.clear();
+
+            LinearLayout targetRow1 = new LinearLayout(context);
+            targetRow1.setOrientation(LinearLayout.HORIZONTAL);
+            targetRow1.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams tr1Lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(22));
+
+            TextView btnPiWeb = createTargetButton("pi-web", PetRegistry.TARGET_PIWEB, v -> {
+                switchTarget(PetRegistry.TARGET_PIWEB);
+            }, v -> {
+                openConsole(PetRegistry.TARGET_PIWEB);
+                return true;
+            });
+            TextView btnOperit = createTargetButton("Operit", PetRegistry.TARGET_OPERIT, v -> {
+                switchTarget(PetRegistry.TARGET_OPERIT);
+            }, v -> {
+                openConsole(PetRegistry.TARGET_OPERIT);
+                return true;
+            });
+
+            targetRow1.addView(btnPiWeb, new LinearLayout.LayoutParams(0, dp(22), 1f));
+            targetRow1.addView(new View(context), new LinearLayout.LayoutParams(dp(3), 1));
+            targetRow1.addView(btnOperit, new LinearLayout.LayoutParams(0, dp(22), 1f));
+            root.addView(targetRow1, tr1Lp);
+
+            LinearLayout targetRow2 = new LinearLayout(context);
+            targetRow2.setOrientation(LinearLayout.HORIZONTAL);
+            targetRow2.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams tr2Lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(22));
+            tr2Lp.topMargin = dp(3);
+
+            TextView btnClaw = createTargetButton("ClawBench", PetRegistry.TARGET_CLAWBENCH, v -> {
+                switchTarget(PetRegistry.TARGET_CLAWBENCH);
+            }, v -> {
+                openConsole(PetRegistry.TARGET_CLAWBENCH);
+                return true;
+            });
+            TextView btnRikka = createTargetButton("RikkaHub", PetRegistry.TARGET_RIKKA, v -> {
+                switchTarget(PetRegistry.TARGET_RIKKA);
+            }, v -> {
+                openConsole(PetRegistry.TARGET_RIKKA);
+                return true;
+            });
+
+            targetRow2.addView(btnClaw, new LinearLayout.LayoutParams(0, dp(22), 1f));
+            targetRow2.addView(new View(context), new LinearLayout.LayoutParams(dp(3), 1));
+            targetRow2.addView(btnRikka, new LinearLayout.LayoutParams(0, dp(22), 1f));
+            root.addView(targetRow2, tr2Lp);
+
+            targetButtons.add(btnPiWeb);
+            targetButtons.add(btnOperit);
+            targetButtons.add(btnClaw);
+            targetButtons.add(btnRikka);
+
+            String activeTarget = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+            refreshTargetButtonStyles(activeTarget);
+
+            // 分割线 (监控与形象之间)
+            View divTarget = new View(context);
+            divTarget.setBackgroundColor(0x22475569);
+            LinearLayout.LayoutParams divLpTarget = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+            divLpTarget.topMargin = dp(5);
+            divLpTarget.bottomMargin = dp(5);
+            root.addView(divTarget, divLpTarget);
 
             // ---- 角色切换横排：[◀] [角色名] [▶] ----
             allPets = PetRegistry.loadPets(context);
@@ -233,19 +315,20 @@ public class PetMenu {
             divLp2.bottomMargin = dp(5);
             root.addView(div2, divLp2);
 
-            // ---- 底部操作功能键行 1: [💬 快速聊天] [🌐 工作台] ----
+            // ---- 底部操作功能键行 1: [💬 快捷聊天(直接打开对应网页端)] [🌐 工作台] ----
             LinearLayout actionRow1 = new LinearLayout(context);
             actionRow1.setOrientation(LinearLayout.HORIZONTAL);
             actionRow1.setGravity(Gravity.CENTER_VERTICAL);
 
             TextView chatBtn = buildCompactActionBtn("💬 快捷聊天", 0x2210B981, 0x5510B981, 0xFFA7F3D0, v -> {
                 dismiss();
-                openFullChat();
+                String target = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+                openConsole(target);
             });
-            actionRow1.addView(chatBtn, new LinearLayout.LayoutParams(0, dp(25), 1f));
+            actionRow1.addView(chatBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
 
             View space1 = new View(context);
-            actionRow1.addView(space1, new LinearLayout.LayoutParams(dp(4), 1));
+            actionRow1.addView(space1, new LinearLayout.LayoutParams(dp(3), 1));
 
             TextView webBtn = buildCompactActionBtn("🌐 工作台", 0x223B82F6, 0x553B82F6, 0xFF93C5FD, v -> {
                 dismiss();
@@ -258,31 +341,16 @@ public class PetMenu {
                     context.startActivity(intent);
                 }
             });
-            actionRow1.addView(webBtn, new LinearLayout.LayoutParams(0, dp(25), 1f));
+            actionRow1.addView(webBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
             root.addView(actionRow1);
 
-            // ---- 底部操作功能键行 2: [🎛️ 参数] [⚙️ 设置] [🔴 关闭] ----
+            // ---- 底部操作功能键行 2: [⚙️ 设置] [🔴 关闭] ----
             LinearLayout actionRow2 = new LinearLayout(context);
             actionRow2.setOrientation(LinearLayout.HORIZONTAL);
             actionRow2.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams ar2Lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            ar2Lp.topMargin = dp(4);
-
-            TextView paramsBtn = buildCompactActionBtn("🎛️ 参数", 0x228B5CF6, 0x558B5CF6, 0xFFC4B5FD, v -> {
-                dismiss();
-                if (service != null) {
-                    new PetParamsDialog(service).show();
-                } else {
-                    new PetParamsDialog(context, () -> {
-                        if (activity != null) activity.applyPetParams();
-                    }).show();
-                }
-            });
-            actionRow2.addView(paramsBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
-
-            View space2 = new View(context);
-            actionRow2.addView(space2, new LinearLayout.LayoutParams(dp(3), 1));
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
+            ar2Lp.topMargin = dp(3);
 
             TextView setBtn = buildCompactActionBtn("⚙️ 设置", 0x22F59E0B, 0x55F59E0B, 0xFFFCD34D, v -> {
                 dismiss();
@@ -342,18 +410,145 @@ public class PetMenu {
         }
     }
 
-    private void openFullChat() {
+    private void switchTarget(String targetKey) {
+        PetRegistry.setStringPref(context, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+        try {
+            ChatConfig cfg = ChatConfig.load(context);
+            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                cfg.mode = ChatConfig.MODE_PIWEB;
+            } else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) {
+                cfg.mode = ChatConfig.MODE_OPERIT;
+            } else if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) {
+                cfg.mode = ChatConfig.MODE_CLAWBENCH;
+            }
+            cfg.save(context);
+        } catch (Throwable ignored) {}
+
+        if (service != null) {
+            service.switchMonitorTarget(targetKey);
+        } else {
+            PetOverlayService s = PetOverlayService.getInstance();
+            if (s != null) {
+                s.switchMonitorTarget(targetKey);
+            }
+        }
+
         if (activity != null) {
-            activity.togglePetChatCard(true);
+            activity.initPetMonitor();
+            activity.showPetBubble("🎯 监控已切换至: " + getTargetLabel(targetKey));
+        }
+
+        refreshTargetButtonStyles(targetKey);
+        Toast.makeText(context, "🎯 监控已切换至: " + getTargetLabel(targetKey), Toast.LENGTH_SHORT).show();
+    }
+
+    private void openConsole(String targetKey) {
+        dismiss();
+        if (service != null) {
+            service.openConsoleForTarget(targetKey);
+            return;
+        }
+        PetOverlayService s = PetOverlayService.getInstance();
+        if (s != null) {
+            s.openConsoleForTarget(targetKey);
+            return;
+        }
+        if (activity != null) {
+            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                activity.switchTab(1);
+                return;
+            }
+        }
+        int port;
+        if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) {
+            port = PetRegistry.getClawbenchPort(context);
+        } else if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+            port = PetRegistry.getPiWebPort(context);
+        } else if (PetRegistry.TARGET_RIKKA.equals(targetKey)) {
+            port = PetRegistry.getIntPref(context, PetRegistry.KEY_RK_PORT, PetRegistry.DEFAULT_RK_PORT);
+        } else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) {
+            port = PetRegistry.getOperitPort(context);
         } else {
             Intent intent = new Intent(context, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            intent.putExtra("pimet.open_pet_chat", true);
+            intent.putExtra("devpetm.open_ai_tab", true);
             context.startActivity(intent);
-            if (service != null) {
-                service.toggleCard();
-            }
+            return;
         }
+
+        try {
+            Intent intent = new Intent(context, PiWebActivity.class);
+            intent.putExtra(PiWebActivity.EXTRA_PORT, port);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Throwable t) {
+            try {
+                Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
+                browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(browser);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private TextView createTargetButton(String label, String targetKey, View.OnClickListener clk, View.OnLongClickListener lclk) {
+        TextView btn = new TextView(context);
+        btn.setText(label);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+        btn.setGravity(Gravity.CENTER);
+        btn.setPadding(dp(4), dp(2), dp(4), dp(2));
+        btn.setTag(targetKey);
+        btn.setClickable(true);
+        btn.setFocusable(true);
+        btn.setSingleLine(true);
+        btn.setEllipsize(TextUtils.TruncateAt.END);
+        btn.setIncludeFontPadding(false);
+        btn.setOnClickListener(clk);
+        if (lclk != null) {
+            btn.setOnLongClickListener(lclk);
+        }
+        return btn;
+    }
+
+    private void refreshTargetButtonStyles(String activeTarget) {
+        for (TextView btn : targetButtons) {
+            String key = (String) btn.getTag();
+            boolean isActive = key != null && key.equals(activeTarget);
+
+            GradientDrawable normal = new GradientDrawable();
+            normal.setCornerRadius(dp(6));
+            if (isActive) {
+                normal.setColor(0x3310B981);
+                normal.setStroke(dp(1), 0xFF10B981);
+                btn.setTextColor(0xFF34D399);
+                btn.setTypeface(Typeface.DEFAULT_BOLD);
+                btn.setText("● " + getTargetLabel(key));
+            } else {
+                normal.setColor(0x221E293B);
+                normal.setStroke(dp(1), 0x22475569);
+                btn.setTextColor(0xFF94A3B8);
+                btn.setTypeface(Typeface.DEFAULT);
+                btn.setText("○ " + getTargetLabel(key));
+            }
+
+            GradientDrawable pressed = new GradientDrawable();
+            pressed.setCornerRadius(dp(6));
+            pressed.setColor(isActive ? 0x6610B981 : 0x55334155);
+            pressed.setStroke(dp(1), isActive ? 0xFF34D399 : 0x6694A3B8);
+
+            StateListDrawable sld = new StateListDrawable();
+            sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
+            sld.addState(new int[]{}, normal);
+
+            btn.setBackground(sld);
+        }
+    }
+
+    private String getTargetLabel(String targetKey) {
+        if (PetRegistry.TARGET_PIWEB.equals(targetKey)) return "pi-web";
+        if (PetRegistry.TARGET_OPERIT.equals(targetKey)) return "Operit";
+        if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) return "ClawBench";
+        if (PetRegistry.TARGET_RIKKA.equals(targetKey)) return "RikkaHub";
+        return targetKey != null ? targetKey : "";
     }
 
     private void stepPet(int delta) {

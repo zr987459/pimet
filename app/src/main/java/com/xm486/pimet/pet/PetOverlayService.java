@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -399,6 +400,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             startActivity(intent);
         } catch (Throwable t) {
             Log.w(TAG, "openConsoleForTarget failed", t);
+            try {
+                Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
+                browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(browser);
+            } catch (Throwable ignored) {}
         }
     }
 

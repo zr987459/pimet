@@ -329,6 +329,9 @@ public class MainActivity extends AppCompatActivity {
         if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_terminal", false)) {
             mainHandler.postDelayed(this::openTerminalInWorkbench, 300);
         }
+        if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_web", false)) {
+            mainHandler.postDelayed(() -> switchTab(1), 300);
+        }
         if (getIntent() != null && (getIntent().getBooleanExtra("pimet.toggle_web_fullscreen", false)
                 || getIntent().getBooleanExtra("pimet.open_pet_chat", false))) {
             mainHandler.postDelayed(() -> {
@@ -3874,6 +3877,9 @@ public class MainActivity extends AppCompatActivity {
         setIntent(intent);
         if (intent != null && intent.getBooleanExtra("pimet.open_terminal", false)) {
             openTerminalInWorkbench();
+        }
+        if (intent != null && intent.getBooleanExtra("pimet.open_web", false)) {
+            switchTab(1);
         }
         if (intent != null && (intent.getBooleanExtra("pimet.toggle_web_fullscreen", false)
                 || intent.getBooleanExtra("pimet.open_pet_chat", false))) {
