@@ -238,8 +238,8 @@ public final class PiWebManager {
                     "killall -9 node 2>/dev/null || true"
             );
             ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", killCmd);
-            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectOutput(new File("/dev/null"));
+            pb.redirectError(new File("/dev/null"));
             Process p = pb.start();
             boolean finished = false;
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
