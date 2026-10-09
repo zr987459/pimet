@@ -241,11 +241,11 @@ public class PetChatBridge {
             List<String> segments;
             chatting = true;
             boolean needPhase = false;
+            String cleanInput = input;
             try {
                 if (handleCommand(input)) {
                     segments = null; // # 指令已自行回复（showReply），不再走模型
                 } else {
-                    String cleanInput = input;
                     boolean forceNew = false;
                     if (cleanInput != null && cleanInput.trim().endsWith("+")) {
                         forceNew = true;
