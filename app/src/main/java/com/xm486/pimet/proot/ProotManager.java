@@ -143,6 +143,106 @@ public final class ProotManager {
         return isPiWebPortAlive(PI_WEB_PORT);
     }
 
+    /**
+     * HTTP 接口深度探活：确保 Node.js/Next.js 真正开始响应 HTTP 请求，
+     * 避免仅 TCP 握手成功但服务仍在启动编译时 WebView 过早加载触发 Service Worker offline.html 缓存。
+     */
+    public static boolean isPiWebHttpReady(int port) {
+        try {
+            URL url = new URL("http://127.0.0.1:" + port + "/manifest.webmanifest");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(600);
+            conn.setReadTimeout(1000);
+            conn.setRequestMethod("GET");
+            conn.setInstanceFollowRedirects(false);
+            int code = conn.getResponseCode();
+            return code >= 200 && code < 400;
+        } catch (Throwable ignored) {
+            try {
+                URL url2 = new URL("http://127.0.0.1:" + port + "/");
+                HttpURLConnection conn2 = (HttpURLConnection) url2.openConnection();
+                conn2.setConnectTimeout(600);
+                conn2.setReadTimeout(1000);
+                conn2.setRequestMethod("GET");
+                conn2.setInstanceFollowRedirects(false);
+                int code2 = conn2.getResponseCode();
+                return code2 >= 200 && code2 < 400;
+            } catch (Throwable ignored2) {
+                return false;
+            }
+        }
+    }
+
+    public static boolean isPiWebHttpReady() {
+        return isPiWebHttpReady(PI_WEB_PORT);
+    }
+
+    /**
+     * 针对 pi-web Service Worker 离线机制的深层防御：
+     * 1. 延长 sw.js 内 NAVIGATION_TIMEOUT_MS（从苛刻的 2.5s 延长至 15s），适配手机移动端冷启动
+     * 2. 在 offline.html 注入静默自动重连探活代码，一旦后端拉起立即自动刷新，杜绝用户反复手动点 Try again
+     */
+    public static void optimizePiWebOffline(Context context) {
+        try {
+            File rootfs = getRootfsDir(context);
+            File[] swFiles = new File[]{
+                    new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/public/sw.js"),
+                    new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/public/sw.js")
+            };
+            for (File sw : swFiles) {
+                if (sw.exists() && sw.canWrite()) {
+                    String content = readFileToString(sw);
+                    if (content != null && content.contains("NAVIGATION_TIMEOUT_MS = 2500;")) {
+                        content = content.replace("NAVIGATION_TIMEOUT_MS = 2500;", "NAVIGATION_TIMEOUT_MS = 15000;");
+                        writeStringToFile(sw, content);
+                    }
+                }
+            }
+
+            File[] offlineFiles = new File[]{
+                    new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/public/offline.html"),
+                    new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/public/offline.html")
+            };
+            for (File off : offlineFiles) {
+                if (off.exists() && off.canWrite()) {
+                    String content = readFileToString(off);
+                    if (content != null && !content.contains("auto-reconnect-timer")) {
+                        String inject = "<script id=\"auto-reconnect-timer\">\n" +
+                                "setInterval(function() {\n" +
+                                "  fetch('/manifest.webmanifest', { cache: 'no-store' })\n" +
+                                "    .then(function(r) { if (r.ok) location.reload(); })\n" +
+                                "    .catch(function() {});\n" +
+                                "}, 1200);\n" +
+                                "</script>\n</body>";
+                        content = content.replace("</body>", inject);
+                        writeStringToFile(off, content);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "optimizePiWebOffline failed", t);
+        }
+    }
+
+    private static String readFileToString(File file) {
+        try (FileInputStream fis = new FileInputStream(file);
+             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[2048];
+            int n;
+            while ((n = fis.read(buf)) != -1) bos.write(buf, 0, n);
+            return bos.toString("UTF-8");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void writeStringToFile(File file, String str) {
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(str.getBytes(StandardCharsets.UTF_8));
+            fos.flush();
+        } catch (Throwable ignored) {}
+    }
+
     public static long getDirectorySize(File dir) {
         if (dir == null || !dir.exists()) return 0;
         if (!dir.isDirectory()) return dir.length();

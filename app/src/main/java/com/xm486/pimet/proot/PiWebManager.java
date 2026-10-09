@@ -150,6 +150,9 @@ public final class PiWebManager {
                     }
                 }
 
+                // 防御 Service Worker 离线误判与过早超时
+                ProotManager.optimizePiWebOffline(context);
+
                 // 后台启动守护服务
                 mainHandler.post(() -> {
                     if (listener != null) listener.onLog("\u001B[36m• 正在拉起 Pi-Web 服务 (PORT " + port + ")...\u001B[0m\n");
@@ -157,7 +160,7 @@ public final class PiWebManager {
 
                 List<String> startCmd = Arrays.asList(
                         "/bin/bash", "-c",
-                        "export PORT=" + port + "; if command -v pi-web >/dev/null 2>&1; then exec pi-web; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js; fi"
+                        "export PORT=" + port + "; if command -v pi-web >/dev/null 2>&1; then exec pi-web --no-open -p " + port + " -H 127.0.0.1; elif [ -f /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js ]; then exec node /usr/local/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; else exec node /usr/lib/node_modules/@agegr/pi-web/bin/pi-web.js --no-open -p " + port + " -H 127.0.0.1; fi"
                 );
 
                 stopPiWebSync(context);
@@ -168,13 +171,20 @@ public final class PiWebManager {
                 pbStart.redirectError(ProcessBuilder.Redirect.appendTo(logFile));
                 daemonProcess = pbStart.start();
 
-                // 端口健康轮询 (最多 15 秒)
+                // 端口与 HTTP 接口深度探活 (最多 20 秒)
                 boolean alive = false;
-                for (int i = 0; i < 15; i++) {
+                for (int i = 0; i < 20; i++) {
                     Thread.sleep(1000);
-                    if (ProotManager.isPiWebPortAlive(port)) {
+                    if (ProotManager.isPiWebHttpReady(port)) {
                         alive = true;
                         break;
+                    } else if (ProotManager.isPiWebPortAlive(port)) {
+                        // 端口已通但 HTTP 握手仍在编译启动中，多缓冲 1 秒
+                        Thread.sleep(1200);
+                        if (ProotManager.isPiWebHttpReady(port)) {
+                            alive = true;
+                            break;
+                        }
                     }
                 }
 

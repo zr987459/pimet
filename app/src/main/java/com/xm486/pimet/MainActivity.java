@@ -1214,6 +1214,25 @@ public class MainActivity extends AppCompatActivity {
                     showPiWebOffline(true);
                 }
             }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (url != null && url.startsWith("http://127.0.0.1:")) {
+                    // 深度自愈：检测页面是否由于 Node.js 启动延迟被 Service Worker 错误截获为 offline.html
+                    view.evaluateJavascript(
+                        "(function() { " +
+                        "  var h1 = document.querySelector('h1'); " +
+                        "  return (document.title.indexOf('offline') !== -1 || (h1 && h1.innerText.indexOf('offline') !== -1)); " +
+                        "})()",
+                        result -> {
+                            if ("true".equalsIgnoreCase(result)) {
+                                handlePiWebOfflineDetected();
+                            }
+                        }
+                    );
+                }
+            }
         });
 
         piWebWebView.setWebChromeClient(new WebChromeClient() {
@@ -1488,10 +1507,21 @@ public class MainActivity extends AppCompatActivity {
         String url = getPiWebUrl();
 
         new Thread(() -> {
-            boolean alive = ProotManager.isPiWebPortAlive(port);
+            boolean alive = ProotManager.isPiWebHttpReady(port);
+            if (!alive && ProotManager.isPiWebPortAlive(port)) {
+                // 端口已开启但 HTTP 尚在启动编译中，缓冲等待最多 3.5 秒
+                for (int i = 0; i < 7; i++) {
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                    if (ProotManager.isPiWebHttpReady(port)) {
+                        alive = true;
+                        break;
+                    }
+                }
+            }
+            final boolean isReady = alive;
             mainHandler.post(() -> {
-                isPiWebAlive = alive;
-                if (alive) {
+                isPiWebAlive = isReady;
+                if (isReady) {
                     showPiWebOffline(false);
                     if (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port)) {
                         piWebWebView.loadUrl(url);
@@ -1502,6 +1532,24 @@ public class MainActivity extends AppCompatActivity {
                     showPiWebOffline(true);
                 }
             });
+        }).start();
+    }
+
+    private void handlePiWebOfflineDetected() {
+        int port = PiMetConfig.getWebPort(this);
+        // 如果服务实际在运行或刚拉起，静默轮询并在就绪后自动重新加载，摆脱手动点击 Try again
+        new Thread(() -> {
+            for (int i = 0; i < 15; i++) {
+                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                if (ProotManager.isPiWebHttpReady(port)) {
+                    mainHandler.post(() -> {
+                        if (piWebWebView != null) {
+                            piWebWebView.reload();
+                        }
+                    });
+                    break;
+                }
+            }
         }).start();
     }
 

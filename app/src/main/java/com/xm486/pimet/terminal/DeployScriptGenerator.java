@@ -145,6 +145,8 @@ public class DeployScriptGenerator {
         sb.append("  find \"$HOME\" -name \"pi\" -type f -perm /111 2>/dev/null | head -n 1 | while read -r p; do\n");
         sb.append("    ln -sf \"$p\" \"$BIN/pi\"\n");
         sb.append("  done\n");
+        sb.append("  # 深度调优 Service Worker 超时时长，避免移动端冷启动频繁抛出 offline.html\n");
+        sb.append("  find /usr/local/lib/node_modules/@agegr/pi-web /usr/lib/node_modules/@agegr/pi-web \"$HOME\" -name \"sw.js\" -exec sed -i 's/NAVIGATION_TIMEOUT_MS = 2500;/NAVIGATION_TIMEOUT_MS = 15000;/g' {} + 2>/dev/null || true\n");
         sb.append("fi\n\n");
 
         // ---- 阶段 3: 后台守护拉起 ----
