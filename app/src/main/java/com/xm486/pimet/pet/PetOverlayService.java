@@ -6,6 +6,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -56,6 +57,29 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public static PetOverlayService getInstance() { return sInstance; }
     public SpritePetView getPetView() { return petView; }
     public static final String ACTION_OVERLAY_STATE_CHANGED = "com.xm486.pimet.OVERLAY_STATE_CHANGED";
+
+    public static void start(Context context) {
+        if (context == null) return;
+        try {
+            Intent intent = new Intent(context, PetOverlayService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to start PetOverlayService", t);
+        }
+    }
+
+    public static void stop(Context context) {
+        if (context == null) return;
+        try {
+            context.stopService(new Intent(context, PetOverlayService.class));
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to stop PetOverlayService", t);
+        }
+    }
 
     private static final String TAG = "DevPetM.PetSvc";
     private static final String CHANNEL_ID = "devpetm_overlay";

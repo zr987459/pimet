@@ -81,7 +81,7 @@ public final class UpdateManager {
                     String body = json.optString("body", "");
 
                     String cleanLatest = tagName.replace("v", "").replace("V", "").trim();
-                    String currentVer = BuildConfig.VERSION_NAME;
+                    String currentVer = PiMetConfig.getAppVersion(context);
                     String cleanCurrent = currentVer.replace("v", "").replace("V", "").trim();
 
                     String downloadUrl = null;

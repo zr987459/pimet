@@ -89,6 +89,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -2037,7 +2038,6 @@ public class MainActivity extends AppCompatActivity {
         int port = PiMetConfig.getWebPort(this);
         launchMetricPortTv.setText(String.valueOf(port));
         launchPortBadge.setText("PORT " + port);
-        launchCopyUrlDescTv.setText(getPiWebUrl());
 
         btnLaunchMain.setOnClickListener(v -> {
             if (isPiWebAlive) {
@@ -2154,15 +2154,15 @@ public class MainActivity extends AppCompatActivity {
                 StringBuilder sb = new StringBuilder();
                 sb.append("=== 🔍 PiMet 守护诊断详细日志 ===\n");
                 sb.append("• 诊断时间: ").append(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new java.util.Date())).append("\n");
-                sb.append("• 应用版本: v").append(BuildConfig.VERSION_NAME).append("\n");
-                sb.append("• PRoot 容器: ").append(ProotManager.isRootfsExtracted(this) ? "已部署就绪 (OK)" : "未部署").append("\n");
+                sb.append("• 应用版本: v").append(PiMetConfig.getAppVersion(this)).append("\n");
+                sb.append("• PRoot 容器: ").append(ProotManager.isRootfsInstalled(this) ? "已部署就绪 (OK)" : "未部署").append("\n");
                 sb.append("• Pi-Web 端口: ").append(PiMetConfig.getWebPort(this))
                   .append(" (监听: ").append(isPiWebAlive ? "ALIVE 运行中" : "OFFLINE 未拉起").append(")\n");
                 sb.append("• Operit 端口: ").append(PetRegistry.getOperitPort(this)).append("\n");
                 sb.append("• ClawBench 端口: ").append(PetRegistry.getClawbenchPort(this)).append("\n");
                 sb.append("• Rikka 端口: ").append(PetRegistry.getRikkaPort(this)).append("\n");
                 sb.append("• 悬浮桌宠: ").append((PetRegistry.isPetEnabled(this) || PetOverlayService.isRunning()) ? "已开启" : "已关闭")
-                  .append(" (当前形象: ").append(PetRegistry.getCurrentPet(this)).append(")\n");
+                  .append(" (当前形象: ").append(PetRegistry.getPetDir(this)).append(")\n");
 
                 File rootfs = ProotManager.getRootfsDir(this);
                 if (rootfs != null && rootfs.exists()) {
@@ -2202,7 +2202,6 @@ public class MainActivity extends AppCompatActivity {
         int port = PiMetConfig.getWebPort(this);
         launchPortBadge.setText("PORT " + port);
         launchMetricPortTv.setText(String.valueOf(port));
-        launchCopyUrlDescTv.setText(getPiWebUrl());
 
         if (alive) {
             PiMetService.start(this);
@@ -3202,7 +3201,7 @@ public class MainActivity extends AppCompatActivity {
             settingsPiWebVersionTv.setText("已安装版本: " + UpdateManager.getInstalledPiWebVersion(this));
         }
         if (settingsAppVersionTv != null) {
-            settingsAppVersionTv.setText("当前客户端版本: v" + BuildConfig.VERSION_NAME);
+            settingsAppVersionTv.setText("当前客户端版本: v" + PiMetConfig.getAppVersion(this));
         }
 
         if (btnCheckPiWebUpdate != null) {

@@ -19,6 +19,15 @@ public final class PiMetConfig {
 
     private static final String PREF_NAME = "pimet_settings";
 
+    public static String getAppVersion(Context context) {
+        if (context != null) {
+            try {
+                return context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+            } catch (Throwable ignored) {}
+        }
+        return "1.3.0";
+    }
+
     public static final String KEY_AUTO_START = "auto_start_web";
     public static final String KEY_WEB_PORT = "web_port";
     public static final int DEFAULT_WEB_PORT = 30141;
