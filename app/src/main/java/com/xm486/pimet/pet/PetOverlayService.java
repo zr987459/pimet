@@ -51,6 +51,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     public static volatile boolean isRunning = false;
     public static boolean isRunning() { return isRunning; }
+    public static final String ACTION_OVERLAY_STATE_CHANGED = "com.xm486.pimet.OVERLAY_STATE_CHANGED";
 
     private static final String TAG = "DevPetM.PetSvc";
     private static final String CHANNEL_ID = "devpetm_overlay";
@@ -153,6 +154,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void onCreate() {
         super.onCreate();
         isRunning = true;
+        try {
+            sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
+        } catch (Throwable ignored) {}
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         createNotificationChannel();
         // Android 14+：startForeground 必须传入与 Manifest 一致的类型，否则崩溃
@@ -1377,6 +1381,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             overlayRoot = null;
         }
         isRunning = false;
+        try {
+            sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
+        } catch (Throwable ignored) {}
         super.onDestroy();
     }
 

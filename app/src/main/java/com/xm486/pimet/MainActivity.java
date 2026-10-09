@@ -4,10 +4,12 @@ import android.Manifest;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -62,6 +64,7 @@ import com.xm486.pimet.proot.ProotSession;
 import com.xm486.pimet.terminal.AnsiParser;
 import com.xm486.pimet.monitor.OperitState;
 import com.xm486.pimet.monitor.PiWebMonitor;
+import com.xm486.pimet.monitor.PortDetector;
 import com.xm486.pimet.pet.BubbleMessage;
 import com.xm486.pimet.pet.ChatConfig;
 import com.xm486.pimet.pet.PetDexShop;
@@ -370,10 +373,31 @@ public class MainActivity extends AppCompatActivity {
     private boolean isPiWebAlive = false;
     private boolean isDeploying = false;
 
+    private final BroadcastReceiver overlayStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            updatePetDisplay(PetRegistry.isPetEnabled(MainActivity.this));
+            if (btnToggleGlobalOverlay != null) {
+                btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
+                        ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
+                        : "🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        try {
+            IntentFilter filter = new IntentFilter(PetOverlayService.ACTION_OVERLAY_STATE_CHANGED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(overlayStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(overlayStateReceiver, filter);
+            }
+        } catch (Throwable ignored) {}
 
         checkStoragePermissions();
         checkBatteryOptimizationPermission();
@@ -666,6 +690,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updatePetDisplay(boolean isPetEnabled) {
+        if (floatingMenuContainer == null) return;
+        // 核心单桌宠互斥机制：系统全局悬浮窗运行时，应用内桌宠与悬浮球彻底隐匿，杜绝同屏双桌宠冲突
+        if (PetOverlayService.isRunning()) {
+            floatingMenuContainer.setVisibility(View.GONE);
+            stopInAppFling();
+            if (floatingPetView != null) {
+                floatingPetView.stopTicker();
+            }
+            if (floatingPetChatCard != null) {
+                floatingPetChatCard.setVisibility(View.GONE);
+            }
+            return;
+        }
+
+        floatingMenuContainer.setVisibility(View.VISIBLE);
         if (floatingPetView == null || floatingBall == null) return;
         boolean shouldShowPet = isPetEnabled || isFullscreen;
         if (shouldShowPet) {
@@ -1004,21 +1043,16 @@ public class MainActivity extends AppCompatActivity {
             divLp1.bottomMargin = dpToPx(6);
             root.addView(div1, divLp1);
 
-            // ---- 监控目标标签行 (Operit / pi-web / ClawBench / RikkaHub) ----
+            // ---- 监控目标标签行 (Operit / pi-web / ClawBench / RikkaHub) 学习自 DevPetM 架构 ----
             LinearLayout targetGrid = new LinearLayout(this);
             targetGrid.setOrientation(LinearLayout.VERTICAL);
 
-            int currentPort = PiMetConfig.getWebPort(this);
-            boolean isRunning = isPiWebAlive;
+            String activeTarget = PetRegistry.getStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
 
             LinearLayout targetRow1 = new LinearLayout(this);
             targetRow1.setOrientation(LinearLayout.HORIZONTAL);
-            TextView chipPiWeb = createHudChip(isRunning ? "● pi-web:" + currentPort : "○ pi-web (未启)", isRunning ? 0x2210B981 : 0x226E7681, isRunning ? 0xFF3FB950 : 0xFF8B949E, v -> {
-                showPetBubble("当前已直连本地 Web 终端与工作台 🚀");
-            });
-            TextView chipOperit = createHudChip("● Operit (伴侣)", 0x223B82F6, 0xFF58A6FF, v -> {
-                showPetBubble("Operit 桌宠运行中，随时互动 ฅ'ω'ฅ");
-            });
+            TextView chipPiWeb = createTargetChipHud("pi-web", PetRegistry.TARGET_PIWEB, activeTarget);
+            TextView chipOperit = createTargetChipHud("Operit", PetRegistry.TARGET_OPERIT, activeTarget);
             targetRow1.addView(chipPiWeb, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             targetRow1.addView(createSpacingView(4));
             targetRow1.addView(chipOperit, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -1027,12 +1061,8 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout targetRow2 = new LinearLayout(this);
             targetRow2.setOrientation(LinearLayout.HORIZONTAL);
             targetRow2.setPadding(0, dpToPx(4), 0, 0);
-            TextView chipClaw = createHudChip("○ ClawBench", 0x118B949E, 0xFF8B949E, v -> {
-                showPetBubble("ClawBench 评测模块待命中 ✨");
-            });
-            TextView chipRikka = createHudChip("○ RikkaHub", 0x118B949E, 0xFF8B949E, v -> {
-                showPetBubble("RikkaHub 分发模块连接正常 📡");
-            });
+            TextView chipClaw = createTargetChipHud("ClawBench", PetRegistry.TARGET_CLAWBENCH, activeTarget);
+            TextView chipRikka = createTargetChipHud("RikkaHub", PetRegistry.TARGET_RIKKA, activeTarget);
             targetRow2.addView(chipClaw, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             targetRow2.addView(createSpacingView(4));
             targetRow2.addView(chipRikka, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -1241,6 +1271,82 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private TextView createTargetChipHud(String displayName, String targetKey, String activeTarget) {
+        boolean isActive = targetKey.equals(activeTarget);
+        TextView chip = new TextView(this);
+        chip.setText("⏳ " + displayName + "...");
+        chip.setTextSize(10.5f);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+        applyHudChipStyle(chip, isActive, false);
+
+        // 毫秒级异步端口探测
+        PortDetector.checkAsync(this, targetKey, status -> mainHandler.post(() -> {
+            String label = (status.alive ? "● " : "○ ") + displayName + (status.alive ? ":" + status.port : " (未启)");
+            chip.setText(label);
+            applyHudChipStyle(chip, targetKey.equals(PetRegistry.getStringPref(MainActivity.this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB)), status.alive);
+        }));
+
+        // 点击切换监控与对话目标
+        chip.setOnClickListener(v -> {
+            PetRegistry.setStringPref(MainActivity.this, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+            try {
+                ChatConfig cfg = ChatConfig.load(MainActivity.this);
+                if (PetRegistry.TARGET_PIWEB.equals(targetKey)) cfg.mode = ChatConfig.MODE_PIWEB;
+                else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) cfg.mode = ChatConfig.MODE_OPERIT;
+                else if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) cfg.mode = ChatConfig.MODE_CLAWBENCH;
+                cfg.save(MainActivity.this);
+            } catch (Throwable ignored) {}
+
+            PortDetector.checkAsync(MainActivity.this, targetKey, status -> mainHandler.post(() -> {
+                if (status.alive) {
+                    showPetBubble("🎯 已切换目标: " + displayName + "\n127.0.0.1:" + status.port + " · 延迟 " + status.latencyMs + "ms");
+                } else {
+                    showPetBubble("🎯 已切换目标: " + displayName + "\n⚠️ 端口 " + status.port + " 未响应或服务未启动");
+                }
+            }));
+            if (petHudDialog != null) petHudDialog.dismiss();
+        });
+
+        // 长按直达控制台/Web界面
+        chip.setOnLongClickListener(v -> {
+            if (petHudDialog != null) petHudDialog.dismiss();
+            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                switchTab(1);
+            } else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) {
+                openBrowserUrl("http://127.0.0.1:" + PetRegistry.getOperitPort(MainActivity.this));
+            } else if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) {
+                openBrowserUrl("http://127.0.0.1:" + PetRegistry.getClawbenchPort(MainActivity.this));
+            } else if (PetRegistry.TARGET_RIKKA.equals(targetKey)) {
+                openBrowserUrl("http://127.0.0.1:" + PetRegistry.getIntPref(MainActivity.this, PetRegistry.KEY_RK_PORT, 8095));
+            }
+            return true;
+        });
+
+        return chip;
+    }
+
+    private void applyHudChipStyle(TextView chip, boolean isActive, boolean isAlive) {
+        int bg = isActive ? (isAlive ? 0x3310B981 : 0x333B82F6) : 0x1A21262D;
+        int textClr = isActive ? (isAlive ? 0xFF3FB950 : 0xFF58A6FF) : (isAlive ? 0xFFC9D1D9 : 0xFF8B949E);
+        chip.setTextColor(textClr);
+
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(bg);
+        d.setCornerRadius(dpToPx(6));
+        d.setStroke(dpToPx(1), isActive ? (isAlive ? 0x883FB950 : 0x8858A6FF) : 0x22FFFFFF);
+        chip.setBackground(d);
+    }
+
+    private void openBrowserUrl(String url) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            startActivity(intent);
+        } catch (Throwable t) {
+            Toast.makeText(this, "未能调起浏览器: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private TextView createHudChip(String text, int bgColor, int textColor, View.OnClickListener clk) {
         TextView tv = new TextView(this);
         tv.setText(text);
@@ -1435,7 +1541,19 @@ public class MainActivity extends AppCompatActivity {
             if (btnToggleGlobalOverlay != null) {
                 btnToggleGlobalOverlay.setText("🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
             }
+            mainHandler.postDelayed(() -> updatePetDisplay(PetRegistry.isPetEnabled(this)), 250);
         } else {
+            // 启动系统全局桌宠前，立即隐匿应用内桌宠，消除双宠并存冲突
+            if (floatingMenuContainer != null) {
+                floatingMenuContainer.setVisibility(View.GONE);
+            }
+            stopInAppFling();
+            if (floatingPetView != null) {
+                floatingPetView.stopTicker();
+            }
+            if (floatingPetChatCard != null) {
+                floatingPetChatCard.setVisibility(View.GONE);
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(svc);
             } else {
@@ -1453,40 +1571,166 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendPetChatMessage(String question) {
+        if (TextUtils.isEmpty(question)) return;
+        String q = question.trim();
+
         if (floatingPetView != null) {
             floatingPetView.playOneShot("waving");
         }
+
+        // 1. #test 端口连通性全面诊断
+        if (q.startsWith("#test")) {
+            showPetBubble("正在探测当前服务连通性与端口状态...");
+            new Thread(() -> {
+                String target = PetRegistry.getStringPref(MainActivity.this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+                PortDetector.TargetStatus status = PortDetector.check(MainActivity.this, target);
+                mainHandler.post(() -> {
+                    if (status.alive) {
+                        showPetBubble("✅ [" + status.displayName + " 连通正常]\n127.0.0.1:" + status.port + " · " + status.message);
+                    } else {
+                        showPetBubble("⚠️ [" + status.displayName + " 端口无响应]\n127.0.0.1:" + status.port + " 未启动或被占用，请检查服务！");
+                    }
+                });
+            }).start();
+            return;
+        }
+
+        // 2. 快捷指令切换目标与模式
+        if (q.equalsIgnoreCase("#piweb")) {
+            PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+            try {
+                ChatConfig cfg = ChatConfig.load(this);
+                cfg.mode = ChatConfig.MODE_PIWEB;
+                cfg.save(this);
+            } catch (Throwable ignored) {}
+            showPetBubble("已切换至 pi-web 工作台对话模式 🚀");
+            return;
+        }
+        if (q.equalsIgnoreCase("#operit")) {
+            PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_OPERIT);
+            try {
+                ChatConfig cfg = ChatConfig.load(this);
+                cfg.mode = ChatConfig.MODE_OPERIT;
+                cfg.save(this);
+            } catch (Throwable ignored) {}
+            showPetBubble("已切换至 Operit 伴侣对话模式 ฅ'ω'ฅ");
+            return;
+        }
+        if (q.equalsIgnoreCase("#clawbench")) {
+            PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CLAWBENCH);
+            try {
+                ChatConfig cfg = ChatConfig.load(this);
+                cfg.mode = ChatConfig.MODE_CLAWBENCH;
+                cfg.save(this);
+            } catch (Throwable ignored) {}
+            showPetBubble("已切换至 ClawBench 评测对话模式 ✨");
+            return;
+        }
+        if (q.equalsIgnoreCase("#api")) {
+            PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CUSTOM_API);
+            try {
+                ChatConfig cfg = ChatConfig.load(this);
+                cfg.mode = ChatConfig.MODE_CUSTOM_API;
+                cfg.save(this);
+            } catch (Throwable ignored) {}
+            showPetBubble("已切换至 自定义大模型 API 模式 🤖");
+            return;
+        }
+        if (q.startsWith("#model")) {
+            String m = q.length() > 6 ? q.substring(6).trim() : "";
+            if (!m.isEmpty()) {
+                PiMetConfig.setAiModel(this, m);
+                PiMetConfig.syncToContainer(this);
+                showPetBubble("模型已更新为: " + m);
+            } else {
+                showPetBubble("当前挂载模型: " + PiMetConfig.getAiModel(this) + " (" + PiMetConfig.getAiProvider(this) + ")");
+            }
+            return;
+        }
+        if (q.startsWith("#url")) {
+            String u = q.length() > 4 ? q.substring(4).trim() : "";
+            if (!u.isEmpty()) {
+                PiMetConfig.setAiBaseUrl(this, u);
+                PiMetConfig.syncToContainer(this);
+                showPetBubble("API 地址已更新: " + u);
+            }
+            return;
+        }
+        if (q.startsWith("#key")) {
+            String k = q.length() > 4 ? q.substring(4).trim() : "";
+            if (!k.isEmpty()) {
+                PiMetConfig.setAiApiKey(this, k);
+                PiMetConfig.syncToContainer(this);
+                showPetBubble("API Key 已安全保存并同步至容器！");
+            }
+            return;
+        }
+
         showPetBubble("收到啦！正在思考回答中...");
 
-        if (question.startsWith("#test")) {
-            int port = PiMetConfig.getWebPort(this);
-            boolean ok = ProotManager.isPiWebHttpReady(port);
-            showPetBubble(ok ? "连通性正常！Pi-Web 在端口 " + port + " 愉快运行中~" : "端口 " + port + " 似乎还没响应，主人请检查服务哦！");
-            return;
-        } else if (question.startsWith("#model")) {
-            showPetBubble("当前挂载模型: " + PiMetConfig.getAiModel(this) + " (" + PiMetConfig.getAiProvider(this) + ")");
-            return;
-        }
-
-        String apiKey = PiMetConfig.getAiApiKey(this);
-        if (TextUtils.isEmpty(apiKey)) {
-            showPetBubble("主人还没配置 AI Key 哦~ 可以去设置面板填入！");
-            return;
-        }
-
-        String baseUrl = PiMetConfig.getAiBaseUrl(this);
-        String model = PiMetConfig.getAiModel(this);
+        String activeTarget = PetRegistry.getStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
 
         new Thread(() -> {
             try {
+                if (PetRegistry.TARGET_OPERIT.equals(activeTarget)) {
+                    int operitPort = PetRegistry.getOperitPort(MainActivity.this);
+                    java.net.URL url = new java.net.URL("http://127.0.0.1:" + operitPort + "/api/external-chat");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(20000);
+                    conn.setDoOutput(true);
+
+                    JSONObject body = new JSONObject();
+                    body.put("message", q);
+                    body.put("token", PetRegistry.getStringPref(MainActivity.this, ChatConfig.KEY_OPERIT_TOKEN, "465ea3984db74e0790e8df63c6e85643"));
+
+                    try (java.io.OutputStream os = conn.getOutputStream()) {
+                        os.write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                    int code = conn.getResponseCode();
+                    if (code == 200) {
+                        try (java.io.InputStream is = conn.getInputStream();
+                             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
+                            byte[] buf = new byte[2048];
+                            int n;
+                            while ((n = is.read(buf)) != -1) bos.write(buf, 0, n);
+                            String res = bos.toString("UTF-8");
+                            JSONObject obj = new JSONObject(res);
+                            String reply = obj.optString("reply", obj.optString("text", ""));
+                            if (TextUtils.isEmpty(reply)) reply = res;
+                            final String finalReply = reply;
+                            mainHandler.post(() -> {
+                                if (floatingPetView != null) floatingPetView.playOneShot("jumping");
+                                showPetBubble(finalReply);
+                            });
+                        }
+                    } else {
+                        mainHandler.post(() -> showPetBubble("Operit 未响应 (HTTP " + code + ")，请检查服务是否开启"));
+                    }
+                    return;
+                }
+
+                String apiKey = PiMetConfig.getAiApiKey(MainActivity.this);
+                String baseUrl = PiMetConfig.getAiBaseUrl(MainActivity.this);
+                String model = PiMetConfig.getAiModel(MainActivity.this);
+
+                if (TextUtils.isEmpty(apiKey) && !baseUrl.contains("127.0.0.1")) {
+                    mainHandler.post(() -> showPetBubble("主人还没配置 AI Key 哦~ 可以去设置面板填入！"));
+                    return;
+                }
+
                 String urlStr = baseUrl.endsWith("/") ? baseUrl + "chat/completions" : baseUrl + "/chat/completions";
                 java.net.URL url = new java.net.URL(urlStr);
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                if (!TextUtils.isEmpty(apiKey)) {
+                    conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                }
                 conn.setConnectTimeout(8000);
-                conn.setReadTimeout(15000);
+                conn.setReadTimeout(20000);
                 conn.setDoOutput(true);
 
                 JSONObject body = new JSONObject();
@@ -1500,7 +1744,7 @@ public class MainActivity extends AppCompatActivity {
 
                 JSONObject userMsg = new JSONObject();
                 userMsg.put("role", "user");
-                userMsg.put("content", question);
+                userMsg.put("content", q);
                 messages.put(userMsg);
 
                 body.put("messages", messages);
@@ -1529,7 +1773,7 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
                 } else {
-                    mainHandler.post(() -> showPetBubble("唔……网络请求遇到点问题: HTTP " + respCode));
+                    mainHandler.post(() -> showPetBubble("唔……请求返回了: HTTP " + respCode));
                 }
             } catch (Throwable t) {
                 mainHandler.post(() -> showPetBubble("思考出错了: " + t.getMessage()));
@@ -3987,6 +4231,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        try {
+            unregisterReceiver(overlayStateReceiver);
+        } catch (Throwable ignored) {}
         stopInAppFling();
         if (inAppVelocityTracker != null) {
             try { inAppVelocityTracker.recycle(); } catch (Throwable ignored) {}
