@@ -523,8 +523,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
      */
     public void layoutChatBubble() {
         if (bubbleView == null || petView == null || statusCard == null) return;
-        int wSpec = View.MeasureSpec.makeMeasureSpec(dp(220), View.MeasureSpec.AT_MOST);
-        int hSpec = View.MeasureSpec.makeMeasureSpec(dp(80), View.MeasureSpec.AT_MOST);
+        int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
+        int wSpec = View.MeasureSpec.makeMeasureSpec(dp(bw), View.MeasureSpec.AT_MOST);
+        int hSpec = View.MeasureSpec.makeMeasureSpec(dp(160), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
         int shift = bubbleH + dp(6);
@@ -555,7 +556,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         if (!b.isShown()) {
             b.setMaxLines(5);
             b.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            b.setMaxWidth(dp(210));
+            int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
+            b.setMaxWidth(dp(bw));
             cancelBubbleHide();
             b.animate().cancel(); // 取消上次隐藏动画，防止其 endAction 把新气泡设回 GONE
             b.setAlpha(1f);

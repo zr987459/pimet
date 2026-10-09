@@ -11,6 +11,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import com.xm486.pimet.MainActivity;
 
@@ -210,6 +211,32 @@ public class PetMenu {
             bindLp.topMargin = service.dp(3);
             root.addView(bindPetBtn, bindLp);
 
+            // ---- 宠物大小滑块调节 (32~120dp) ----
+            int curPetSize = PetRegistry.getIntPref(service, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
+            TextView sizeLabel = new TextView(service);
+            sizeLabel.setText("📏 宠物大小: " + curPetSize + " dp");
+            sizeLabel.setTextColor(0xFF94A3B8);
+            sizeLabel.setTextSize(9.5f);
+            LinearLayout.LayoutParams sizeLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            sizeLp.topMargin = service.dp(4);
+            root.addView(sizeLabel, sizeLp);
+
+            SeekBar sizeBar = new SeekBar(service);
+            sizeBar.setMax(120 - 32);
+            sizeBar.setProgress(curPetSize - 32);
+            sizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    int val = 32 + progress;
+                    sizeLabel.setText("📏 宠物大小: " + val + " dp");
+                    PetRegistry.setIntPref(service, PetRegistry.KEY_PET_SIZE, val);
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+            root.addView(sizeBar);
+
             // 分割线
             View divider3 = new View(service);
             divider3.setBackgroundColor(0x33475569);
@@ -236,19 +263,16 @@ public class PetMenu {
             actionRow.addView(paramsBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actionRow.addView(createSpacing(3));
 
-            // 2. 终端与部署直达
-            Button termBtn = buildMiniBtn("💻 终端", 0x2210B981, 0x4410B981, 0xFFA7F3D0, v -> {
+            // 2. 聊天卡片开关（打开/收起底部聊天框）
+            Button chatBtn = buildMiniBtn("💬 聊天", 0x2210B981, 0x4410B981, 0xFFA7F3D0, v -> {
                 dismiss();
-                Intent intent = new Intent(service, MainActivity.class);
-                intent.putExtra("action", "open_terminal");
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                service.startActivity(intent);
+                service.toggleCard();
             });
-            actionRow.addView(termBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            actionRow.addView(chatBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actionRow.addView(createSpacing(3));
 
-            // 3. 主页
-            Button homeBtn = buildMiniBtn("⚙️ 主页", 0x22FFFFFF, 0x44FFFFFF, 0xFFE2E8F0, v -> {
+            // 3. 主页设置
+            Button homeBtn = buildMiniBtn("⚙️ 设置", 0x22FFFFFF, 0x44FFFFFF, 0xFFE2E8F0, v -> {
                 dismiss();
                 Intent intent = new Intent(service, MainActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
