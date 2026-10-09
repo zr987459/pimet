@@ -423,11 +423,11 @@ public class MainActivity extends AppCompatActivity {
         floatingMenuContainer = findViewById(R.id.floatingMenuContainer);
         floatingMenuVertical = findViewById(R.id.floatingMenuVertical);
         floatingBall = findViewById(R.id.floatingBall);
-        floatingPetView = findViewById(R.id.floatingPetView);
-        petBubbleLayout = findViewById(R.id.petBubbleLayout);
-        petBubbleTv = findViewById(R.id.petBubbleTv);
-        btnFloatPetChat = findViewById(R.id.btnFloatPetChat);
-        btnFloatPetSwitch = findViewById(R.id.btnFloatPetSwitch);
+        floatingPetView = null;
+        petBubbleLayout = null;
+        petBubbleTv = null;
+        btnFloatPetChat = null;
+        btnFloatPetSwitch = null;
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
         btnFloatReload = findViewById(R.id.btnFloatReload);
         btnFloatZoom = findViewById(R.id.btnFloatZoom);
@@ -2683,6 +2683,10 @@ public class MainActivity extends AppCompatActivity {
             decorView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
             Toast.makeText(this, "已退出全屏", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private int dpToPx(int dp) {
+        return (int) (dp * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void updatePiWebDisplay() {

@@ -592,6 +592,18 @@ public final class ProotManager {
     }
 
     /**
+     * 在 PRoot 容器内同步执行命令
+     */
+    public static void executeCommandSync(Context context, String cmd) {
+        try {
+            List<String> command = Arrays.asList("/bin/bash", "-c", cmd);
+            ProcessBuilder pb = buildProotProcess(context, "/root", command);
+            Process p = pb.start();
+            p.waitFor();
+        } catch (Throwable ignored) {}
+    }
+
+    /**
      * 组装进入 PRoot 容器的标准执行进程 ProcessBuilder
      */
     public static ProcessBuilder buildProotProcess(Context context, String workDir, List<String> guestCmd) {
