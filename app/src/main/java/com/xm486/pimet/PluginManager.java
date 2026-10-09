@@ -664,6 +664,118 @@ public final class PluginManager {
         return false;
     }
 
+    /**
+     * 自动注入宿主 Android 界面与桌宠控制插件到 PRoot 容器环境
+     * 赋予 AI Agent 原生修改 Android 外部桌宠、界面、参数与端口的能力
+     */
+    public static void ensureAndroidBridgeExtension(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            if (!rootfs.exists()) return;
+
+            File extDir = new File(rootfs, "root/.pi/agent/extensions");
+            if (!extDir.exists()) {
+                extDir.mkdirs();
+            }
+
+            File bridgeFile = new File(extDir, "pimet-android-bridge.ts");
+            String code = "/**\n" +
+                    " * PiMet Host Android & Desktop Pet Bridge Extension\n" +
+                    " * 允许 AI 动态控制和修改 Android 宿主界面的桌宠形象、尺寸、动作、气泡、物理参数与标签页\n" +
+                    " */\n" +
+                    "import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\n" +
+                    "import { Type } from \"typebox\";\n" +
+                    "import * as http from \"http\";\n" +
+                    "import * as fs from \"fs\";\n" +
+                    "import * as path from \"path\";\n" +
+                    "import * as os from \"os\";\n\n" +
+                    "function sendBridgeAction(actionData: Record<string, any>): Promise<string> {\n" +
+                    "  return new Promise((resolve) => {\n" +
+                    "    try {\n" +
+                    "      const bridgeDir = path.join(os.homedir(), \".pi\", \"agent\");\n" +
+                    "      if (!fs.existsSync(bridgeDir)) fs.mkdirSync(bridgeDir, { recursive: true });\n" +
+                    "      fs.writeFileSync(path.join(bridgeDir, \"app_control.json\"), JSON.stringify(actionData), \"utf-8\");\n" +
+                    "    } catch (e) {}\n\n" +
+                    "    const postData = JSON.stringify(actionData);\n" +
+                    "    const req = http.request(\n" +
+                    "      {\n" +
+                    "        hostname: \"127.0.0.1\",\n" +
+                    "        port: 30143,\n" +
+                    "        path: \"/api/app-control\",\n" +
+                    "        method: \"POST\",\n" +
+                    "        headers: {\n" +
+                    "          \"Content-Type\": \"application/json\",\n" +
+                    "          \"Content-Length\": Buffer.byteLength(postData),\n" +
+                    "        },\n" +
+                    "        timeout: 1500,\n" +
+                    "      },\n" +
+                    "      (res) => {\n" +
+                    "        let data = \"\";\n" +
+                    "        res.on(\"data\", (chunk) => (data += chunk));\n" +
+                    "        res.on(\"end\", () => resolve(`Android 宿主执行成功: ${data}`));\n" +
+                    "      }\n" +
+                    "    );\n" +
+                    "    req.on(\"error\", (err) => {\n" +
+                    "      resolve(`指令已写入 IPC 文件缓存 (HTTP: ${err.message})`);\n" +
+                    "    });\n" +
+                    "    req.write(postData);\n" +
+                    "    req.end();\n" +
+                    "  });\n" +
+                    "}\n\n" +
+                    "export default function (pi: ExtensionAPI) {\n" +
+                    "  pi.registerTool({\n" +
+                    "    name: \"control_desktop_pet\",\n" +
+                    "    label: \"Control Desktop Pet\",\n" +
+                    "    description: \"控制 Android 宿主界面的动态桌宠：修改角色/皮肤、尺寸大小(dp)、动作(跳跃/跳舞/挥手)、对话气泡、反弹摩擦力或开关全局桌宠\",\n" +
+                    "    parameters: Type.Object({\n" +
+                    "      character: Type.Optional(Type.String({ description: \"角色目录名，如 cat_maid(猫娘), eva(小初), gup(少女), paimon(派蒙), custom\" })),\n" +
+                    "      size: Type.Optional(Type.Number({ description: \"桌宠大小 (dp，范围 32~160)\" })),\n" +
+                    "      bubble_text: Type.Optional(Type.String({ description: \"让桌宠说出的气泡文字\" })),\n" +
+                    "      action: Type.Optional(Type.String({ description: \"桌宠动作: jumping (跳跃/跟斗), dancing (跳舞), waving (招手), idle (静止)\" })),\n" +
+                    "      bounce: Type.Optional(Type.Number({ description: \"物理反弹系数 0~100\" })),\n" +
+                    "      friction: Type.Optional(Type.Number({ description: \"空气摩擦力 0~100\" })),\n" +
+                    "      global_pet_enabled: Type.Optional(Type.Boolean({ description: \"是否开启全局系统悬浮桌宠\" })),\n" +
+                    "    }),\n" +
+                    "    async execute(_toolCallId, params) {\n" +
+                    "      const result = await sendBridgeAction({ action: \"control_desktop_pet\", ...params });\n" +
+                    "      return {\n" +
+                    "        content: [{ type: \"text\", text: `🐾 桌宠控制指令已下发！${result}` }],\n" +
+                    "        details: params,\n" +
+                    "      };\n" +
+                    "    },\n" +
+                    "  });\n\n" +
+                    "  pi.registerTool({\n" +
+                    "    name: \"control_app_ui\",\n" +
+                    "    label: \"Control App UI\",\n" +
+                    "    description: \"控制 Android 宿主应用的界面与端口：切换选项卡(工作台/终端/设置/操控台)、配置各服务端口\",\n" +
+                    "    parameters: Type.Object({\n" +
+                    "      switch_tab: Type.Optional(Type.String({ description: \"切换界面: launch(主页), web(Pi-Web工作台), terminal(终端), settings(设置)\" })),\n" +
+                    "      ports: Type.Optional(\n" +
+                    "        Type.Object({\n" +
+                    "          piweb: Type.Optional(Type.Number()),\n" +
+                    "          operit: Type.Optional(Type.Number()),\n" +
+                    "          clawbench: Type.Optional(Type.Number()),\n" +
+                    "          rikka: Type.Optional(Type.Number()),\n" +
+                    "        })\n" +
+                    "      ),\n" +
+                    "    }),\n" +
+                    "    async execute(_toolCallId, params) {\n" +
+                    "      const result = await sendBridgeAction({ action: \"control_app_ui\", ...params });\n" +
+                    "      return {\n" +
+                    "        content: [{ type: \"text\", text: `📱 Android 宿主界面指令已下发！${result}` }],\n" +
+                    "        details: params,\n" +
+                    "      };\n" +
+                    "    },\n" +
+                    "  });\n" +
+                    "}\n";
+
+            writeFile(bridgeFile, code);
+            Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts ensured in container");
+        } catch (Throwable t) {
+            Log.w("PiMet.PluginMgr", "Failed to ensure Android bridge extension", t);
+        }
+    }
+
     private static String readFile(File file) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
