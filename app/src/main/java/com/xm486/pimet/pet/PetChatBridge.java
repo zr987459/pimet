@@ -238,7 +238,7 @@ public class PetChatBridge {
 
         @Override
         public void run() {
-            List<String> segments;
+            List<String> segments = null;
             chatting = true;
             boolean needPhase = false;
             String cleanInput = input;
