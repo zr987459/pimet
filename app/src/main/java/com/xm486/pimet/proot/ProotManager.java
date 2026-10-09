@@ -594,13 +594,15 @@ public final class ProotManager {
     /**
      * 在 PRoot 容器内同步执行命令
      */
-    public static void executeCommandSync(Context context, String cmd) {
+    public static int executeCommandSync(Context context, String cmd) {
         try {
             List<String> command = Arrays.asList("/bin/bash", "-c", cmd);
             ProcessBuilder pb = buildProotProcess(context, "/root", command);
             Process p = pb.start();
-            p.waitFor();
-        } catch (Throwable ignored) {}
+            return p.waitFor();
+        } catch (Throwable ignored) {
+            return -1;
+        }
     }
 
     /**

@@ -100,7 +100,7 @@ public class PetMenu {
             root.addView(div1, divLp1);
 
             // ---- 角色切换 ----
-            allPets = PetRegistry.getAllPets(context);
+            allPets = PetRegistry.loadPets(context);
             String curPetDir = PetRegistry.getPetDir(context);
             for (int i = 0; i < allPets.size(); i++) {
                 if (allPets.get(i).dir.equals(curPetDir)) {
@@ -156,7 +156,7 @@ public class PetMenu {
                         sizeLabel.setText("📏 尺寸: " + size + " dp");
                         PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, size);
                         if (service != null) {
-                            service.updatePetSize(size);
+                            service.applyPetSize(size);
                         }
                     }
                 }
