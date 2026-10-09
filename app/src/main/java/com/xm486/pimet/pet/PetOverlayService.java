@@ -282,7 +282,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             toggleCard();
         }
         if (chatBridge != null && prompt != null && !prompt.trim().isEmpty()) {
-            chatBridge.send(prompt);
+            chatBridge.sendQuickMessage(prompt);
         }
     }
 

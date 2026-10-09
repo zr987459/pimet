@@ -197,7 +197,7 @@ public class SubAgentDialog {
         tvScope.setBackground(scopeBg);
         LinearLayout.LayoutParams scopeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        scopeLp.marginStart = dp(8);
+        scopeLp.leftMargin = dp(8);
         row1.addView(tvScope, scopeLp);
 
         View spacer = new View(context);
@@ -212,7 +212,7 @@ public class SubAgentDialog {
         btnCopy.setOnClickListener(v -> showEditDialog(agent.copy()));
         LinearLayout.LayoutParams copyLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(26));
-        copyLp.marginStart = dp(6);
+        copyLp.leftMargin = dp(6);
         row1.addView(btnCopy, copyLp);
 
         Button btnDel = createSmallBtn("🗑️ 删除", 0x33DA3633, 0xFFF85149);
@@ -230,7 +230,7 @@ public class SubAgentDialog {
         });
         LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(26));
-        delLp.marginStart = dp(6);
+        delLp.leftMargin = dp(6);
         row1.addView(btnDel, delLp);
 
         card.addView(row1);
@@ -300,7 +300,7 @@ public class SubAgentDialog {
 
                 LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                chipLp.marginEnd = dp(4);
+                chipLp.rightMargin = dp(4);
                 chipRow.addView(chip, chipLp);
             }
 
