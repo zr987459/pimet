@@ -21,6 +21,7 @@ public final class PiMetConfig {
 
     public static final String KEY_AUTO_START = "auto_start_web";
     public static final String KEY_WEB_PORT = "web_port";
+    public static final int DEFAULT_WEB_PORT = 30141;
     public static final String KEY_NPM_REGISTRY = "npm_registry";
     public static final String KEY_ROOTFS_MIRROR = "rootfs_mirror";
     public static final String KEY_KEEP_ALIVE = "keep_alive";
@@ -102,7 +103,7 @@ public final class PiMetConfig {
     }
 
     public static int getWebPort(Context context) {
-        return getPrefs(context).getInt(KEY_WEB_PORT, 30141);
+        return getPrefs(context).getInt(KEY_WEB_PORT, DEFAULT_WEB_PORT);
     }
 
     public static void setWebPort(Context context, int port) {
