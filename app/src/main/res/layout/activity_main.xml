@@ -657,25 +657,11 @@
                         android:paddingStart="8dp"
                         android:paddingEnd="8dp">
 
-                        <!-- 🤖 AI 对话快捷启动入口 -->
-                        <TextView
-                            android:id="@+id/btnTermAiChat"
-                            android:layout_width="wrap_content"
-                            android:layout_height="26dp"
-                            android:background="@drawable/bg_btn_primary"
-                            android:gravity="center"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp"
-                            android:text="🤖 AI 对话"
-                            android:textColor="#FFFFFF"
-                            android:textSize="11sp" />
-
                         <!-- ⚙️ 快捷键自定义与注释管理 -->
                         <TextView
                             android:id="@+id/btnTermCustomKey"
                             android:layout_width="wrap_content"
                             android:layout_height="26dp"
-                            android:layout_marginStart="6dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
                             android:paddingStart="8dp"
@@ -926,7 +912,7 @@
                         android:layout_weight="1"
                         android:background="#0D1117"
                         android:fontFamily="monospace"
-                        android:hint="输入指令或与 AI 对话 (输入 / 唤出指令)..."
+                        android:hint="输入 Linux 指令 (输入 / 唤出快捷指令)..."
                         android:imeOptions="actionSend"
                         android:inputType="text"
                         android:paddingStart="10dp"
@@ -1193,6 +1179,16 @@
                             android:layout_height="36dp"
                             android:gravity="center"
                             android:text="💬"
+                            android:textColor="#58A6FF"
+                            android:textSize="15sp" />
+
+                        <!-- 💻 Linux 终端抽屉唤出 -->
+                        <TextView
+                            android:id="@+id/btnFloatTerminal"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="💻"
                             android:textColor="#58A6FF"
                             android:textSize="15sp" />
 

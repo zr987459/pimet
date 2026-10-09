@@ -216,7 +216,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnTermFontInc;
     private View btnTermQuickWeb;
     private View btnTermReconnect;
-    private View btnTermAiChat;
     private View btnTermCustomKey;
     private View btnTermImportFile;
     private LinearLayout termToolbarContainer;
@@ -305,6 +304,7 @@ public class MainActivity extends AppCompatActivity {
     private View floatingMenuVertical;
     private TextView floatingBall;
     private TextView btnFloatFullscreen;
+    private View btnFloatTerminal;
     private View btnFloatReload;
     private TextView btnFloatZoom;
     private View btnFloatImport;
@@ -393,6 +393,10 @@ public class MainActivity extends AppCompatActivity {
 
         // 首次状态自检
         checkServiceStatus();
+
+        if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_terminal", false)) {
+            mainHandler.postDelayed(this::openTerminalInWorkbench, 300);
+        }
     }
 
     private String getPiWebUrl() {
@@ -460,6 +464,7 @@ public class MainActivity extends AppCompatActivity {
         btnFloatPetChat = findViewById(R.id.btnFloatPetChat);
         btnFloatPetSwitch = findViewById(R.id.btnFloatPetSwitch);
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
+        btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
         btnFloatReload = findViewById(R.id.btnFloatReload);
         btnFloatZoom = findViewById(R.id.btnFloatZoom);
         btnFloatImport = findViewById(R.id.btnFloatImport);
@@ -473,7 +478,6 @@ public class MainActivity extends AppCompatActivity {
         btnTermFontDec = findViewById(R.id.btnTermFontDec);
         btnTermFontInc = findViewById(R.id.btnTermFontInc);
         btnTermReconnect = findViewById(R.id.btnTermReconnect);
-        btnTermAiChat = findViewById(R.id.btnTermAiChat);
         btnTermCustomKey = findViewById(R.id.btnTermCustomKey);
         btnTermImportFile = findViewById(R.id.btnTermImportFile);
         btnClear = findViewById(R.id.btnClear);
@@ -974,6 +978,7 @@ public class MainActivity extends AppCompatActivity {
         String[] menuItems = new String[]{
                 "🔄 切换角色形象 (当前: " + curPet + ")",
                 "💬 打开桌宠对话卡片",
+                "💻 打开 PRoot Linux 终端抽屉",
                 "💃 来段才艺互动 (跳舞/挥手/翻跟斗)",
                 "🎛️ 更多物理参数调节",
                 "🏪 宠物社区商店与素材",
@@ -992,6 +997,9 @@ public class MainActivity extends AppCompatActivity {
                             togglePetChatCard(true);
                             break;
                         case 2:
+                            openTerminalInWorkbench();
+                            break;
+                        case 3:
                             if (floatingPetView != null) {
                                 String[] acts = {"dancing", "waving", "jumping"};
                                 String act = acts[new java.util.Random().nextInt(acts.length)];
@@ -999,13 +1007,13 @@ public class MainActivity extends AppCompatActivity {
                                 showPetBubble("主人的专属互动动作搞定啦！✨");
                             }
                             break;
-                        case 3:
+                        case 4:
                             showPetParamsDialog();
                             break;
-                        case 4:
+                        case 5:
                             startActivity(new Intent(this, PetShopActivity.class));
                             break;
-                        case 5:
+                        case 6:
                             toggleGlobalOverlay();
                             break;
                     }
@@ -1721,6 +1729,12 @@ public class MainActivity extends AppCompatActivity {
             toggleFullscreen(!isFullscreen);
             floatingMenuVertical.setVisibility(View.GONE);
         });
+        if (btnFloatTerminal != null) {
+            btnFloatTerminal.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                toggleTerminalInWorkbench();
+            });
+        }
         if (btnFloatPetSwitch != null) {
             btnFloatPetSwitch.setOnClickListener(v -> {
                 floatingMenuVertical.setVisibility(View.GONE);
@@ -1882,9 +1896,6 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "正在重新连接当前窗口...", Toast.LENGTH_SHORT).show();
         });
         btnTermQuickWeb.setOnClickListener(v -> closeTerminalInWorkbench());
-
-        // 🤖 AI 终端快捷对话: 连续交互终端、快捷单次提问与工作台直达
-        btnTermAiChat.setOnClickListener(v -> handleAiChatClick());
 
         // ⚙️ 快捷键自定义与注释管理
         btnTermCustomKey.setOnClickListener(v -> showCustomShortcutsManagerDialog());
@@ -2980,99 +2991,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void handleAiChatClick() {
-        PiMetConfig.syncToContainer(this);
-
-        String apiKey = PiMetConfig.getAiApiKey(this);
-        if (TextUtils.isEmpty(apiKey)) {
-            new AlertDialog.Builder(this)
-                    .setTitle("⚠️ 请先配置 AI 密钥")
-                    .setMessage("尚未检测到 AI 密钥 (如 DeepSeek、OpenAI、Claude 等)。\n\n请前往【设置】面板配置 API Key，保存后即可在终端与 AI 连续对话！")
-                    .setPositiveButton("前往配置", (dialog, which) -> switchTab(3))
-                    .setNegativeButton("稍后再说", null)
-                    .show();
-            return;
-        }
-
-        if (!ProotManager.isPiInstalled(this)) {
-            Toast.makeText(this, "正在自动安装 Pi 命令行核心...", Toast.LENGTH_LONG).show();
-            String installCmd = "echo -e \"\\033[1;36m====================================================\\033[0m\" && " +
-                    "echo -e \"\\033[1;33m• 正在从高速镜像源安装 Pi 官方命令行核心 (@earendil-works/pi-coding-agent)...\\033[0m\" && " +
-                    "echo -e \"\\033[90m• 提示: 正在拉取依赖与可执行软链，完成后将自动拉起交互会话...\\033[0m\" && " +
-                    "npm install -g @earendil-works/pi-coding-agent --registry=https://registry.npmmirror.com && " +
-                    "ln -sf $(which pi 2>/dev/null || find /usr -name pi -type f 2>/dev/null | head -n 1) /usr/local/bin/pi 2>/dev/null || true; " +
-                    "echo -e \"\\033[1;32m✔ Pi 命令行核心安装成功！正在启动交互会话...\\033[0m\" && " +
-                    "/usr/local/bin/pi-chat\n";
-            executeCommand(installCmd);
-            return;
-        }
-
-        new AlertDialog.Builder(this)
-                .setTitle("🤖 Pi AI 交互对话")
-                .setItems(new String[]{
-                        "💬 进入连续交互对话 (终端交互模式)",
-                        "⚡ 快速单次提问 (弹出输入框)",
-                        "🌐 打开 Pi-Web 网页工作台",
-                        "⚙️ 查看 / 更换 AI 模型与配置"
-                }, (dialog, which) -> {
-                    switch (which) {
-                        case 0:
-                            executeCommand("if [ -f /usr/local/bin/pi-chat ]; then /usr/local/bin/pi-chat; else pi-chat; fi\n");
-                            break;
-                        case 1:
-                            showAiQuickPromptDialog();
-                            break;
-                        case 2:
-                            switchTab(1);
-                            break;
-                        case 3:
-                            switchTab(3);
-                            break;
-                    }
-                })
-                .show();
-    }
-
-    private void showAiQuickPromptDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("⚡ 快速向 Pi 提问");
-
-        final EditText input = new EditText(this);
-        input.setHint("输入你的代码需求或问题...");
-        input.setMinLines(3);
-        input.setMaxLines(8);
-        input.setTextColor(0xFFF0F6FC);
-        input.setHintTextColor(0xFF8B949E);
-        input.setBackgroundColor(0xFF0D1117);
-        input.setPadding(32, 24, 32, 24);
-
-        builder.setView(input);
-        builder.setPositiveButton("发送给 AI", (dialog, which) -> {
-            String text = input.getText().toString().trim();
-            if (!TextUtils.isEmpty(text)) {
-                String escaped = text.replace("'", "'\\''");
-                executeCommand("pi -p --continue '" + escaped + "'\n");
-                Toast.makeText(this, "已发送至终端...", Toast.LENGTH_SHORT).show();
-            }
-        });
-        builder.setNeutralButton("📋 粘贴剪贴板", null);
-        builder.setNegativeButton("取消", null);
-
-        AlertDialog dialog = builder.create();
-        dialog.setOnShowListener(d -> {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
-                String clip = getClipboardText();
-                if (!TextUtils.isEmpty(clip)) {
-                    input.append(clip);
-                    Toast.makeText(this, "已粘贴剪贴板内容", Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, "剪贴板为空", Toast.LENGTH_SHORT).show();
-                }
-            });
-        });
-        dialog.show();
-    }
-
     private void showClipboardActionsDialog() {
         String clip = getClipboardText();
         String preview = TextUtils.isEmpty(clip) ? "（剪贴板为空）" : (clip.length() > 60 ? clip.substring(0, 60) + "..." : clip);
@@ -3659,6 +3577,15 @@ public class MainActivity extends AppCompatActivity {
         if (inputAiModel != null) inputAiModel.setText(PiMetConfig.getAiModel(this));
         updateProviderChips();
         updateLaunchModelDesc();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra("pimet.open_terminal", false)) {
+            openTerminalInWorkbench();
+        }
     }
 
     @Override

@@ -271,7 +271,18 @@ public class PetMenu {
             actionRow.addView(chatBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             actionRow.addView(createSpacing(3));
 
-            // 3. 主页设置
+            // 3. 唤出 PRoot Linux 终端
+            Button termBtn = buildMiniBtn("💻 终端", 0x223B82F6, 0x443B82F6, 0xFF93C5FD, v -> {
+                dismiss();
+                Intent intent = new Intent(service, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                intent.putExtra("pimet.open_terminal", true);
+                service.startActivity(intent);
+            });
+            actionRow.addView(termBtn, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            actionRow.addView(createSpacing(3));
+
+            // 4. 主页设置
             Button homeBtn = buildMiniBtn("⚙️ 设置", 0x22FFFFFF, 0x44FFFFFF, 0xFFE2E8F0, v -> {
                 dismiss();
                 Intent intent = new Intent(service, MainActivity.class);
