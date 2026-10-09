@@ -1009,7 +1009,7 @@ public class MainActivity extends AppCompatActivity {
             targetGrid.setOrientation(LinearLayout.VERTICAL);
 
             int currentPort = PiMetConfig.getWebPort(this);
-            boolean isRunning = PiMetService.isRunning(this);
+            boolean isRunning = isPiWebAlive;
 
             LinearLayout targetRow1 = new LinearLayout(this);
             targetRow1.setOrientation(LinearLayout.HORIZONTAL);
@@ -1054,7 +1054,7 @@ public class MainActivity extends AppCompatActivity {
             petSwitchRow.setOrientation(LinearLayout.HORIZONTAL);
             petSwitchRow.setGravity(Gravity.CENTER_VERTICAL);
 
-            List<PetRegistry.PetInfo> allPets = PetRegistry.listPets(this);
+            List<PetRegistry.PetInfo> allPets = PetRegistry.loadPets(this);
             String curPetDir = PetRegistry.getPetDir(this);
             final int[] petIdx = new int[]{0};
             for (int i = 0; i < allPets.size(); i++) {
@@ -1080,11 +1080,11 @@ public class MainActivity extends AppCompatActivity {
                 tvPetName.setText((petIdx[0] + 1) + "/" + allPets.size() + " " + p.displayName);
                 PetRegistry.setPetDir(this, p.dir);
                 if (floatingPetView != null) {
-                    floatingPetView.setPet(p.dir);
+                    floatingPetView.setPetDir(p.dir);
                     floatingPetView.playOneShot("waving");
                 }
                 if (previewPetView != null) {
-                    previewPetView.setPet(p.dir);
+                    previewPetView.setPetDir(p.dir);
                 }
                 buildPetList();
                 showPetBubble("已切换为角色: " + p.displayName + " ✨");
