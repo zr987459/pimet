@@ -777,21 +777,23 @@ public class PetChatBridge {
 
     /**
      * pi-web 对话接口：
-     * 1. 采用桌宠专属独立会话 (config.piwebSessionId)，绝对不扫描或污染用户的当前编码会话；
-     * 2. 会话不存在或失效时，经 /api/agent/new 自动创建专属会话并落盘；
+     * 1. 支持双轨模式：默认智能感知隔离专属会话 (config.piwebSessionId)，或直通主工作区活跃会话 (config.directAttachWorkspace)；
+     * 2. 会话不存在或失效时，经 /api/agent/new 自动创建会话；
      * 3. 订阅 SSE 事件流收集 assistant 消息直至完成。
      */
     private List<String> sendViaPiWeb(ChatConfig config, String message, boolean forceNew) {
         int port = PetRegistry.getPiWebPort(service);
         HttpURLConnection conn = null;
         try {
-            // 独立专属会话逻辑：桌宠始终使用独立的专属会话 ID，绝不扫描或复用用户的编码会话
-            String sessionId = forceNew ? null : config.piwebSessionId;
+            // 独立专属会话 vs 工作区会话直通
+            String sessionId = forceNew ? null : (config.directAttachWorkspace
+                    ? PetMemoryManager.getActiveMainSessionId(service)
+                    : config.piwebSessionId);
             if (sessionId != null && sessionId.trim().isEmpty()) {
                 sessionId = null;
             }
 
-            // 1. 如果已有保存的专属会话，先尝试直接投递消息
+            // 1. 如果已有有效会话，直接投递消息
             if (sessionId != null) {
                 try {
                     URL promptUrl = new URL("http://127.0.0.1:" + port + "/api/agent/" + sessionId);
@@ -804,8 +806,11 @@ public class PetChatBridge {
                     JSONObject req = new JSONObject();
                     req.put("type", "prompt");
                     String piWebMsg = message;
+                    if (config.directAttachWorkspace) {
+                        piWebMsg = message;
+                    }
                     if (PetMemoryManager.isProgressQuery(message)) {
-                        piWebMsg = message + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
+                        piWebMsg = piWebMsg + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
                     }
                     req.put("message", piWebMsg);
                     conn.getOutputStream().write(req.toString().getBytes("UTF-8"));
@@ -813,11 +818,13 @@ public class PetChatBridge {
                     if (code == 404) {
                         // 远端会话已失效/过期，重置并重新建立专属会话
                         sessionId = null;
-                        config.piwebSessionId = "";
-                        config.save(service);
+                        if (!config.directAttachWorkspace) {
+                            config.piwebSessionId = "";
+                            config.save(service);
+                        }
                     } else if (code < 200 || code >= 300) {
                         String err = readErrorStream(conn);
-                        return Collections.singletonList("pi-web 专属会话发送异常 HTTP " + code + " · " + firstLine(err));
+                        return Collections.singletonList("pi-web 会话发送异常 HTTP " + code + " · " + firstLine(err));
                     }
                 } catch (Throwable t) {
                     Log.d(TAG, "pi-web send to existing session failed: " + t.getMessage());
@@ -847,6 +854,8 @@ public class PetChatBridge {
                 String piWebMsg;
                 if (message.startsWith("@")) {
                     piWebMsg = message;
+                } else if (config.directAttachWorkspace) {
+                    piWebMsg = message;
                 } else {
                     piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
                 }
@@ -863,7 +872,7 @@ public class PetChatBridge {
                 String resp = readStream(conn.getInputStream());
                 JSONObject respObj = new JSONObject(resp);
                 sessionId = respObj.optString("sessionId", "");
-                if (!sessionId.isEmpty()) {
+                if (!sessionId.isEmpty() && !config.directAttachWorkspace) {
                     config.piwebSessionId = sessionId;
                     config.save(service);
                 }

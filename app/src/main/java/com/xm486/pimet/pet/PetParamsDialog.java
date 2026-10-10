@@ -404,6 +404,58 @@ public class PetParamsDialog {
         chipScroll.addView(chipRow);
         box.addView(chipScroll);
 
+        // 会话模式切换 (智能感知隔离 vs 工作区直通)
+        TextView modeTitle = new TextView(context);
+        modeTitle.setText("🔗 会话连接机制");
+        modeTitle.setTextColor(0xFF38BDF8);
+        modeTitle.setTextSize(10f);
+        modeTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        modeTitle.setPadding(0, dp(6), 0, dp(2));
+        box.addView(modeTitle);
+
+        LinearLayout modeRow = new LinearLayout(context);
+        modeRow.setOrientation(LinearLayout.HORIZONTAL);
+        modeRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button isolatedBtn = new Button(context);
+        Button directBtn = new Button(context);
+
+        Runnable updateModeStyles = () -> {
+            boolean direct = config.directAttachWorkspace;
+            setupToggleBtn(isolatedBtn, !direct, "🛡️ 智能感知隔离 (推荐)");
+            setupToggleBtn(directBtn, direct, "🔗 工作区会话直通");
+        };
+
+        isolatedBtn.setOnClickListener(v -> {
+            config.directAttachWorkspace = false;
+            config.save(context);
+            updateModeStyles.run();
+            Toast.makeText(context, "已开启「智能感知隔离」：独立专属会话，自动嗅探主工作区最新进展", Toast.LENGTH_SHORT).show();
+        });
+
+        directBtn.setOnClickListener(v -> {
+            config.directAttachWorkspace = true;
+            config.save(context);
+            updateModeStyles.run();
+            Toast.makeText(context, "已开启「工作区会话直通」：直接挂载当前活跃会话，与主代理共享上下文", Toast.LENGTH_SHORT).show();
+        });
+
+        updateModeStyles.run();
+
+        LinearLayout.LayoutParams mBtnLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        mBtnLp.rightMargin = dp(4);
+        modeRow.addView(isolatedBtn, mBtnLp);
+        LinearLayout.LayoutParams mBtnLp2 = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        modeRow.addView(directBtn, mBtnLp2);
+        box.addView(modeRow);
+
+        TextView modeHint = new TextView(context);
+        modeHint.setText("• 智能隔离：独立专属会话，不污染主对话，自动注入主代理最新任务与答复\n• 工作区直通：直接复用 Web 端主活跃会话，与编程 Agent 处于完全相同的上下文流");
+        modeHint.setTextColor(0xFF64748B);
+        modeHint.setTextSize(8.5f);
+        modeHint.setPadding(0, dp(3), 0, dp(2));
+        box.addView(modeHint);
+
         return box;
     }
 
@@ -491,6 +543,20 @@ public class PetParamsDialog {
 
         row.addView(sb);
         return row;
+    }
+
+    private void setupToggleBtn(Button b, boolean active, String text) {
+        b.setText(text);
+        b.setTextSize(9.5f);
+        b.setTextColor(active ? 0xFFFFFFFF : 0xFF94A3B8);
+        b.setPadding(dp(4), 0, dp(4), 0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(active ? 0xFF0284C7 : 0x221E293B);
+        gd.setCornerRadius(dp(4));
+        gd.setStroke(dp(1), active ? 0xFF38BDF8 : 0x44475569);
+        b.setBackground(gd);
     }
 
     private Button buildMiniBtn(String text, int bgNormal, int bgPressed, int textColor, View.OnClickListener clk) {

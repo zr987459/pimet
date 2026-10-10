@@ -17,6 +17,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -48,6 +49,165 @@ public final class PetMemoryManager {
             "    {\"time\": \"初始化\", \"content\": \"与主人在 PiMet 中初次相遇，开启伴侣与助手模式！\"}\n" +
             "  ]\n" +
             "}";
+
+    public static class MainSessionInfo {
+        public String sessionId = "";
+        public String cwd = "";
+        public String sessionPath = "";
+        public String lastUserTask = "";
+        public String lastAgentResponse = "";
+        public int messageCount = 0;
+        public String gitStatus = "";
+    }
+
+    /**
+     * 实时深度回溯主工作区最新活跃的工程会话及其实时进展与任务内容
+     */
+    public static MainSessionInfo getMainSessionInfo(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            File agentDir = null;
+            if (rootfs != null && rootfs.exists()) {
+                agentDir = new File(rootfs, "root/.pi/agent");
+            }
+            if (agentDir == null || !agentDir.exists()) {
+                agentDir = new File("/root/.pi/agent");
+            }
+            if (!agentDir.exists()) return null;
+
+            File indexFile = new File(agentDir, "pi-web-session-index.json");
+            if (!indexFile.exists()) return null;
+
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(indexFile), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) sb.append(line);
+            }
+            JSONObject root = new JSONObject(sb.toString());
+            JSONObject entries = root.optJSONObject("entries");
+            if (entries == null) return null;
+
+            String mySessionId = ChatConfig.load(context).piwebSessionId;
+            String bestPath = null;
+            String bestTime = "";
+            String bestCwd = "";
+            String bestId = "";
+            int bestCount = 0;
+
+            java.util.Iterator<String> keys = entries.keys();
+            while (keys.hasNext()) {
+                String path = keys.next();
+                JSONObject entry = entries.optJSONObject(path);
+                if (entry == null) continue;
+                JSONObject info = entry.optJSONObject("info");
+                if (info == null) continue;
+
+                String sid = info.optString("id", "");
+                if (mySessionId != null && !mySessionId.isEmpty() && sid.equals(mySessionId)) {
+                    continue; // 过滤当前桌宠自身的独立会话
+                }
+
+                String firstMsg = info.optString("firstMessage", "");
+                if (firstMsg.contains("动态桌宠伴侣") || firstMsg.contains("系统角色预设")) {
+                    continue; // 过滤桌宠历史专属会话
+                }
+
+                String modified = info.optString("modified", info.optString("created", ""));
+                if (modified.compareTo(bestTime) > 0) {
+                    bestTime = modified;
+                    bestPath = path;
+                    bestCwd = info.optString("cwd", "");
+                    bestId = sid;
+                    bestCount = info.optInt("messageCount", 0);
+                }
+            }
+
+            if (bestPath == null) return null;
+            File sessionFile = new File(bestPath);
+            if (!sessionFile.exists()) return null;
+
+            MainSessionInfo res = new MainSessionInfo();
+            res.sessionId = bestId;
+            res.sessionPath = bestPath;
+            res.cwd = bestCwd;
+            res.messageCount = bestCount;
+
+            long len = sessionFile.length();
+            long readSize = Math.min(len, 2097152L); // 尾部读取至多 2MB
+            byte[] buf = new byte[(int) readSize];
+            try (RandomAccessFile raf = new RandomAccessFile(sessionFile, "r")) {
+                raf.seek(len - readSize);
+                raf.readFully(buf);
+            }
+            String tail = new String(buf, StandardCharsets.UTF_8);
+            String[] lines = tail.split("\n");
+            for (int i = lines.length - 1; i >= 0; i--) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) continue;
+                try {
+                    JSONObject obj = new JSONObject(line);
+                    if ("message".equals(obj.optString("type"))) {
+                        JSONObject msg = obj.optJSONObject("message");
+                        if (msg != null) {
+                            String role = msg.optString("role");
+                            String text = extractContentText(msg.opt("content"));
+                            if (text != null && !text.trim().isEmpty()) {
+                                text = text.trim().replace("\r", " ").replace("\n", " ");
+                                while (text.contains("  ")) text = text.replace("  ", " ");
+                                if ("user".equals(role) && res.lastUserTask.isEmpty()) {
+                                    if (!text.startsWith("[SYSTEM REMINDER")) {
+                                        if (text.length() > 140) text = text.substring(0, 140) + "…";
+                                        res.lastUserTask = text;
+                                    }
+                                } else if ("assistant".equals(role) && res.lastAgentResponse.isEmpty()) {
+                                    if (text.length() > 160) text = text.substring(0, 160) + "…";
+                                    res.lastAgentResponse = text;
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                if (!res.lastUserTask.isEmpty() && !res.lastAgentResponse.isEmpty()) break;
+            }
+
+            if (!res.cwd.isEmpty()) {
+                File repoDir = new File(res.cwd);
+                if (new File(repoDir, ".git").exists()) {
+                    res.gitStatus = "已纳入 Git 版本管控";
+                }
+            }
+            return res;
+        } catch (Throwable t) {
+            Log.w(TAG, "getMainSessionInfo failed", t);
+            return null;
+        }
+    }
+
+    /**
+     * 获取主工作区当前活跃的会话 ID
+     */
+    public static String getActiveMainSessionId(Context context) {
+        MainSessionInfo info = getMainSessionInfo(context);
+        return info != null ? info.sessionId : null;
+    }
+
+    private static String extractContentText(Object content) {
+        if (content == null) return null;
+        if (content instanceof String) return (String) content;
+        if (content instanceof JSONArray) {
+            JSONArray arr = (JSONArray) content;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject item = arr.optJSONObject(i);
+                if (item != null && "text".equals(item.optString("type"))) {
+                    String t = item.optString("text");
+                    if (t != null && !t.isEmpty()) sb.append(t).append(" ");
+                }
+            }
+            return sb.toString().trim();
+        }
+        return null;
+    }
 
     public static File getMemoryFile(Context context) {
         try {
@@ -197,20 +357,36 @@ public final class PetMemoryManager {
         sb.append("• 宿主设备电量: ").append(batteryPct).append("%").append(isCharging ? " ⚡ (充电中)" : "").append("\n");
         sb.append("• 桌宠状态: 心情【").append(mood).append("】· 亲密度: ").append(intimacy).append("点 (累计互动 ").append(count).append(" 次)\n");
 
-        try {
-            File rootfs = ProotManager.getRootfsDir(context);
-            if (rootfs != null && rootfs.exists()) {
-                File stateFile = new File(rootfs, "root/.pi/agent/pi-web-session-state.json");
-                if (stateFile.exists()) {
-                    String jsonStr = new String(java.nio.file.Files.readAllBytes(stateFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
-                    JSONObject stateObj = new JSONObject(jsonStr);
-                    JSONArray order = stateObj.optJSONArray("projectOrder");
-                    if (order != null && order.length() > 0) {
-                        sb.append("• 当前主工作区: ").append(order.optString(0)).append("\n");
+        // 尝试提取主代理活跃会话与工程上下文
+        MainSessionInfo mainInfo = getMainSessionInfo(context);
+        if (mainInfo != null) {
+            if (!mainInfo.cwd.isEmpty()) {
+                sb.append("• 主代理工作区: ").append(mainInfo.cwd);
+                if (!mainInfo.gitStatus.isEmpty()) sb.append(" (").append(mainInfo.gitStatus).append(")");
+                sb.append("\n");
+            }
+            if (!mainInfo.lastUserTask.isEmpty()) {
+                sb.append("• 主代理当前处理任务: ").append(mainInfo.lastUserTask).append("\n");
+            }
+            if (!mainInfo.lastAgentResponse.isEmpty()) {
+                sb.append("• 主代理最新进展/答复: ").append(mainInfo.lastAgentResponse).append("\n");
+            }
+        } else {
+            try {
+                File rootfs = ProotManager.getRootfsDir(context);
+                if (rootfs != null && rootfs.exists()) {
+                    File stateFile = new File(rootfs, "root/.pi/agent/pi-web-session-state.json");
+                    if (stateFile.exists()) {
+                        String jsonStr = new String(java.nio.file.Files.readAllBytes(stateFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                        JSONObject stateObj = new JSONObject(jsonStr);
+                        JSONArray order = stateObj.optJSONArray("projectOrder");
+                        if (order != null && order.length() > 0) {
+                            sb.append("• 当前主工作区: ").append(order.optString(0)).append("\n");
+                        }
                     }
                 }
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
 
         try {
             boolean autoServiceRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
@@ -440,8 +616,10 @@ public final class PetMemoryManager {
                         "你拥有独立的记忆（读取与维护 `/root/.pi/agent/pet_memory.json`），能感知当前系统的编译、部署和运行进度，并能通过 `control_desktop_pet` 实时改变自己在屏幕上的动作和气泡！\n" +
                         "你还拥有操作手机的超能力（通过 `phone_control` 工具读取手机屏幕、模拟点击目标按钮、滑动和输入文字）！\n\n" +
                         "## 行为准则\n" +
-                        "1. 当主人询问当前任务、服务进度或后台进程时，主动汇报系统状态、编译情况或后台日志；\n" +
-                        "2. 当主人询问具体的编码细节、报错原因或最近修改的代码时，可借助 read 或 bash 读取工作区代码（如 `/root/pi-cwd/` 下代码、git status/diff）或 `/root/.pi/agent/sessions/` 历史日志，为主人详细讲解；\n" +
+                        "1. 当主人询问当前任务、服务进度、后台进程或“现在什么进度”时：\n" +
+                        "   - 系统上下文中已为你实时注入「主代理工作区」、「主代理当前处理任务」与「主代理最新进展/答复」！\n" +
+                        "   - 你必须以此为主体，清晰、生动、准确地向主人汇报主代理的真实开发任务与进展（例如主代理正在改什么功能、解决了什么问题），禁止只复读电量与网络状态；\n" +
+                        "2. 当主人询问具体的编码细节、报错原因或最近修改的代码时，可借助 read 或 bash 读取工作区代码（如 `/root/pi-cwd/`、`/root/pimet` 下代码、git status/diff）或 `/root/.pi/agent/sessions/` 历史日志，为主人详细讲解；\n" +
                         "3. 当主人要求操作手机、打开某个界面、点击按钮或查看手机屏幕时，调用 `phone_control` 工具分步完成操作；\n" +
                         "4. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
                         "5. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +

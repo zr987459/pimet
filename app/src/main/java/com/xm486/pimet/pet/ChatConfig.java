@@ -49,6 +49,7 @@ public class ChatConfig {
     public static final String KEY_CONTEXT_ROUNDS = "chat_context_rounds";
     public static final String KEY_TIMEOUT = "chat_timeout_seconds";
     public static final String KEY_TARGET_SUB_AGENT = "chat_target_sub_agent";
+    public static final String KEY_DIRECT_ATTACH_WORKSPACE = "chat_direct_attach_workspace";
 
     private static final String LEGACY_DIR =
             "/storage/emulated/0/Android/data/com.xm486.pimet/files";
@@ -74,6 +75,8 @@ public class ChatConfig {
     public String piWebPrompt = "";
     /** 桌宠绑定的子代理名称，默认 pet-companion（为空表示关闭子代理自动路由） */
     public String targetSubAgent = "pet-companion";
+    /** 是否直接挂载主工作区当前活跃会话（true 为工作区会话直通，false 为独立隔离专属会话） */
+    public boolean directAttachWorkspace = false;
     /** Pi-Web 专属桌宠会话 ID，绝不串入或复用用户的当前编码会话 */
     public String piwebSessionId = "";
     public String clawbenchToken = "";
@@ -135,6 +138,7 @@ public class ChatConfig {
         config.apiPrompt = sp.getString(KEY_API_PROMPT, config.apiPrompt);
         config.piWebPrompt = sp.getString(KEY_PIWEB_PROMPT, "");
         config.targetSubAgent = sp.getString(KEY_TARGET_SUB_AGENT, "pet-companion");
+        config.directAttachWorkspace = sp.getBoolean(KEY_DIRECT_ATTACH_WORKSPACE, false);
         config.piwebSessionId = sp.getString(KEY_PIWEB_SESSION_ID, "");
         config.clawbenchToken = sp.getString(KEY_CLAWBENCH_TOKEN, PetRegistry.getClawbenchToken(context));
         config.apiProvider = sp.getString(KEY_API_PROVIDER, "custom");
@@ -158,6 +162,7 @@ public class ChatConfig {
         e.putString(KEY_API_PROMPT, apiPrompt);
         e.putString(KEY_PIWEB_PROMPT, piWebPrompt);
         e.putString(KEY_TARGET_SUB_AGENT, targetSubAgent);
+        e.putBoolean(KEY_DIRECT_ATTACH_WORKSPACE, directAttachWorkspace);
         e.putString(KEY_PIWEB_SESSION_ID, piwebSessionId);
         e.putString(KEY_CLAWBENCH_TOKEN, clawbenchToken);
         e.putString(KEY_API_PROVIDER, apiProvider);
