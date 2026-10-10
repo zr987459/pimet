@@ -12,10 +12,15 @@ import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
+import com.xm486.pimet.proot.PiWebManager;
+import com.xm486.pimet.proot.ProotManager;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -26,12 +31,10 @@ import java.util.List;
 
 /**
  * 软件平滑更新管理器 (UpdateManager)
- * 负责检测 PiMet 客户端 GitHub Release 更新。
- * 特性：
- * 1. 检测更新前自动测速与网络优选最快下载镜像线路（ghfast / ghproxy / 官方直连）。
- * 2. 支持应用内直接调用系统 DownloadManager 在本地下载安装包并提示安装。
- * 3. 支持一键复制优选下载直链到系统剪贴板。
- * 4. 完整保留所有现有容器、配置与桌宠数据。
+ * 负责检测与执行：
+ * 1. Pi-Web 工作台 (@agegr/pi-web) 平滑原地增量升级与版本检测。
+ * 2. PiMet 客户端 GitHub Release 自动测速优选线路、本地直接下载与复制下载直链。
+ * 3. 完整保留所有现有容器、配置、会话与桌宠数据。
  */
 public final class UpdateManager {
     private static final String TAG = "PiMet.UpdateManager";
@@ -54,6 +57,13 @@ public final class UpdateManager {
         public boolean hasUpdate;
     }
 
+    public static class PiWebUpdateInfo {
+        public String currentVersion;
+        public String latestVersion;
+        public String registryUsed;
+        public boolean hasUpdate;
+    }
+
     private static class RouteCandidate {
         final String name;
         final String url;
@@ -69,6 +79,131 @@ public final class UpdateManager {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     private UpdateManager() {}
+
+    // ==========================================
+    // 1. Pi-Web 工作台 (@agegr/pi-web) 平滑增量升级
+    // ==========================================
+
+    /**
+     * 获取容器内已安装的 @agegr/pi-web 版本
+     */
+    public static String getInstalledPiWebVersion(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            File[] candidates = new File[]{
+                    new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/package.json"),
+                    new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/package.json"),
+                    new File(rootfs, "root/.pi/agent/npm/node_modules/@agegr/pi-web/package.json")
+            };
+            for (File f : candidates) {
+                if (f.exists() && f.canRead()) {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        JSONObject json = new JSONObject(sb.toString());
+                        String ver = json.optString("version", null);
+                        if (ver != null && !ver.isEmpty()) return ver;
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+        return "0.11.0";
+    }
+
+    /**
+     * 异步检测 Pi-Web 工作台 (@agegr/pi-web) 是否存在新版本
+     */
+    public static void checkPiWebUpdate(Context context, Callback<PiWebUpdateInfo> callback) {
+        new Thread(() -> {
+            String[] registries = new String[]{
+                    "https://registry.npmmirror.com/@agegr/pi-web/latest",
+                    "https://registry.npmjs.org/@agegr/pi-web/latest"
+            };
+            JSONObject json = null;
+            String usedUrl = null;
+
+            for (String regUrl : registries) {
+                HttpURLConnection conn = null;
+                try {
+                    URL u = new URL(regUrl);
+                    conn = (HttpURLConnection) u.openConnection();
+                    conn.setConnectTimeout(4000);
+                    conn.setReadTimeout(4000);
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 PiMet");
+                    int code = conn.getResponseCode();
+                    if (code == 200) {
+                        StringBuilder sb = new StringBuilder();
+                        try (BufferedReader r = new BufferedReader(
+                                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                            String l;
+                            while ((l = r.readLine()) != null) sb.append(l);
+                        }
+                        json = new JSONObject(sb.toString());
+                        usedUrl = regUrl;
+                        break;
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) {}
+                }
+            }
+
+            if (json != null) {
+                String latestVer = json.optString("version", "");
+                String installed = getInstalledPiWebVersion(context);
+                boolean hasUpdate = PluginManager.isVersionNewer(latestVer, installed);
+
+                PiWebUpdateInfo info = new PiWebUpdateInfo();
+                info.currentVersion = installed;
+                info.latestVersion = latestVer;
+                info.registryUsed = usedUrl != null && usedUrl.contains("npmmirror") ? "国内加速镜像 (npmmirror)" : "npm 官方源";
+                info.hasUpdate = hasUpdate;
+
+                MAIN_HANDLER.post(() -> callback.onResult(true, info,
+                        hasUpdate ? "发现 Pi-Web 新版本 v" + latestVer : "当前 Pi-Web 已是最新版本 (v" + installed + ")"));
+            } else {
+                MAIN_HANDLER.post(() -> callback.onResult(false, null, "检测 Pi-Web 失败，未能连接镜像源"));
+            }
+        }).start();
+    }
+
+    /**
+     * 在 Linux 容器内原地平滑增量升级 Pi-Web (@agegr/pi-web)
+     */
+    public static void updatePiWebInPlace(Context context, Callback<String> callback) {
+        new Thread(() -> {
+            try {
+                String registry = PiMetConfig.getNpmRegistry(context);
+                if (registry == null || registry.isEmpty()) registry = "https://registry.npmmirror.com/";
+                String normalizedRegistry = registry.endsWith("/") ? registry : (registry + "/");
+
+                String cmd = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
+                        "npm install -g --loglevel=error --no-audit --no-fund @agegr/pi-web@latest --registry=" + normalizedRegistry;
+
+                ProotManager.executeCommandSync(context, cmd, 120000);
+                ProotManager.optimizePiWebOffline(context);
+
+                String newVer = getInstalledPiWebVersion(context);
+
+                // 若 Pi-Web 服务正在后台运行，平滑重启以加载新代码
+                int webPort = PiMetConfig.getWebPort(context);
+                if (ProotManager.isPiWebPortAlive(webPort)) {
+                    PiWebManager.restart(context, null);
+                }
+
+                MAIN_HANDLER.post(() -> callback.onResult(true, newVer, "✔ Pi-Web 已成功平滑升级至 v" + newVer));
+            } catch (Throwable t) {
+                Log.e(TAG, "updatePiWebInPlace failed", t);
+                MAIN_HANDLER.post(() -> callback.onResult(false, null, "升级过程出现异常: " + t.getMessage()));
+            }
+        }).start();
+    }
+
+    // ==========================================
+    // 2. PiMet 客户端应用更新与测速优选
+    // ==========================================
 
     /**
      * 异步检查客户端 (PiMet APK) 最新版本，并在检测时自动测速与优选最快下载线路
@@ -97,7 +232,6 @@ public final class UpdateManager {
                     }
                     json = new JSONObject(sb.toString());
                 } else {
-                    // 若 GitHub API 触发限制或返回非200，尝试通过 Release 页面重定向获取 Tag
                     String tag = fetchLatestTagViaRedirect();
                     if (tag != null && !tag.isEmpty()) {
                         json = new JSONObject();
@@ -196,7 +330,6 @@ public final class UpdateManager {
             info.bestRouteName = best.name;
             info.routeLatencyMs = best.latency;
         } else {
-            // 默认回退到 ghfast 镜像或官方地址
             info.bestDownloadUrl = "https://ghfast.top/" + rawUrl;
             info.bestRouteName = "国内加速节点 (默认)";
             info.routeLatencyMs = -1;
@@ -274,7 +407,6 @@ public final class UpdateManager {
             Log.w(TAG, "downloadLocally DownloadManager failed, fallback to browser", t);
         }
 
-        // 若 DownloadManager 不可用，平滑回退至外部浏览器
         startApkDownload(context, downloadUrl);
     }
 

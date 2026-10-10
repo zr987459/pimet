@@ -921,8 +921,117 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
+                <!-- 🌟 横列二级分类菜单 (Horizontal Category Tabs) -->
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:scrollbars="none"
+                    android:overScrollMode="never"
+                    android:layout_marginBottom="12dp">
+
+                    <LinearLayout
+                        android:id="@+id/settingsCategoryBar"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/chipCategoryPorts"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:background="@drawable/bg_chip_selected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="⚡ 端口与服务"
+                            android:textColor="#FFFFFF"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryUpdate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="🔄 更新中心"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryPet"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="🐾 桌面宠物"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryPrivileges"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="🛡️ 系统特权"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryStorage"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="💾 容器存储"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryAbout"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="ℹ️ 关于系统"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCategoryAll"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_chip_unselected"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="📋 全部设置"
+                            android:textColor="#8B949E"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </HorizontalScrollView>
+
                 <!-- 多服务自定义端口设置卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsPorts"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card_modern"
@@ -1248,6 +1357,7 @@
 
                 <!-- 系统与软件无感平滑更新卡片 (Update Center) -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsUpdate"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1258,7 +1368,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="🚀 客户端更新中心"
+                        android:text="🔄 组件与应用更新中心"
                         android:textColor="#F0F6FC"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1267,15 +1377,15 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="支持自动测速优选下载线路、本地下载与复制下载链接，保留所有现有数据平滑覆盖安装"
+                        android:text="支持 Pi-Web 工作台平滑增量升级与 PiMet 客户端多线路安全更新，绝不重置用户配置与会话数据"
                         android:textColor="#8B949E"
                         android:textSize="12sp" />
 
-                    <!-- PiMet 客户端应用更新行 -->
+                    <!-- 1. Pi-Web 工作台更新行 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="14dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
@@ -1288,7 +1398,58 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="🚀 PiMet 客户端"
+                                android:text="🌐 Pi-Web 工作台 (@agegr/pi-web)"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/settingsPiWebVersionTv"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="已安装版本: 检测中..."
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/btnCheckPiWebUpdate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="🔄 检查更新"
+                            android:textColor="#58A6FF"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#21262D" />
+
+                    <!-- 2. PiMet 客户端应用更新行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🚀 PiMet 客户端应用"
                                 android:textColor="#E6EDF3"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -1298,7 +1459,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
-                                android:text="当前版本: v1.3.4"
+                                android:text="当前版本: v1.3.6"
                                 android:textColor="#8B949E"
                                 android:textSize="11sp" />
                         </LinearLayout>
@@ -1319,6 +1480,7 @@
 
                 <!-- npm 镜像源设置卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsRegistry"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1376,6 +1538,7 @@
 
                 <!-- 容器存储与清理卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsStorage"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1434,6 +1597,7 @@
 
                 <!-- 🛡️ 设备特权与高级权限管理卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsPrivileges"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1578,6 +1742,7 @@
 
                 <!-- 桌面宠物 (桌宠互动与形象中心) 设置卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsPetPreview"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1831,6 +1996,7 @@
 
                 <!-- 🗣️ 桌宠主动关怀与活跃度调节卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsPetProactive"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -1896,6 +2062,7 @@
 
                 <!-- 致敬与开源卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardSettingsAbout"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"

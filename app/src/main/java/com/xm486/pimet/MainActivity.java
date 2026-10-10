@@ -3,6 +3,7 @@ package com.xm486.pimet;
 import android.Manifest;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
+import android.app.ProgressDialog;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
@@ -217,6 +218,36 @@ public class MainActivity extends AppCompatActivity {
     // 更新中心组件
     private TextView settingsAppVersionTv;
     private View btnCheckAppUpdate;
+    private TextView settingsPiWebVersionTv;
+    private View btnCheckPiWebUpdate;
+
+    // 设置页横向二级分类芯片
+    private TextView chipCategoryPorts;
+    private TextView chipCategoryUpdate;
+    private TextView chipCategoryPet;
+    private TextView chipCategoryPrivileges;
+    private TextView chipCategoryStorage;
+    private TextView chipCategoryAbout;
+    private TextView chipCategoryAll;
+
+    // 设置页各个卡片
+    private View cardSettingsPorts;
+    private View cardSettingsUpdate;
+    private View cardSettingsRegistry;
+    private View cardSettingsStorage;
+    private View cardSettingsPrivileges;
+    private View cardSettingsPetPreview;
+    private View cardSettingsPetProactive;
+    private View cardSettingsAbout;
+
+    private static final int SETTINGS_CAT_PORTS = 0;
+    private static final int SETTINGS_CAT_UPDATE = 1;
+    private static final int SETTINGS_CAT_PET = 2;
+    private static final int SETTINGS_CAT_PRIVILEGES = 3;
+    private static final int SETTINGS_CAT_STORAGE = 4;
+    private static final int SETTINGS_CAT_ABOUT = 5;
+    private static final int SETTINGS_CAT_ALL = 6;
+    private int currentSettingsCategory = SETTINGS_CAT_PORTS;
 
     // Pi-Web 工作台视图组件
     private View piWebStatusDot;
@@ -417,6 +448,35 @@ public class MainActivity extends AppCompatActivity {
 
         settingsAppVersionTv = findViewById(R.id.settingsAppVersionTv);
         btnCheckAppUpdate = findViewById(R.id.btnCheckAppUpdate);
+        settingsPiWebVersionTv = findViewById(R.id.settingsPiWebVersionTv);
+        btnCheckPiWebUpdate = findViewById(R.id.btnCheckPiWebUpdate);
+
+        chipCategoryPorts = findViewById(R.id.chipCategoryPorts);
+        chipCategoryUpdate = findViewById(R.id.chipCategoryUpdate);
+        chipCategoryPet = findViewById(R.id.chipCategoryPet);
+        chipCategoryPrivileges = findViewById(R.id.chipCategoryPrivileges);
+        chipCategoryStorage = findViewById(R.id.chipCategoryStorage);
+        chipCategoryAbout = findViewById(R.id.chipCategoryAbout);
+        chipCategoryAll = findViewById(R.id.chipCategoryAll);
+
+        cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
+        cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
+        cardSettingsRegistry = findViewById(R.id.cardSettingsRegistry);
+        cardSettingsStorage = findViewById(R.id.cardSettingsStorage);
+        cardSettingsPrivileges = findViewById(R.id.cardSettingsPrivileges);
+        cardSettingsPetPreview = findViewById(R.id.cardSettingsPetPreview);
+        cardSettingsPetProactive = findViewById(R.id.cardSettingsPetProactive);
+        cardSettingsAbout = findViewById(R.id.cardSettingsAbout);
+
+        if (chipCategoryPorts != null) chipCategoryPorts.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PORTS));
+        if (chipCategoryUpdate != null) chipCategoryUpdate.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_UPDATE));
+        if (chipCategoryPet != null) chipCategoryPet.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PET));
+        if (chipCategoryPrivileges != null) chipCategoryPrivileges.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PRIVILEGES));
+        if (chipCategoryStorage != null) chipCategoryStorage.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_STORAGE));
+        if (chipCategoryAbout != null) chipCategoryAbout.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ABOUT));
+        if (chipCategoryAll != null) chipCategoryAll.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ALL));
+
+        switchSettingsCategory(currentSettingsCategory);
 
         // Pi-Web 组件
         piWebProgressBar = findViewById(R.id.piWebProgressBar);
@@ -527,6 +587,7 @@ public class MainActivity extends AppCompatActivity {
             // 插件与生态中心
             refreshPluginsList(currentPluginCategory);
         } else if (index == 3) {
+            switchSettingsCategory(currentSettingsCategory);
             refreshStorageSize();
             refreshPrivilegeStatus();
             updatePetPreview();
@@ -1399,13 +1460,17 @@ public class MainActivity extends AppCompatActivity {
                 long t0 = System.currentTimeMillis();
                 boolean ok = PortDetector.isPortOpen("127.0.0.1", port, 400);
                 int latency = (int) (System.currentTimeMillis() - t0);
+                boolean isHttp = ok && ProotManager.isPiWebHttpReady(port);
                 mainHandler.post(() -> {
-                    if (ok) {
-                        tvStatus.setText("● 端口 " + port + " 开放连通正常 (延迟 " + latency + "ms)");
+                    if (isHttp) {
+                        tvStatus.setText("● 端口 " + port + " HTTP 服务正在运行 (延迟 " + latency + "ms)");
                         tvStatus.setTextColor(0xFF3FB950);
+                    } else if (ok) {
+                        tvStatus.setText("● 端口 " + port + " 开放连通中 (延迟 " + latency + "ms)");
+                        tvStatus.setTextColor(0xFF58A6FF);
                     } else {
-                        tvStatus.setText("○ 端口 " + port + " 未响应或服务未启动");
-                        tvStatus.setTextColor(0xFFF85149);
+                        tvStatus.setText("○ 端口 " + port + " 端口空闲 / 尚未启动监听");
+                        tvStatus.setTextColor(0xFF8B949E);
                     }
                 });
             }).start();
@@ -2208,8 +2273,15 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateLaunchStatusUI(boolean alive) {
         int port = PiMetConfig.getWebPort(this);
-        launchPortBadge.setText("PORT " + port);
-        launchMetricPortTv.setText(String.valueOf(port));
+        if (launchPortBadge != null) {
+            launchPortBadge.setText("PORT " + port);
+        }
+        if (launchMetricPortTv != null) {
+            launchMetricPortTv.setText(String.valueOf(port));
+        }
+        if (piWebOfflineSubTv != null) {
+            piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
+        }
 
         if (alive) {
             PiMetService.start(this);
@@ -3005,6 +3077,7 @@ public class MainActivity extends AppCompatActivity {
         if (btnSavePort != null) {
             btnSavePort.setOnClickListener(v -> {
                 try {
+                    int oldPort = PiMetConfig.getWebPort(this);
                     int pwPort = Integer.parseInt(settingsPortInput.getText().toString().trim());
                     int opPort = Integer.parseInt(settingsOperitPortInput.getText().toString().trim());
                     int cbPort = Integer.parseInt(settingsClawbenchPortInput.getText().toString().trim());
@@ -3018,6 +3091,7 @@ public class MainActivity extends AppCompatActivity {
                         return;
                     }
 
+                    PiMetConfig.setWebPort(this, pwPort);
                     PetRegistry.setPiWebPort(this, pwPort);
                     PetRegistry.setOperitPort(this, opPort);
                     PetRegistry.setClawbenchPort(this, cbPort);
@@ -3041,6 +3115,15 @@ public class MainActivity extends AppCompatActivity {
                     refreshSettingsPortFields();
                     updateLaunchStatusUI(isPiWebAlive);
                     Toast.makeText(this, "所有自定义端口与凭证已保存并生效！", Toast.LENGTH_SHORT).show();
+
+                    if (oldPort != pwPort && isPiWebAlive) {
+                        new AlertDialog.Builder(this)
+                                .setTitle("🔄 重启 Pi-Web 服务生效")
+                                .setMessage("Pi-Web 启动端口已由 " + oldPort + " 调整为 " + pwPort + "。\n当前服务正在旧端口运行，是否立即重启服务应用新端口？")
+                                .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
+                                .setNegativeButton("稍后手动重启", null)
+                                .show();
+                    }
                 } catch (Exception e) {
                     Toast.makeText(this, "无效端口数字: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -3317,6 +3400,47 @@ public class MainActivity extends AppCompatActivity {
             settingsAppVersionTv.setText("当前客户端版本: v" + PiMetConfig.getAppVersion(this));
         }
 
+        if (settingsPiWebVersionTv != null) {
+            String installedPiWeb = UpdateManager.getInstalledPiWebVersion(this);
+            settingsPiWebVersionTv.setText("已安装版本: v" + installedPiWeb);
+        }
+
+        if (btnCheckPiWebUpdate != null) {
+            btnCheckPiWebUpdate.setOnClickListener(v -> {
+                btnCheckPiWebUpdate.setEnabled(false);
+                Toast.makeText(this, "正在检测 Pi-Web 工作台镜像源...", Toast.LENGTH_SHORT).show();
+                UpdateManager.checkPiWebUpdate(this, (success, info, message) -> {
+                    btnCheckPiWebUpdate.setEnabled(true);
+                    if (success && info != null) {
+                        if (settingsPiWebVersionTv != null) {
+                            settingsPiWebVersionTv.setText("已安装: v" + info.currentVersion + (info.hasUpdate ? " (有新版: v" + info.latestVersion + ")" : " (最新)"));
+                        }
+                        if (info.hasUpdate) {
+                            new AlertDialog.Builder(this)
+                                    .setTitle("🎉 发现 Pi-Web 工作台新版本 (v" + info.latestVersion + ")")
+                                    .setMessage("【当前已安装】v" + info.currentVersion +
+                                            "\n【最新可用版本】v" + info.latestVersion +
+                                            "\n【下载源】" + info.registryUsed +
+                                            "\n\n平滑升级将直接在内置 PRoot 容器内执行增量更新，完整保留你的工程代码、配置文件、插件生态和会话记录。\n\n是否立即执行平滑更新？")
+                                    .setPositiveButton("🚀 立即平滑更新", (d, w) -> {
+                                        performPiWebInPlaceUpdate();
+                                    })
+                                    .setNegativeButton("稍后再说", null)
+                                    .show();
+                        } else {
+                            new AlertDialog.Builder(this)
+                                    .setTitle("✔ Pi-Web 工作台已是最新")
+                                    .setMessage("当前版本: v" + info.currentVersion + "\n已是 npm 镜像源上的最新稳定版本，无需更新。")
+                                    .setPositiveButton("确定", null)
+                                    .show();
+                        }
+                    } else {
+                        Toast.makeText(this, message != null ? message : "检测 Pi-Web 失败", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            });
+        }
+
         if (btnCheckAppUpdate != null) {
             btnCheckAppUpdate.setOnClickListener(v -> {
                 btnCheckAppUpdate.setEnabled(false);
@@ -3362,6 +3486,104 @@ public class MainActivity extends AppCompatActivity {
                     }
                 });
             });
+        }
+    }
+
+    private void performPiWebInPlaceUpdate() {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setTitle("正在平滑升级 Pi-Web");
+        progressDialog.setMessage("正在拉取最新 npm 模块并优化离线资源，请稍候...");
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+
+        UpdateManager.updatePiWebInPlace(this, (success, newVer, message) -> {
+            try {
+                if (progressDialog.isShowing()) progressDialog.dismiss();
+            } catch (Throwable ignored) {}
+
+            if (success) {
+                if (settingsPiWebVersionTv != null) {
+                    settingsPiWebVersionTv.setText("已安装版本: v" + newVer);
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle("✨ 升级成功")
+                        .setMessage("Pi-Web 工作台已成功平滑升级至 v" + newVer + "！\n所有本地配置与工程数据完整保留。")
+                        .setPositiveButton("确定", (d, w) -> {
+                            if (viewPiWeb != null && viewPiWeb.getVisibility() == View.VISIBLE && piWebWebView != null) {
+                                piWebWebView.reload();
+                            }
+                        })
+                        .show();
+            } else {
+                new AlertDialog.Builder(this)
+                        .setTitle("升级失败")
+                        .setMessage(message != null ? message : "更新过程中遇到错误，请检查网络或稍后重试。")
+                        .setPositiveButton("确定", null)
+                        .show();
+            }
+        });
+    }
+
+    public void switchSettingsCategory(int category) {
+        currentSettingsCategory = category;
+
+        updateChipState(chipCategoryPorts, category == SETTINGS_CAT_PORTS);
+        updateChipState(chipCategoryUpdate, category == SETTINGS_CAT_UPDATE);
+        updateChipState(chipCategoryPet, category == SETTINGS_CAT_PET);
+        updateChipState(chipCategoryPrivileges, category == SETTINGS_CAT_PRIVILEGES);
+        updateChipState(chipCategoryStorage, category == SETTINGS_CAT_STORAGE);
+        updateChipState(chipCategoryAbout, category == SETTINGS_CAT_ABOUT);
+        updateChipState(chipCategoryAll, category == SETTINGS_CAT_ALL);
+
+        boolean showAll = (category == SETTINGS_CAT_ALL);
+
+        // 端口与网络类卡片
+        if (cardSettingsPorts != null) {
+            cardSettingsPorts.setVisibility((showAll || category == SETTINGS_CAT_PORTS) ? View.VISIBLE : View.GONE);
+        }
+        if (cardSettingsRegistry != null) {
+            cardSettingsRegistry.setVisibility((showAll || category == SETTINGS_CAT_PORTS) ? View.VISIBLE : View.GONE);
+        }
+
+        // 更新中心卡片
+        if (cardSettingsUpdate != null) {
+            cardSettingsUpdate.setVisibility((showAll || category == SETTINGS_CAT_UPDATE) ? View.VISIBLE : View.GONE);
+        }
+
+        // 桌面宠物卡片
+        if (cardSettingsPetPreview != null) {
+            cardSettingsPetPreview.setVisibility((showAll || category == SETTINGS_CAT_PET) ? View.VISIBLE : View.GONE);
+        }
+        if (cardSettingsPetProactive != null) {
+            cardSettingsPetProactive.setVisibility((showAll || category == SETTINGS_CAT_PET) ? View.VISIBLE : View.GONE);
+        }
+
+        // 特权与权限卡片
+        if (cardSettingsPrivileges != null) {
+            cardSettingsPrivileges.setVisibility((showAll || category == SETTINGS_CAT_PRIVILEGES) ? View.VISIBLE : View.GONE);
+        }
+
+        // 容器存储与清理卡片
+        if (cardSettingsStorage != null) {
+            cardSettingsStorage.setVisibility((showAll || category == SETTINGS_CAT_STORAGE) ? View.VISIBLE : View.GONE);
+        }
+
+        // 关于卡片
+        if (cardSettingsAbout != null) {
+            cardSettingsAbout.setVisibility((showAll || category == SETTINGS_CAT_ABOUT) ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void updateChipState(TextView chip, boolean isSelected) {
+        if (chip == null) return;
+        if (isSelected) {
+            chip.setBackgroundResource(R.drawable.bg_chip_selected);
+            chip.setTextColor(0xFFFFFFFF);
+            chip.setTypeface(null, Typeface.BOLD);
+        } else {
+            chip.setBackgroundResource(R.drawable.bg_chip_unselected);
+            chip.setTextColor(0xFF8B949E);
+            chip.setTypeface(null, Typeface.NORMAL);
         }
     }
 
