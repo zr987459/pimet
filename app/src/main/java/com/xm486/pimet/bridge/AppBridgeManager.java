@@ -13,6 +13,7 @@ import android.widget.Toast;
 
 import com.xm486.pimet.MainActivity;
 import com.xm486.pimet.PiMetConfig;
+import com.xm486.pimet.automation.PiMetAccessibilityService;
 import com.xm486.pimet.pet.PetOverlayService;
 import com.xm486.pimet.pet.PetRegistry;
 import com.xm486.pimet.proot.ProotManager;
@@ -168,18 +169,27 @@ public class AppBridgeManager {
                 }
 
                 String replyMsg = "OK";
+                JSONObject replyJson = null;
                 if (!TextUtils.isEmpty(body)) {
                     try {
                         JSONObject json = new JSONObject(body);
-                        replyMsg = executeCommand(json);
+                        if ("phone_control".equals(json.optString("action")) || json.has("phone_action")) {
+                            replyJson = executePhoneControl(json);
+                        } else {
+                            replyMsg = executeCommand(json);
+                        }
                     } catch (Throwable t) {
                         replyMsg = "JSON Error: " + t.getMessage();
                     }
                 }
 
                 JSONObject resp = new JSONObject();
-                resp.put("success", true);
-                resp.put("result", replyMsg);
+                if (replyJson != null) {
+                    resp = replyJson;
+                } else {
+                    resp.put("success", true);
+                    resp.put("result", replyMsg);
+                }
                 String respStr = resp.toString();
 
                 byte[] respBytes = respStr.getBytes(StandardCharsets.UTF_8);
@@ -225,6 +235,144 @@ public class AppBridgeManager {
         }, "PiMet-AppBridge-FileWatcher");
         fileWatchThread.setDaemon(true);
         fileWatchThread.start();
+    }
+
+    /**
+     * 处理手机自动化控制指令 (phone_control)
+     */
+    public JSONObject executePhoneControl(JSONObject json) {
+        JSONObject res = new JSONObject();
+        try {
+            if (!PiMetAccessibilityService.isRunning()) {
+                res.put("success", false);
+                res.put("error", "PiMet 无障碍服务未开启。请先在安卓系统设置 -> 无障碍 -> 开启 PiMet 手机自动化服务！");
+                res.put("need_permission", true);
+                return res;
+            }
+
+            PiMetAccessibilityService service = PiMetAccessibilityService.getInstance();
+            if (service == null) {
+                res.put("success", false);
+                res.put("error", "AccessibilityService 实例不可用");
+                return res;
+            }
+
+            String subAction = json.optString("phone_action", json.optString("sub_action", "")).trim();
+            if (TextUtils.isEmpty(subAction)) {
+                if (json.has("click") || json.has("tap")) subAction = "tap";
+                else if (json.has("swipe")) subAction = "swipe";
+                else if (json.has("inspect") || json.has("screen")) subAction = "inspect";
+                else if (json.has("input") || json.has("text")) subAction = "input";
+                else if (json.has("key") || json.has("press")) subAction = "key";
+            }
+
+            switch (subAction.toLowerCase()) {
+                case "inspect":
+                case "read_screen":
+                case "screen": {
+                    return service.inspectScreen();
+                }
+
+                case "tap":
+                case "click": {
+                    float x = (float) json.optDouble("x", -1);
+                    float y = (float) json.optDouble("y", -1);
+                    if (x < 0 || y < 0) {
+                        res.put("success", false);
+                        res.put("error", "坐标参数错误: x=" + x + ", y=" + y);
+                        return res;
+                    }
+                    boolean ok = service.click(x, y);
+                    res.put("success", ok);
+                    res.put("message", ok ? "已成功点击坐标 (" + x + ", " + y + ")" : "手势下发失败或被取消");
+                    return res;
+                }
+
+                case "long_press":
+                case "long_click": {
+                    float x = (float) json.optDouble("x", -1);
+                    float y = (float) json.optDouble("y", -1);
+                    int dur = json.optInt("duration", 800);
+                    if (x < 0 || y < 0) {
+                        res.put("success", false);
+                        res.put("error", "坐标参数错误: x=" + x + ", y=" + y);
+                        return res;
+                    }
+                    boolean ok = service.longClick(x, y, dur);
+                    res.put("success", ok);
+                    res.put("message", ok ? "已成功长按坐标 (" + x + ", " + y + ")" : "长按手势下发失败");
+                    return res;
+                }
+
+                case "swipe": {
+                    float fromX = (float) json.optDouble("from_x", json.optDouble("x1", -1));
+                    float fromY = (float) json.optDouble("from_y", json.optDouble("y1", -1));
+                    float toX = (float) json.optDouble("to_x", json.optDouble("x2", -1));
+                    float toY = (float) json.optDouble("to_y", json.optDouble("y2", -1));
+                    int dur = json.optInt("duration", 300);
+
+                    // 便捷方向参数: direction: up / down / left / right
+                    String dir = json.optString("direction", "").toLowerCase();
+                    if (!TextUtils.isEmpty(dir)) {
+                        int sw = appContext.getResources().getDisplayMetrics().widthPixels;
+                        int sh = appContext.getResources().getDisplayMetrics().heightPixels;
+                        float cx = sw / 2.0f;
+                        float cy = sh / 2.0f;
+                        if ("up".equals(dir)) {
+                            fromX = cx; toX = cx; fromY = cy + (sh * 0.25f); toY = cy - (sh * 0.25f);
+                        } else if ("down".equals(dir)) {
+                            fromX = cx; toX = cx; fromY = cy - (sh * 0.25f); toY = cy + (sh * 0.25f);
+                        } else if ("left".equals(dir)) {
+                            fromY = cy; toY = cy; fromX = cx + (sw * 0.3f); toX = cx - (sw * 0.3f);
+                        } else if ("right".equals(dir)) {
+                            fromY = cy; toY = cy; fromX = cx - (sw * 0.3f); toX = cx + (sw * 0.3f);
+                        }
+                    }
+
+                    if (fromX < 0 || fromY < 0 || toX < 0 || toY < 0) {
+                        res.put("success", false);
+                        res.put("error", "滑动坐标参数错误");
+                        return res;
+                    }
+                    boolean ok = service.swipe(fromX, fromY, toX, toY, dur);
+                    res.put("success", ok);
+                    res.put("message", ok ? "滑动完成 (" + fromX + "," + fromY + ") -> (" + toX + "," + toY + ")" : "滑动失败");
+                    return res;
+                }
+
+                case "input":
+                case "type": {
+                    String text = json.optString("text", "");
+                    String target = json.optString("target", json.optString("target_id", ""));
+                    boolean ok = service.inputText(text, target);
+                    res.put("success", ok);
+                    res.put("message", ok ? "已成功注入文字: " + text : "未能找到可输入文字的输入框");
+                    return res;
+                }
+
+                case "key":
+                case "press_key": {
+                    String key = json.optString("key", "");
+                    boolean ok = service.performSystemKey(key);
+                    res.put("success", ok);
+                    res.put("message", ok ? "已执行按键: " + key : "按键执行失败或不受支持");
+                    return res;
+                }
+
+                default:
+                    res.put("success", false);
+                    res.put("error", "未知自动化操作: " + subAction);
+                    return res;
+            }
+
+        } catch (Throwable t) {
+            Log.e(TAG, "executePhoneControl error", t);
+            try {
+                res.put("success", false);
+                res.put("error", t.getMessage());
+            } catch (Throwable ignored) {}
+        }
+        return res;
     }
 
     /**

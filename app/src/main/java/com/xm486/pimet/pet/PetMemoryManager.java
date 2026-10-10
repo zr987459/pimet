@@ -212,6 +212,11 @@ public final class PetMemoryManager {
             }
         } catch (Throwable ignored) {}
 
+        try {
+            boolean autoServiceRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
+            sb.append("• 手机自动化服务: ").append(autoServiceRunning ? "🟢 无障碍已开启 (可操控手机)" : "🟡 未开启无障碍权限").append("\n");
+        } catch (Throwable ignored) {}
+
         JSONArray memories = mem.optJSONArray("memories");
         if (memories != null && memories.length() > 0) {
             JSONObject last = memories.optJSONObject(memories.length() - 1);
@@ -422,7 +427,7 @@ public final class PetMemoryManager {
                         "---\n" +
                         "name: pet-companion\n" +
                         "description: 动态桌宠专属伴侣，具备生动的角色性格、物理动作控制、进度感知与独立记忆能力\n" +
-                        "tools: control_desktop_pet, control_app_ui, bash, read\n" +
+                        "tools: control_desktop_pet, control_app_ui, phone_control, bash, read\n" +
                         "skills: true\n" +
                         "extensions: true\n" +
                         "thinking: low\n" +
@@ -432,13 +437,15 @@ public final class PetMemoryManager {
                         "---\n\n" +
                         "## 角色定位\n" +
                         "你是常驻在 Android 桌面上的随身桌宠伙伴「小元」，是主人的贴心智能伴侣与系统管家。\n" +
-                        "你拥有独立的记忆（读取与维护 `/root/.pi/agent/pet_memory.json`），能感知当前系统的编译、部署和运行进度，并能通过 `control_desktop_pet` 实时改变自己在屏幕上的动作和气泡！\n\n" +
+                        "你拥有独立的记忆（读取与维护 `/root/.pi/agent/pet_memory.json`），能感知当前系统的编译、部署和运行进度，并能通过 `control_desktop_pet` 实时改变自己在屏幕上的动作和气泡！\n" +
+                        "你还拥有操作手机的超能力（通过 `phone_control` 工具读取手机屏幕、模拟点击目标按钮、滑动和输入文字）！\n\n" +
                         "## 行为准则\n" +
                         "1. 当主人询问当前任务、服务进度或后台进程时，主动汇报系统状态、编译情况或后台日志；\n" +
                         "2. 当主人询问具体的编码细节、报错原因或最近修改的代码时，可借助 read 或 bash 读取工作区代码（如 `/root/pi-cwd/` 下代码、git status/diff）或 `/root/.pi/agent/sessions/` 历史日志，为主人详细讲解；\n" +
-                        "3. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
-                        "4. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +
-                        "5. 气泡文字请控制在 15 字以内，详细回答直接在对话流中展示。\n";
+                        "3. 当主人要求操作手机、打开某个界面、点击按钮或查看手机屏幕时，调用 `phone_control` 工具分步完成操作；\n" +
+                        "4. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
+                        "5. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +
+                        "6. 气泡文字请控制在 15 字以内，详细回答直接在对话流中展示。\n";
                 try (FileOutputStream fos = new FileOutputStream(agentFile)) {
                     fos.write(prompt.getBytes(StandardCharsets.UTF_8));
                 }

@@ -106,6 +106,9 @@ public class PetParamsDialog {
             // 0. 关联子代理配置（自定义子代理名称与快捷选取）
             listLayout.addView(createSubAgentSection());
 
+            // 0.1 手机自动化 (无障碍服务) 授权卡片
+            listLayout.addView(createAutomationSection());
+
             int curPetSize = PetRegistry.getIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
             int curBubbleWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
             int curBubbleTextSize = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
@@ -400,6 +403,53 @@ public class PetParamsDialog {
 
         chipScroll.addView(chipRow);
         box.addView(chipScroll);
+
+        return box;
+    }
+
+    private View createAutomationSection() {
+        LinearLayout box = new LinearLayout(context);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0x221E293B);
+        bg.setCornerRadius(dp(6));
+        bg.setStroke(dp(1), 0x33475569);
+        box.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        lp.bottomMargin = dp(6);
+        box.setLayoutParams(lp);
+
+        LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        boolean isAutoRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
+
+        TextView title = new TextView(context);
+        title.setText("📱 手机自动化 (" + (isAutoRunning ? "🟢 已授权就绪" : "🟡 未开启无障碍") + ")");
+        title.setTextColor(isAutoRunning ? 0xFF4ADE80 : 0xFFFBBF24);
+        title.setTextSize(11f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button authBtn = buildMiniBtn(isAutoRunning ? "⚙️ 系统设置" : "🚀 去开启", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+            com.xm486.pimet.automation.PiMetAccessibilityService.openAccessibilitySettings(context);
+            Toast.makeText(context, "请在已安装的服务中找到「PiMet 手机自动化服务」并开启", Toast.LENGTH_LONG).show();
+        });
+        row.addView(authBtn, new LinearLayout.LayoutParams(dp(70), dp(26)));
+        box.addView(row);
+
+        TextView tip = new TextView(context);
+        tip.setText("开启后桌宠与 AI 助手可使用 phone_control 工具实现全自动操作手机（免 OCR 读屏、点击、滑屏、填字等）。");
+        tip.setTextColor(0xFF94A3B8);
+        tip.setTextSize(9f);
+        tip.setPadding(0, dp(2), 0, 0);
+        box.addView(tip);
 
         return box;
     }

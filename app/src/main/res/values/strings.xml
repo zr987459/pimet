@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PiMet</string>
+    <string name="accessibility_service_desc">PiMet 手机自动化服务：供大模型 AI 与桌宠执行点击、滑动、读取屏幕元素及全局按键导航。</string>
 </resources>
