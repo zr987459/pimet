@@ -285,7 +285,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         int maxW = Math.min(dp(220), (int)(dm.widthPixels * 0.78f));
         bubbleView.setMaxWidth(maxW);
-        bubbleView.setText("💬 " + msg + "\n(👉 点击进入互动)");
+        bubbleView.setText("💬 " + msg);
 
         // 核心：测量气泡高度并将桌宠顶开至气泡下方，杜绝气泡遮挡桌宠
         layoutChatBubble();

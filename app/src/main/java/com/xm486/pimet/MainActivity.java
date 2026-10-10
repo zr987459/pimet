@@ -215,9 +215,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isDetailLogMode = false;
 
     // 更新中心组件
-    private TextView settingsPiWebVersionTv;
     private TextView settingsAppVersionTv;
-    private View btnCheckPiWebUpdate;
     private View btnCheckAppUpdate;
 
     // Pi-Web 工作台视图组件
@@ -292,7 +290,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnSyncClipboard;
     private View btnFloatClipboard;
 
-    private Button btnOpenSubagentsSettings;
     private Button btnToggleProactiveSettings;
     private Button btnAdjustProactiveIntervalSettings;
 
@@ -349,6 +346,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (getIntent() != null && getIntent().getBooleanExtra("pimet.open_web", false)) {
             mainHandler.postDelayed(() -> switchTab(1), 300);
+        }
+        if (getIntent() != null && (getIntent().getBooleanExtra("pimet.open_settings", false)
+                || getIntent().getBooleanExtra("devpetm.open_ai_tab", false))) {
+            mainHandler.postDelayed(() -> switchTab(3), 300);
         }
         if (getIntent() != null && (getIntent().getBooleanExtra("pimet.toggle_web_fullscreen", false)
                 || getIntent().getBooleanExtra("pimet.open_pet_chat", false))) {
@@ -414,9 +415,7 @@ public class MainActivity extends AppCompatActivity {
         btnLaunchLogClear = findViewById(R.id.btnLaunchLogClear);
         launchLogTv = findViewById(R.id.launchLogTv);
 
-        settingsPiWebVersionTv = findViewById(R.id.settingsPiWebVersionTv);
         settingsAppVersionTv = findViewById(R.id.settingsAppVersionTv);
-        btnCheckPiWebUpdate = findViewById(R.id.btnCheckPiWebUpdate);
         btnCheckAppUpdate = findViewById(R.id.btnCheckAppUpdate);
 
         // Pi-Web 组件
@@ -492,7 +491,6 @@ public class MainActivity extends AppCompatActivity {
         btnPetShop = findViewById(R.id.btnPetShop);
         btnToggleGlobalOverlay = findViewById(R.id.btnToggleGlobalOverlay);
 
-        btnOpenSubagentsSettings = findViewById(R.id.btnOpenSubagentsSettings);
         btnToggleProactiveSettings = findViewById(R.id.btnToggleProactiveSettings);
         btnAdjustProactiveIntervalSettings = findViewById(R.id.btnAdjustProactiveIntervalSettings);
     }
@@ -3249,10 +3247,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initSubagentsAndProactiveSettings() {
-        if (btnOpenSubagentsSettings != null) {
-            btnOpenSubagentsSettings.setOnClickListener(v -> new com.xm486.pimet.subagent.SubAgentDialog(this).show());
-        }
-
         updateProactiveSettingsUi();
 
         if (btnToggleProactiveSettings != null) {
@@ -3319,55 +3313,49 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initUpdateCenter() {
-        if (settingsPiWebVersionTv != null) {
-            settingsPiWebVersionTv.setText("已安装版本: " + UpdateManager.getInstalledPiWebVersion(this));
-        }
         if (settingsAppVersionTv != null) {
             settingsAppVersionTv.setText("当前客户端版本: v" + PiMetConfig.getAppVersion(this));
-        }
-
-        if (btnCheckPiWebUpdate != null) {
-            btnCheckPiWebUpdate.setOnClickListener(v -> {
-                btnCheckPiWebUpdate.setEnabled(false);
-                Toast.makeText(this, "正在检测 Pi-Web 最新版本...", Toast.LENGTH_SHORT).show();
-                UpdateManager.checkPiWebUpdate(this, (success, info, message) -> {
-                    btnCheckPiWebUpdate.setEnabled(true);
-                    if (info != null && info.hasUpdate) {
-                        new AlertDialog.Builder(this)
-                                .setTitle("🌐 发现 Pi-Web 工作台新版")
-                                .setMessage("当前版本: " + info.currentVersion + "\n最新版本: " + info.latestVersion + "\n\n升级采用平滑原地增量更新，将保留您所有的会话、插件与配置。\n是否立即无感升级？")
-                                .setPositiveButton("立即平滑升级", (d, w) -> {
-                                    Toast.makeText(this, "正在无感平滑升级 Pi-Web，请稍候...", Toast.LENGTH_LONG).show();
-                                    UpdateManager.updatePiWebInPlace(this, (upOk, data, upMsg) -> {
-                                        Toast.makeText(this, upMsg, Toast.LENGTH_LONG).show();
-                                        if (settingsPiWebVersionTv != null) {
-                                            settingsPiWebVersionTv.setText("已安装版本: " + UpdateManager.getInstalledPiWebVersion(this));
-                                        }
-                                    });
-                                })
-                                .setNegativeButton("稍后", null)
-                                .show();
-                    } else {
-                        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
-                    }
-                });
-            });
         }
 
         if (btnCheckAppUpdate != null) {
             btnCheckAppUpdate.setOnClickListener(v -> {
                 btnCheckAppUpdate.setEnabled(false);
-                Toast.makeText(this, "正在检测客户端新版...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "正在检测网络并优选下载线路...", Toast.LENGTH_SHORT).show();
                 UpdateManager.checkAppUpdate(this, (success, info, message) -> {
                     btnCheckAppUpdate.setEnabled(true);
                     if (info != null && info.hasUpdate) {
+                        String routeTip = (info.bestRouteName != null ? info.bestRouteName : "优选线路") +
+                                (info.routeLatencyMs > 0 ? " (" + info.routeLatencyMs + "ms)" : "");
+
+                        String msg = (info.releaseTitle != null && !info.releaseTitle.isEmpty() ? info.releaseTitle + "\n\n" : "") +
+                                "【网络优选线路】" + routeTip + "\n\n" +
+                                "【更新内容】\n" + (info.changelog != null && !info.changelog.isEmpty() ? info.changelog : "常规体验与底层稳定性优化") +
+                                "\n\n【说明】更新采用安全覆盖安装，完整保留现有所有数据、配置、会话与桌宠。";
+
                         new AlertDialog.Builder(this)
                                 .setTitle("✨ 发现 PiMet 客户端新版本 " + info.latestVersion)
-                                .setMessage((info.releaseTitle != null ? info.releaseTitle + "\n\n" : "") +
-                                        "【更新日志】\n" + (info.changelog != null && !info.changelog.isEmpty() ? info.changelog : "常规体验与稳定性优化") +
-                                        "\n\n【提示】更新采用安全覆盖安装，完整保留现有数据、容器与桌宠。")
-                                .setPositiveButton("下载更新", (d, w) -> UpdateManager.startApkDownload(this, info.downloadUrl))
-                                .setNegativeButton("稍后再说", null)
+                                .setMessage(msg)
+                                .setPositiveButton("📥 本地下载", (d, w) -> {
+                                    UpdateManager.downloadLocally(this, info.bestDownloadUrl, info.latestVersion);
+                                })
+                                .setNeutralButton("📋 复制链接", (d, w) -> {
+                                    UpdateManager.copyDownloadLink(this, info.bestDownloadUrl);
+                                })
+                                .setNegativeButton("🌐 浏览器打开", (d, w) -> {
+                                    UpdateManager.startApkDownload(this, info.bestDownloadUrl);
+                                })
+                                .show();
+                    } else if (info != null) {
+                        String routeTip = (info.bestRouteName != null ? info.bestRouteName : "优选线路") +
+                                (info.routeLatencyMs > 0 ? " (" + info.routeLatencyMs + "ms)" : "");
+                        new AlertDialog.Builder(this)
+                                .setTitle("✔ 当前已是最新版本")
+                                .setMessage("当前安装版本: v" + info.currentVersion + "\n已连通线路: " + routeTip +
+                                        "\n\n暂无可用新版本，若需备份或在其他设备安装，可复制安装包下载链接。")
+                                .setPositiveButton("我知道了", null)
+                                .setNeutralButton("📋 复制安装包链接", (d, w) -> {
+                                    UpdateManager.copyDownloadLink(this, info.bestDownloadUrl);
+                                })
                                 .show();
                     } else {
                         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
@@ -4267,6 +4255,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (intent != null && intent.getBooleanExtra("pimet.open_web", false)) {
             switchTab(1);
+        }
+        if (intent != null && (intent.getBooleanExtra("pimet.open_settings", false)
+                || intent.getBooleanExtra("devpetm.open_ai_tab", false))) {
+            switchTab(3);
         }
         if (intent != null && (intent.getBooleanExtra("pimet.toggle_web_fullscreen", false)
                 || intent.getBooleanExtra("pimet.open_pet_chat", false))) {

@@ -326,14 +326,18 @@ public class PetMenu {
 
             TextView btnProgress = buildCompactActionBtn("🧠 汇报进度", 0x228B5CF6, 0x558B5CF6, 0xFFDDD6FE, v -> {
                 dismiss();
-                String report = PetMemoryManager.getSystemProgressReport(context);
-                if (service != null) {
-                    service.showProactiveBubble(report);
-                    if (service.getPetView() != null) service.getPetView().playOneShot("waving");
-                } else if (activity != null) {
-                    activity.showPetBubble(report);
-                } else {
-                    Toast.makeText(context, report, Toast.LENGTH_LONG).show();
+                try {
+                    String report = PetMemoryManager.getSystemProgressReport(context);
+                    if (service != null) {
+                        service.showProactiveBubble(report);
+                        if (service.getPetView() != null) service.getPetView().playOneShot("waving");
+                    } else if (activity != null) {
+                        activity.showPetBubble(report);
+                    } else {
+                        Toast.makeText(context, report, Toast.LENGTH_LONG).show();
+                    }
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "btnProgress error", t);
                 }
             });
             petAgentRow.addView(btnProgress, new LinearLayout.LayoutParams(0, dp(23), 1f));
@@ -357,31 +361,6 @@ public class PetMenu {
             petAgentRow.addView(btnProactive, new LinearLayout.LayoutParams(0, dp(23), 1f));
             root.addView(petAgentRow);
 
-            // ---- 子代理中心与预设话题行 ----
-            LinearLayout petExtraRow = new LinearLayout(context);
-            petExtraRow.setOrientation(LinearLayout.HORIZONTAL);
-            petExtraRow.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams extraLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
-            extraLp.bottomMargin = dp(4);
-            petExtraRow.setLayoutParams(extraLp);
-
-            TextView btnPreset = buildCompactActionBtn("💭 预设话题", 0x22F59E0B, 0x55F59E0B, 0xFFFDE68A, v -> {
-                dismiss();
-                showPresetTopicsDialog();
-            });
-            petExtraRow.addView(btnPreset, new LinearLayout.LayoutParams(0, dp(23), 1f));
-
-            View exSpace = new View(context);
-            petExtraRow.addView(exSpace, new LinearLayout.LayoutParams(dp(3), 1));
-
-            TextView btnSubAgents = buildCompactActionBtn("🤖 子代理中心", 0x2238BDF8, 0x5538BDF8, 0xFFBAE6FD, v -> {
-                dismiss();
-                new com.xm486.pimet.subagent.SubAgentDialog(context).show();
-            });
-            petExtraRow.addView(btnSubAgents, new LinearLayout.LayoutParams(0, dp(23), 1f));
-            root.addView(petExtraRow);
-
             // ---- 底部操作功能键行 1: [💬 快捷聊天(直接打开对应网页端)] [🌐 工作台] ----
             LinearLayout actionRow1 = new LinearLayout(context);
             actionRow1.setOrientation(LinearLayout.HORIZONTAL);
@@ -389,8 +368,12 @@ public class PetMenu {
 
             TextView chatBtn = buildCompactActionBtn("💬 快捷聊天", 0x2210B981, 0x5510B981, 0xFFA7F3D0, v -> {
                 dismiss();
-                String target = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
-                openConsole(target);
+                try {
+                    String target = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+                    openConsole(target);
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "chatBtn error", t);
+                }
             });
             actionRow1.addView(chatBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
 
@@ -399,13 +382,17 @@ public class PetMenu {
 
             TextView webBtn = buildCompactActionBtn("🌐 工作台", 0x223B82F6, 0x553B82F6, 0xFF93C5FD, v -> {
                 dismiss();
-                if (activity != null) {
-                    activity.switchTab(1);
-                } else {
-                    Intent intent = new Intent(context, MainActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                    intent.putExtra("pimet.open_web", true);
-                    context.startActivity(intent);
+                try {
+                    if (activity != null) {
+                        activity.switchTab(1);
+                    } else {
+                        Intent intent = new Intent(context, MainActivity.class);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        intent.putExtra("pimet.open_web", true);
+                        context.startActivity(intent);
+                    }
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "webBtn failed", t);
                 }
             });
             actionRow1.addView(webBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
@@ -421,13 +408,18 @@ public class PetMenu {
 
             TextView setBtn = buildCompactActionBtn("⚙️ 设置", 0x22F59E0B, 0x55F59E0B, 0xFFFCD34D, v -> {
                 dismiss();
-                if (activity != null) {
-                    activity.switchTab(3);
-                } else {
-                    Intent intent = new Intent(context, MainActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                    intent.putExtra("devpetm.open_ai_tab", true);
-                    context.startActivity(intent);
+                try {
+                    if (activity != null) {
+                        activity.switchTab(3);
+                    } else {
+                        Intent intent = new Intent(context, MainActivity.class);
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        intent.putExtra("pimet.open_settings", true);
+                        intent.putExtra("devpetm.open_ai_tab", true);
+                        context.startActivity(intent);
+                    }
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "setBtn failed", t);
                 }
             });
             actionRow2.addView(setBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
@@ -437,11 +429,16 @@ public class PetMenu {
 
             TextView stopBtn = buildCompactActionBtn("🔴 关闭", 0x22EF4444, 0x55EF4444, 0xFFFCA5A5, v -> {
                 dismiss();
-                if (service != null) {
-                    service.stopSelf();
-                }
-                if (activity != null) {
-                    activity.updatePetDisplay(false);
+                try {
+                    PetRegistry.setPetEnabled(context, false);
+                    if (service != null) {
+                        service.stopSelf();
+                    }
+                    if (activity != null) {
+                        activity.updatePetDisplay(false);
+                    }
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "stopBtn failed", t);
                 }
             });
             actionRow2.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
@@ -511,49 +508,53 @@ public class PetMenu {
 
     private void openConsole(String targetKey) {
         dismiss();
-        if (service != null) {
-            service.openConsoleForTarget(targetKey);
-            return;
-        }
-        PetOverlayService s = PetOverlayService.getInstance();
-        if (s != null) {
-            s.openConsoleForTarget(targetKey);
-            return;
-        }
-        if (activity != null) {
-            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
-                activity.switchTab(1);
+        try {
+            if (service != null) {
+                service.openConsoleForTarget(targetKey);
                 return;
             }
-        }
-        int port;
-        if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) {
-            port = PetRegistry.getClawbenchPort(context);
-        } else if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
-            port = PetRegistry.getPiWebPort(context);
-        } else if (PetRegistry.TARGET_RIKKA.equals(targetKey)) {
-            port = PetRegistry.getIntPref(context, PetRegistry.KEY_RK_PORT, PetRegistry.DEFAULT_RK_PORT);
-        } else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) {
-            port = PetRegistry.getOperitPort(context);
-        } else {
-            Intent intent = new Intent(context, MainActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            intent.putExtra("devpetm.open_ai_tab", true);
-            context.startActivity(intent);
-            return;
-        }
+            PetOverlayService s = PetOverlayService.getInstance();
+            if (s != null) {
+                s.openConsoleForTarget(targetKey);
+                return;
+            }
+            if (activity != null) {
+                if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                    activity.switchTab(1);
+                    return;
+                }
+            }
+            int port;
+            if (PetRegistry.TARGET_CLAWBENCH.equals(targetKey)) {
+                port = PetRegistry.getClawbenchPort(context);
+            } else if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                port = PetRegistry.getPiWebPort(context);
+            } else if (PetRegistry.TARGET_RIKKA.equals(targetKey)) {
+                port = PetRegistry.getIntPref(context, PetRegistry.KEY_RK_PORT, PetRegistry.DEFAULT_RK_PORT);
+            } else if (PetRegistry.TARGET_OPERIT.equals(targetKey)) {
+                port = PetRegistry.getOperitPort(context);
+            } else {
+                Intent intent = new Intent(context, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                intent.putExtra("devpetm.open_ai_tab", true);
+                context.startActivity(intent);
+                return;
+            }
 
-        try {
-            Intent intent = new Intent(context, PiWebActivity.class);
-            intent.putExtra(PiWebActivity.EXTRA_PORT, port);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            context.startActivity(intent);
-        } catch (Throwable t) {
             try {
-                Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
-                browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(browser);
-            } catch (Throwable ignored) {}
+                Intent intent = new Intent(context, PiWebActivity.class);
+                intent.putExtra(PiWebActivity.EXTRA_PORT, port);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+            } catch (Throwable t) {
+                try {
+                    Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
+                    browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(browser);
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable t) {
+            Log.e("PetMenu", "openConsole error", t);
         }
     }
 
@@ -687,42 +688,39 @@ public class PetMenu {
             }
         }
 
-        new android.app.AlertDialog.Builder(context)
-                .setTitle("🗣️ 桌宠活跃度与主动说话频率")
-                .setSingleChoiceItems(options, checkedItem, (dialogInterface, which) -> {
-                    dialogInterface.dismiss();
-                    if (which == 4) {
-                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, false);
-                        if (service != null) service.stopProactiveChatter();
-                        Toast.makeText(context, "已关闭桌宠主动说话", Toast.LENGTH_SHORT).show();
+        try {
+            android.app.AlertDialog alert = new android.app.AlertDialog.Builder(context)
+                    .setTitle("🗣️ 桌宠活跃度与主动说话频率")
+                    .setSingleChoiceItems(options, checkedItem, (dialogInterface, which) -> {
+                        dialogInterface.dismiss();
+                        if (which == 4) {
+                            PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, false);
+                            if (service != null) service.stopProactiveChatter();
+                            Toast.makeText(context, "已关闭桌宠主动说话", Toast.LENGTH_SHORT).show();
+                        } else {
+                            int m = minutes[which];
+                            PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
+                            PetMemoryManager.setProactiveIntervalMin(context, m);
+                            if (service != null) service.startProactiveChatter();
+                            Toast.makeText(context, "已设置为: " + options[which], Toast.LENGTH_SHORT).show();
+                        }
+                    })
+                    .setNegativeButton("取消", null)
+                    .create();
+
+            if (!(context instanceof android.app.Activity)) {
+                if (alert.getWindow() != null) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        alert.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
                     } else {
-                        int m = minutes[which];
-                        PetRegistry.setBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
-                        PetMemoryManager.setProactiveIntervalMin(context, m);
-                        if (service != null) service.startProactiveChatter();
-                        Toast.makeText(context, "已设置为: " + options[which], Toast.LENGTH_SHORT).show();
+                        alert.getWindow().setType(WindowManager.LayoutParams.TYPE_PHONE);
                     }
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void showPresetTopicsDialog() {
-        final java.util.List<String> topics = PetMemoryManager.getPresetTopics(context);
-        final String[] items = topics.toArray(new String[0]);
-
-        new android.app.AlertDialog.Builder(context)
-                .setTitle("💭 选择预设话题快速互动")
-                .setItems(items, (dialogInterface, which) -> {
-                    String chosen = topics.get(which);
-                    if (service != null) {
-                        service.sendPromptDirectly(chosen);
-                    } else if (activity != null) {
-                        activity.showPetBubble("收到指令: " + chosen);
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+                }
+            }
+            alert.show();
+        } catch (Throwable t) {
+            Log.e("PetMenu", "showActivenessDialog failed", t);
+        }
     }
 
     public void dismiss() {

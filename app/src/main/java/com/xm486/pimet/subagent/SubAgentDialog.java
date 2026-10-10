@@ -125,6 +125,13 @@ public class SubAgentDialog {
 
         Window window = mainDialog.getWindow();
         if (window != null) {
+            if (!(context instanceof android.app.Activity)) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                } else {
+                    window.setType(WindowManager.LayoutParams.TYPE_PHONE);
+                }
+            }
             window.setBackgroundDrawableResource(android.R.color.transparent);
             WindowManager.LayoutParams lp = window.getAttributes();
             lp.width = (int) (context.getResources().getDisplayMetrics().widthPixels * 0.94f);

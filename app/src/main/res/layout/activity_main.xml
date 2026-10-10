@@ -1258,7 +1258,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="🔄 组件与应用更新中心"
+                        android:text="🚀 客户端更新中心"
                         android:textColor="#F0F6FC"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -1267,66 +1267,15 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="支持平滑增量与安全更新，绝不重置用户配置、会话与桌宠数据"
+                        android:text="支持自动测速优选下载线路、本地下载与复制下载链接，保留所有现有数据平滑覆盖安装"
                         android:textColor="#8B949E"
                         android:textSize="12sp" />
 
-                    <!-- 1. Pi-Web 工作台更新行 -->
+                    <!-- PiMet 客户端应用更新行 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🌐 Pi-Web 工作台"
-                                android:textColor="#E6EDF3"
-                                android:textSize="13sp"
-                                android:textStyle="bold" />
-
-                            <TextView
-                                android:id="@+id/settingsPiWebVersionTv"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="已安装版本: 检测中..."
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-                        </LinearLayout>
-
-                        <TextView
-                            android:id="@+id/btnCheckPiWebUpdate"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="🔄 检查更新"
-                            android:textColor="#58A6FF"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginTop="10dp"
-                        android:layout_marginBottom="10dp"
-                        android:background="#21262D" />
-
-                    <!-- 2. PiMet 客户端应用更新行 -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
@@ -1349,7 +1298,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
-                                android:text="当前版本: v1.3.0"
+                                android:text="当前版本: v1.3.4"
                                 android:textColor="#8B949E"
                                 android:textSize="11sp" />
                         </LinearLayout>
@@ -1877,42 +1826,6 @@
                         android:gravity="center"
                         android:text="🌐 系统全局桌宠悬浮窗: 点击切换"
                         android:textColor="#3FB950"
-                        android:textSize="12sp" />
-                </LinearLayout>
-
-                <!-- 🤖 Pi 子代理中心 (Subagents) 管理卡片 -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/bg_card_modern"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="🤖 Pi 子代理中心 (Subagents)"
-                        android:textColor="#F0F6FC"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="与 Web 工作台及 ~/.pi/agent/agents/*.md 规范实时互通。支持设置工具白名单、技能、模型、思考级别、轮次与系统指令"
-                        android:textColor="#8B949E"
-                        android:textSize="12sp" />
-
-                    <Button
-                        android:id="@+id/btnOpenSubagentsSettings"
-                        android:layout_width="match_parent"
-                        android:layout_height="38dp"
-                        android:layout_marginTop="12dp"
-                        android:background="@drawable/bg_btn_secondary"
-                        android:text="🤖 管理子代理智能体 (浏览/新建/配置)"
-                        android:textColor="#58A6FF"
                         android:textSize="12sp" />
                 </LinearLayout>
 
