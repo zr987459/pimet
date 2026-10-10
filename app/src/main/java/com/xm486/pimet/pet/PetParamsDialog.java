@@ -5,16 +5,23 @@ import android.content.Context;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 桌宠二级详细设置弹窗：专门用于调节尺寸、气泡字号与宽度、物理惯性、活跃度与动作。
@@ -95,6 +102,9 @@ public class PetParamsDialog {
 
             LinearLayout listLayout = new LinearLayout(context);
             listLayout.setOrientation(LinearLayout.VERTICAL);
+
+            // 0. 关联子代理配置（自定义子代理名称与快捷选取）
+            listLayout.addView(createSubAgentSection());
 
             int curPetSize = PetRegistry.getIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
             int curBubbleWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
@@ -268,6 +278,130 @@ public class PetParamsDialog {
         } catch (Throwable t) {
             android.util.Log.w("DevPetM.PetParams", "show params dialog failed", t);
         }
+    }
+
+    private View createSubAgentSection() {
+        LinearLayout box = new LinearLayout(context);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), dp(6), dp(8), dp(6));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0x221E293B);
+        bg.setCornerRadius(dp(6));
+        bg.setStroke(dp(1), 0x33475569);
+        box.setBackground(bg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(2);
+        lp.bottomMargin = dp(6);
+        box.setLayoutParams(lp);
+
+        TextView title = new TextView(context);
+        title.setText("🤖 关联子代理 (SubAgent)");
+        title.setTextColor(0xFF38BDF8);
+        title.setTextSize(11f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
+
+        TextView tip = new TextView(context);
+        tip.setText("自定义要绑定的子代理名字。桌宠输入 . 开头或询问进程/代码将自动路由至此：");
+        tip.setTextColor(0xFF94A3B8);
+        tip.setTextSize(9f);
+        tip.setPadding(0, dp(1), 0, dp(4));
+        box.addView(tip);
+
+        ChatConfig config = ChatConfig.load(context);
+
+        // 输入与保存行
+        LinearLayout editRow = new LinearLayout(context);
+        editRow.setOrientation(LinearLayout.HORIZONTAL);
+        editRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText etAgent = new EditText(context);
+        etAgent.setText(config.targetSubAgent != null ? config.targetSubAgent : "");
+        etAgent.setHint("子代理名，如 pet-companion");
+        etAgent.setHintTextColor(0xFF64748B);
+        etAgent.setTextColor(0xFFF1F5F9);
+        etAgent.setTextSize(11f);
+        etAgent.setSingleLine(true);
+        etAgent.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        GradientDrawable etBg = new GradientDrawable();
+        etBg.setColor(0x220F172A);
+        etBg.setCornerRadius(dp(4));
+        etBg.setStroke(dp(1), 0x4464748B);
+        etAgent.setBackground(etBg);
+
+        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, dp(30), 1f);
+        editRow.addView(etAgent, etLp);
+
+        Button saveAgentBtn = buildMiniBtn("💾 保存", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+            String newName = etAgent.getText().toString().trim();
+            config.targetSubAgent = newName;
+            config.save(context);
+            if (service != null && service.getChatBridge() != null) {
+                service.getChatBridge().updateInputHint();
+            }
+            Toast.makeText(context, TextUtils.isEmpty(newName) ? "已恢复为普通伴侣 (未绑定子代理)" : "已绑定子代理: @" + newName, Toast.LENGTH_SHORT).show();
+        });
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(dp(54), dp(30));
+        btnLp.leftMargin = dp(6);
+        editRow.addView(saveAgentBtn, btnLp);
+        box.addView(editRow);
+
+        // 快捷标签横滑容器 (列出已存在的全部子代理)
+        HorizontalScrollView chipScroll = new HorizontalScrollView(context);
+        chipScroll.setHorizontalScrollBarEnabled(false);
+        chipScroll.setPadding(0, dp(4), 0, 0);
+
+        LinearLayout chipRow = new LinearLayout(context);
+        chipRow.setOrientation(LinearLayout.HORIZONTAL);
+
+        List<String> agentList = new ArrayList<>();
+        agentList.add("pet-companion");
+        try {
+            List<com.xm486.pimet.subagent.SubAgentInfo> all = com.xm486.pimet.subagent.SubAgentManager.listAllAgents(context);
+            for (com.xm486.pimet.subagent.SubAgentInfo info : all) {
+                if (info != null && !TextUtils.isEmpty(info.id) && !agentList.contains(info.id)) {
+                    agentList.add(info.id);
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        for (String id : agentList) {
+            Button chip = buildMiniBtn(id, 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
+                etAgent.setText(id);
+                config.targetSubAgent = id;
+                config.save(context);
+                if (service != null && service.getChatBridge() != null) {
+                    service.getChatBridge().updateInputHint();
+                }
+                Toast.makeText(context, "已绑定子代理: @" + id, Toast.LENGTH_SHORT).show();
+            });
+            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(24));
+            cLp.rightMargin = dp(4);
+            chipRow.addView(chip, cLp);
+        }
+
+        Button offChip = buildMiniBtn("🚫 关闭", 0x22EF4444, 0x44EF4444, 0xFFFCA5A5, v -> {
+            etAgent.setText("");
+            config.targetSubAgent = "";
+            config.save(context);
+            if (service != null && service.getChatBridge() != null) {
+                service.getChatBridge().updateInputHint();
+            }
+            Toast.makeText(context, "已关闭子代理路由 (恢复为普通伴侣)", Toast.LENGTH_SHORT).show();
+        });
+        LinearLayout.LayoutParams offLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(24));
+        chipRow.addView(offChip, offLp);
+
+        chipScroll.addView(chipRow);
+        box.addView(chipScroll);
+
+        return box;
     }
 
     private interface OnSliderChange {

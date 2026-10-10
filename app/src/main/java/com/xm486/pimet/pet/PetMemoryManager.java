@@ -197,6 +197,21 @@ public final class PetMemoryManager {
         sb.append("• 宿主设备电量: ").append(batteryPct).append("%").append(isCharging ? " ⚡ (充电中)" : "").append("\n");
         sb.append("• 桌宠状态: 心情【").append(mood).append("】· 亲密度: ").append(intimacy).append("点 (累计互动 ").append(count).append(" 次)\n");
 
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            if (rootfs != null && rootfs.exists()) {
+                File stateFile = new File(rootfs, "root/.pi/agent/pi-web-session-state.json");
+                if (stateFile.exists()) {
+                    String jsonStr = new String(java.nio.file.Files.readAllBytes(stateFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                    JSONObject stateObj = new JSONObject(jsonStr);
+                    JSONArray order = stateObj.optJSONArray("projectOrder");
+                    if (order != null && order.length() > 0) {
+                        sb.append("• 当前主工作区: ").append(order.optString(0)).append("\n");
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
         JSONArray memories = mem.optJSONArray("memories");
         if (memories != null && memories.length() > 0) {
             JSONObject last = memories.optJSONObject(memories.length() - 1);
@@ -419,10 +434,11 @@ public final class PetMemoryManager {
                         "你是常驻在 Android 桌面上的随身桌宠伙伴「小元」，是主人的贴心智能伴侣与系统管家。\n" +
                         "你拥有独立的记忆（读取与维护 `/root/.pi/agent/pet_memory.json`），能感知当前系统的编译、部署和运行进度，并能通过 `control_desktop_pet` 实时改变自己在屏幕上的动作和气泡！\n\n" +
                         "## 行为准则\n" +
-                        "1. 当主人询问当前任务或服务进度时，主动汇报系统状态、编译情况或后台日志；\n" +
-                        "2. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
-                        "3. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +
-                        "4. 气泡文字请控制在 15 字以内，详细回答直接在对话流中展示。\n";
+                        "1. 当主人询问当前任务、服务进度或后台进程时，主动汇报系统状态、编译情况或后台日志；\n" +
+                        "2. 当主人询问具体的编码细节、报错原因或最近修改的代码时，可借助 read 或 bash 读取工作区代码（如 `/root/pi-cwd/` 下代码、git status/diff）或 `/root/.pi/agent/sessions/` 历史日志，为主人详细讲解；\n" +
+                        "3. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
+                        "4. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +
+                        "5. 气泡文字请控制在 15 字以内，详细回答直接在对话流中展示。\n";
                 try (FileOutputStream fos = new FileOutputStream(agentFile)) {
                     fos.write(prompt.getBytes(StandardCharsets.UTF_8));
                 }
