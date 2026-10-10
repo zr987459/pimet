@@ -182,7 +182,7 @@ public final class UpdateManager {
                 String cmd = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
                         "npm install -g --loglevel=error --no-audit --no-fund @agegr/pi-web@latest --registry=" + normalizedRegistry;
 
-                ProotManager.executeCommandSync(context, cmd, 120000);
+                int code = ProotManager.executeCommandSync(context, cmd);
                 ProotManager.optimizePiWebOffline(context);
 
                 String newVer = getInstalledPiWebVersion(context);
