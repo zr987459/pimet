@@ -5279,7 +5279,7 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         updateLaunchPetUI();
-        updateServiceStateUI(isPiWebAlive, PiMetConfig.getWebPort(this));
+        updateLaunchStatusUI(isPiWebAlive);
 
         // 刷新悬浮球与悬浮菜单样式
         if (floatingBall != null) {
