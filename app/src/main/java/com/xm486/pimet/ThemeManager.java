@@ -40,30 +40,34 @@ public class ThemeManager {
         public final int bg;
         public final int bgPanel;
         public final int bgHover;
+        public final int bgSunken;
         public final int border;
         public final int text;
         public final int textMuted;
         public final int textDim;
         public final int accent;
         public final int accentHover;
+        public final int accentContrast;
         public final int accentSubtle;
         public final boolean isDark;
 
-        public ThemePalette(String id, String name, int bg, int bgPanel, int bgHover,
+        public ThemePalette(String id, String name, int bg, int bgPanel, int bgHover, int bgSunken,
                             int border, int text, int textMuted, int textDim,
-                            int accent, int accentHover, int accentSubtle,
+                            int accent, int accentHover, int accentContrast, int accentSubtle,
                             boolean isDark) {
             this.id = id;
             this.name = name;
             this.bg = bg;
             this.bgPanel = bgPanel;
             this.bgHover = bgHover;
+            this.bgSunken = bgSunken;
             this.border = border;
             this.text = text;
             this.textMuted = textMuted;
             this.textDim = textDim;
             this.accent = accent;
             this.accentHover = accentHover;
+            this.accentContrast = accentContrast;
             this.accentSubtle = accentSubtle;
             this.isDark = isDark;
         }
@@ -71,41 +75,41 @@ public class ThemeManager {
 
     public static final ThemePalette PALETTE_LIGHT = new ThemePalette(
             THEME_LIGHT, "浅色 (Light)",
-            0xFFFFFFFF, 0xFFF5F5F5, 0xFFEBEBEB,
-            0xFFE0E0E0, 0xFF1A1A1A, 0xFF666666, 0xFF999999,
-            0xFF245BCE, 0xFF1B4AB8, 0xFFEBF1FD,
+            0xFFFFFFFF, 0xFFF5F5F5, 0xFFEEEEEE, 0xFFF9FAFB,
+            0xFFE0E0E0, 0xFF1A1A1A, 0xFF515C6B, 0xFF5E6673,
+            0xFF245BCE, 0xFF1D4ED8, 0xFFFFFFFF, 0xFFEBF1FD,
             false
     );
 
     public static final ThemePalette PALETTE_DARK = new ThemePalette(
             THEME_DARK, "深色 (Dark)",
-            0xFF0D1117, 0xFF161B22, 0xFF21262D,
-            0xFF30363D, 0xFFF0F6FC, 0xFF8B949E, 0xFF6E7681,
-            0xFF58A6FF, 0xFF79B8FF, 0xFF1F2E4A,
+            0xFF1A1A1A, 0xFF242424, 0xFF2E2E2E, 0xFF222222,
+            0xFF454545, 0xFFE8E8E8, 0xFFB7B7B7, 0xFFA4A4A4,
+            0xFFA4C2F4, 0xFFC3D8FA, 0xFF182234, 0xFF293242,
             true
     );
 
     public static final ThemePalette PALETTE_MIST = new ThemePalette(
             THEME_MIST, "雾青 (Mist)",
-            0xFFF4F8F7, 0xFFE9F0EE, 0xFFDFE8E5,
-            0xFFAFC4BA, 0xFF202E2B, 0xFF5D7068, 0xFF8A9C94,
-            0xFF1E6559, 0xFF175248, 0xFFE3EFEA,
+            0xFFF4F8F7, 0xFFE9F0EE, 0xFFE0EAE7, 0xFFECF3F0,
+            0xFFAFC4BA, 0xFF202E2B, 0xFF455F56, 0xFF52685F,
+            0xFF1E6559, 0xFF174F46, 0xFFFFFFFF, 0xFFE0EFEB,
             false
     );
 
     public static final ThemePalette PALETTE_ROSE = new ThemePalette(
             THEME_ROSE, "蔷薇 (Rose)",
-            0xFFFCF7F8, 0xFFF3EDEF, 0xFFEAE1E4,
-            0xFFCDB5BF, 0xFF34282E, 0xFF7D6771, 0xFFA5909A,
-            0xFF914360, 0xFF78344D, 0xFFF7EBF0,
+            0xFFFCF7F8, 0xFFF3EDEF, 0xFFEEE3E7, 0xFFF7EEF2,
+            0xFFCDB5BF, 0xFF34282E, 0xFF65505A, 0xFF705B65,
+            0xFF914360, 0xFF76324D, 0xFFFFFFFF, 0xFFF3E4EB,
             false
     );
 
     public static final ThemePalette PALETTE_PINE = new ThemePalette(
             THEME_PINE, "松夜 (Pine)",
-            0xFF19201F, 0xFF212B28, 0xFF2B3834,
-            0xFF4A5F52, 0xFFE6EDE8, 0xFF8B9F93, 0xFF6E8075,
-            0xFFACCCB7, 0xFFC3D8CB, 0xFF23352B,
+            0xFF19201F, 0xFF212B28, 0xFF2B3632, 0xFF222D29,
+            0xFF4A5F52, 0xFFE6EDE8, 0xFFC3D0C6, 0xFFAFC2B5,
+            0xFFACCCB7, 0xFFD0E2D3, 0xFF182B20, 0xFF25382F,
             true
     );
 
@@ -177,43 +181,52 @@ public class ThemeManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             View decor = window.getDecorView();
             int flags = decor.getSystemUiVisibility();
+            int newFlags = flags;
             if (!palette.isDark) {
-                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                newFlags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             } else {
-                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                newFlags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!palette.isDark) {
-                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                    newFlags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
                 } else {
-                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                    newFlags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
                 }
             }
-            decor.setSystemUiVisibility(flags);
+            if (flags != newFlags) {
+                decor.setSystemUiVisibility(newFlags);
+            }
         }
     }
 
     public static void syncThemeToWebView(WebView webView, Context context) {
         if (webView == null || context == null) return;
-        String pref = getThemePreference(context);
-        final String effectiveTheme;
-        if (THEME_AUTO.equals(pref)) {
-            effectiveTheme = isSystemNightMode(context) ? THEME_DARK : THEME_LIGHT;
-        } else {
-            effectiveTheme = pref;
-        }
+        ThemePalette palette = getEffectivePalette(context);
+        final String effectiveTheme = palette.id;
+        final boolean isDark = palette.isDark;
+        final String bgHex = String.format("#%06X", (0xFFFFFF & palette.bg));
 
         String js = "(function() {" +
                 "  try {" +
-                "    localStorage.setItem('pi-theme', '" + effectiveTheme + "');" +
-                "    document.documentElement.dataset.theme = '" + effectiveTheme + "';" +
+                "    var theme = '" + effectiveTheme + "';" +
+                "    var isDark = " + isDark + ";" +
+                "    localStorage.setItem('pi-theme', theme);" +
+                "    document.documentElement.dataset.theme = theme;" +
+                "    document.documentElement.classList.toggle('dark', isDark);" +
                 "    var meta = document.querySelector('meta[name=\"theme-color\"]');" +
                 "    if (!meta) {" +
                 "      meta = document.createElement('meta');" +
                 "      meta.name = 'theme-color';" +
                 "      document.head.appendChild(meta);" +
                 "    }" +
-                "    meta.content = '" + (effectiveTheme.equals("light") ? "#ffffff" : "#0d1117") + "';" +
+                "    meta.content = '" + bgHex + "';" +
+                "    window.dispatchEvent(new StorageEvent('storage', {" +
+                "      key: 'pi-theme'," +
+                "      newValue: theme," +
+                "      storageArea: localStorage" +
+                "    }));" +
+                "    window.dispatchEvent(new CustomEvent('pi-theme-change', { detail: { theme: theme, isDark: isDark } }));" +
                 "  } catch (e) {}" +
                 "})();";
         webView.evaluateJavascript(js, null);
@@ -282,10 +295,25 @@ public class ThemeManager {
 
     public static GradientDrawable createSunkenDrawable(Context context, ThemePalette palette, float radiusDp) {
         GradientDrawable gd = new GradientDrawable();
-        int sunkenColor = palette.isDark ? palette.bg : palette.bgHover;
-        gd.setColor(sunkenColor);
+        gd.setColor(palette.bgSunken);
         gd.setCornerRadius(dpToPx(context, radiusDp));
         gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
+    public static GradientDrawable createSuccessButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        int greenColor = palette.isDark ? 0xFF238636 : 0xFF2EA043;
+        gd.setColor(greenColor);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        return gd;
+    }
+
+    public static GradientDrawable createDangerButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        int redColor = palette.isDark ? 0xFFDA3633 : 0xFFCF222E;
+        gd.setColor(redColor);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
         return gd;
     }
 
@@ -461,11 +489,19 @@ public class ThemeManager {
         // 3. 容器与面板 (ViewGroup)
         if (v instanceof ViewGroup) {
             if (idName != null) {
-                // 页面主根底色
-                if (idName.equals("viewLaunch") || idName.equals("viewPiWeb")
+                // 页面主根底色与主要容器
+                if (idName.equals("mainRootLayout") || idName.equals("viewLaunch")
+                        || idName.equals("viewPiWeb") || idName.equals("piWebOfflineCard")
                         || idName.equals("viewPlugins") || idName.equals("viewSettings")
                         || idName.equals("viewSettingsSubWindow")) {
                     v.setBackgroundColor(palette.bg);
+                    return;
+                }
+                // 状态角标与徽章 (包含端口Badge、桌宠开关Badge、文件管理Badge等)
+                if (idName.endsWith("Badge") || idName.startsWith("badge")
+                        || idName.equals("launchPortBadge") || idName.equals("launchPetStateBadge")
+                        || idName.equals("btnLaunchFileBadge")) {
+                    v.setBackground(createBadgeDrawable(ctx, palette, 6f));
                     return;
                 }
                 // 二级窗口顶栏

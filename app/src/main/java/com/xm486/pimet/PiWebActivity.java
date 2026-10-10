@@ -24,6 +24,10 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.xm486.pimet.translation.TranslationBridge;
+import com.xm486.pimet.translation.WebTranslationDialog;
+import com.xm486.pimet.translation.WebTranslationManager;
+
 import com.xm486.pimet.pet.PetRegistry;
 import com.xm486.pimet.ui.ThemeHelper;
 
@@ -118,6 +122,10 @@ public class PiWebActivity extends AppCompatActivity {
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        // 注册通用网页翻译原生桥接
+        TranslationBridge transBridge = new TranslationBridge(this, webView);
+        webView.addJavascriptInterface(transBridge, "PiMetTranslator");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -223,6 +231,18 @@ public class PiWebActivity extends AppCompatActivity {
         LinearLayout.LayoutParams extLp = (LinearLayout.LayoutParams) openExternalBtn.getLayoutParams();
         extLp.leftMargin = dp(4);
         topBar.addView(openExternalBtn);
+
+        // 网页翻译按钮 (点击切换翻译，长按进入配置)
+        Button transBtn = createTinyButton("文/A", v -> {
+            WebTranslationManager.toggleTranslation(webView, PiWebActivity.this);
+        });
+        transBtn.setOnLongClickListener(v -> {
+            WebTranslationDialog.show(PiWebActivity.this, webView);
+            return true;
+        });
+        LinearLayout.LayoutParams transLp = (LinearLayout.LayoutParams) transBtn.getLayoutParams();
+        transLp.leftMargin = dp(4);
+        topBar.addView(transBtn);
 
         // 收起顶栏按钮
         Button collapseBtn = createTinyButton("▲", v -> {

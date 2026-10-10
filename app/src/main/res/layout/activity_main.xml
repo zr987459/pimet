@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mainRootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0D1117"
+    android:background="@android:color/transparent"
     android:orientation="vertical">
 
     <!-- 主体内容区域 (4个页面切换) -->
@@ -349,6 +350,7 @@
                         </LinearLayout>
 
                         <TextView
+                            android:id="@+id/btnLaunchFileBadge"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="›"
@@ -554,7 +556,6 @@
                 android:id="@+id/piWebOfflineCard"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="#0D1117"
                 android:gravity="center"
                 android:orientation="vertical"
                 android:padding="24dp"

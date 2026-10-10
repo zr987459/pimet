@@ -80,6 +80,9 @@ import com.xm486.pimet.pet.PetRegistry;
 import com.xm486.pimet.pet.PetTypewriter;
 import com.xm486.pimet.pet.SpritePetView;
 import com.xm486.pimet.ui.StateStyle;
+import com.xm486.pimet.translation.TranslationBridge;
+import com.xm486.pimet.translation.WebTranslationDialog;
+import com.xm486.pimet.translation.WebTranslationManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -2487,53 +2490,56 @@ public class MainActivity extends AppCompatActivity {
             piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
         }
 
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         if (alive) {
             PiMetService.start(this);
             launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_green);
             launchStateTv.setText("服务运行中");
-            launchStateTv.setTextColor(0xFF3FB950);
+            launchStateTv.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
             launchSubtitleTv.setText("Pi-Web 守护进程正常监听中，可进入工作台或外部浏览器使用");
             btnLaunchMain.setText("🌐 进入 Pi-Web 工作台");
-            btnLaunchMain.setBackgroundResource(R.drawable.bg_btn_primary);
+            btnLaunchMain.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 10f));
+            btnLaunchMain.setTextColor(palette.accentContrast);
 
             if (btnLaunchStop != null) {
                 btnLaunchStop.setEnabled(true);
                 btnLaunchStop.setAlpha(1.0f);
-                btnLaunchStop.setBackgroundResource(R.drawable.bg_btn_danger);
+                btnLaunchStop.setBackground(ThemeManager.createDangerButtonDrawable(this, palette, 8f));
                 if (btnLaunchStop instanceof TextView) {
-                    ((TextView) btnLaunchStop).setTextColor(0xFFFCA5A5);
+                    ((TextView) btnLaunchStop).setTextColor(0xFFFFFFFF);
                 }
             }
             if (btnLaunchRestart != null) {
                 btnLaunchRestart.setEnabled(true);
                 btnLaunchRestart.setAlpha(1.0f);
-                btnLaunchRestart.setBackgroundResource(R.drawable.bg_btn_secondary);
+                btnLaunchRestart.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
                 if (btnLaunchRestart instanceof TextView) {
-                    ((TextView) btnLaunchRestart).setTextColor(0xFFC9D1D9);
+                    ((TextView) btnLaunchRestart).setTextColor(palette.text);
                 }
             }
         } else {
             launchStatusDot.setBackgroundResource(R.drawable.bg_status_dot_gray);
             launchStateTv.setText("服务已停止");
-            launchStateTv.setTextColor(0xFF8B949E);
+            launchStateTv.setTextColor(palette.textMuted);
             launchSubtitleTv.setText("内置 PRoot 容器环境已就绪，点击下方按钮启动 Pi-Web 守护服务");
             btnLaunchMain.setText("🚀 启动 Pi-Web 服务");
-            btnLaunchMain.setBackgroundResource(R.drawable.bg_btn_success);
+            btnLaunchMain.setBackground(ThemeManager.createSuccessButtonDrawable(this, palette, 10f));
+            btnLaunchMain.setTextColor(0xFFFFFFFF);
 
             if (btnLaunchStop != null) {
                 btnLaunchStop.setEnabled(false);
                 btnLaunchStop.setAlpha(0.35f);
-                btnLaunchStop.setBackgroundResource(R.drawable.bg_btn_secondary);
+                btnLaunchStop.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
                 if (btnLaunchStop instanceof TextView) {
-                    ((TextView) btnLaunchStop).setTextColor(0xFF6E7681);
+                    ((TextView) btnLaunchStop).setTextColor(palette.textDim);
                 }
             }
             if (btnLaunchRestart != null) {
                 btnLaunchRestart.setEnabled(false);
                 btnLaunchRestart.setAlpha(0.35f);
-                btnLaunchRestart.setBackgroundResource(R.drawable.bg_btn_secondary);
+                btnLaunchRestart.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
                 if (btnLaunchRestart instanceof TextView) {
-                    ((TextView) btnLaunchRestart).setTextColor(0xFF6E7681);
+                    ((TextView) btnLaunchRestart).setTextColor(palette.textDim);
                 }
             }
         }
@@ -2762,6 +2768,18 @@ public class MainActivity extends AppCompatActivity {
         int savedZoom = PiMetConfig.getWebZoom(this);
         webSettings.setTextZoom(savedZoom);
         btnFloatZoom.setText(savedZoom + "%");
+
+        // 注册通用网页翻译原生桥接 (支持任意网页、多引擎、绕过CORS)
+        TranslationBridge transBridge = new TranslationBridge(this, piWebWebView);
+        transBridge.setStateListener((isTranslated, doneCount, totalCount) -> {
+            isWebTranslated = isTranslated;
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+            if (btnFloatTranslate != null) {
+                btnFloatTranslate.setText(isTranslated ? "原" : "译");
+                btnFloatTranslate.setTextColor(isTranslated ? palette.accent : palette.text);
+            }
+        });
+        piWebWebView.addJavascriptInterface(transBridge, "PiMetTranslator");
 
         piWebWebView.setWebViewClient(new WebViewClient() {
             @Override
@@ -3113,6 +3131,10 @@ public class MainActivity extends AppCompatActivity {
         btnFloatTranslate.setOnClickListener(v -> {
             toggleWebTranslation();
         });
+        btnFloatTranslate.setOnLongClickListener(v -> {
+            WebTranslationDialog.show(MainActivity.this, piWebWebView);
+            return true;
+        });
         btnFloatZoom.setOnClickListener(v -> {
             showZoomDialog();
         });
@@ -3138,67 +3160,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void toggleWebTranslation() {
         if (piWebWebView == null) return;
-        isWebTranslated = !isWebTranslated;
-        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
-        if (btnFloatTranslate != null) {
-            btnFloatTranslate.setText(isWebTranslated ? "原" : "译");
-            btnFloatTranslate.setTextColor(isWebTranslated ? palette.accent : palette.text);
-        }
-
-        if (!isWebTranslated) {
-            piWebWebView.reload();
-            Toast.makeText(this, "🌐 已还原原始网页语言", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Toast.makeText(this, "🌐 正在应用中文界面翻译...", Toast.LENGTH_SHORT).show();
-
-        String js = "(function() {" +
-                "  if (window.__pimet_translated) return;" +
-                "  window.__pimet_translated = true;" +
-                "  var dict = {" +
-                "    'Session': '会话', 'Sessions': '会话列表', 'New Session': '新建会话'," +
-                "    'Terminal': '终端', 'Settings': '设置', 'Files': '文件', 'File': '文件'," +
-                "    'Plugins': '插件', 'Extensions': '扩展', 'Skills': '技能', 'Models': '模型'," +
-                "    'MCP Servers': 'MCP服务', 'Subagents': '子代理', 'Tools': '工具'," +
-                "    'Memory': '记忆库', 'Delete': '删除', 'Stop': '停止', 'Run': '运行'," +
-                "    'Restart': '重启', 'Save': '保存', 'Cancel': '取消', 'Clear': '清空'," +
-                "    'Copy': '复制', 'Refresh': '刷新', 'Search': '搜索', 'Filter': '筛选'," +
-                "    'Send': '发送', 'Attach': '附加', 'Upload': '上传', 'Download': '下载'," +
-                "    'Rename': '重命名', 'Close': '关闭', 'Confirm': '确认', 'Back': '返回'," +
-                "    'Edit': '编辑', 'Online': '在线', 'Offline': '离线', 'Idle': '就绪'," +
-                "    'Busy': '忙碌', 'Thinking': '思考中...', 'Running': '运行中'," +
-                "    'Ready': '就绪', 'Waiting': '等待中', 'Connected': '已连接'," +
-                "    'Disconnected': '未连接', 'Loading...': '加载中...'," +
-                "    'System Prompt': '系统提示词', 'User': '用户', 'Assistant': '助手'," +
-                "    'Agent': '智能体', 'Temperature': '温度参数', 'Max Tokens': '最大Token'," +
-                "    'Context Window': '上下文窗口', 'Ask anything...': '输入任何问题...'," +
-                "    'Type a message...': '输入消息...'" +
-                "  };" +
-                "  function translateNode(node) {" +
-                "    if (!node) return;" +
-                "    if (node.nodeType === 3) {" +
-                "      var t = node.nodeValue ? node.nodeValue.trim() : '';" +
-                "      if (t && dict[t]) { node.nodeValue = node.nodeValue.replace(t, dict[t]); }" +
-                "    } else if (node.nodeType === 1 && node.childNodes) {" +
-                "      if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE' || node.tagName === 'TEXTAREA') return;" +
-                "      if (node.placeholder && dict[node.placeholder]) { node.placeholder = dict[node.placeholder]; }" +
-                "      if (node.title && dict[node.title]) { node.title = dict[node.title]; }" +
-                "      for (var i = 0; i < node.childNodes.length; i++) {" +
-                "        translateNode(node.childNodes[i]);" +
-                "      }" +
-                "    }" +
-                "  }" +
-                "  translateNode(document.body);" +
-                "  var observer = new MutationObserver(function(mutations) {" +
-                "    mutations.forEach(function(m) {" +
-                "      m.addedNodes.forEach(function(n) { translateNode(n); });" +
-                "    });" +
-                "  });" +
-                "  observer.observe(document.body, { childList: true, subtree: true });" +
-                "})();";
-
-        piWebWebView.evaluateJavascript(js, null);
+        WebTranslationManager.toggleTranslation(piWebWebView, this);
     }
 
     private void showZoomDialog() {
@@ -5252,6 +5214,12 @@ public class MainActivity extends AppCompatActivity {
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         ThemeManager.applyWindowTheme(this, palette);
 
+        // 根布局底色与离线提示底色对齐
+        View mainRoot = findViewById(R.id.mainRootLayout);
+        if (mainRoot != null) mainRoot.setBackgroundColor(palette.bg);
+        View offlineCard = findViewById(R.id.piWebOfflineCard);
+        if (offlineCard != null) offlineCard.setBackgroundColor(palette.bg);
+
         // 整树递归应用主题色彩 (启动页、插件页、设置页、二级窗口)
         if (viewLaunch != null) ThemeManager.applyThemeToHierarchy(viewLaunch, palette);
         if (viewPlugins != null) ThemeManager.applyThemeToHierarchy(viewPlugins, palette);
@@ -5300,13 +5268,18 @@ public class MainActivity extends AppCompatActivity {
         updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, currentSettingsCategory == SETTINGS_CAT_ABOUT);
         updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, currentSettingsCategory == SETTINGS_CAT_THEME);
 
-        // 刷新插件分类与列表项样式
-        selectPluginCategory(currentPluginCategory);
-
-        // 刷新桌宠与物理参数样式
-        buildPhysicsSettings();
-        buildPetList();
+        // 仅在非工作台可见或专职页面时进行开销较大的列表重绘，杜绝会话中卡顿
+        if (viewPlugins != null && viewPlugins.getVisibility() == View.VISIBLE) {
+            selectPluginCategory(currentPluginCategory);
+        }
+        if (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE) {
+            if (currentSettingsCategory == SETTINGS_CAT_PET) {
+                buildPhysicsSettings();
+                buildPetList();
+            }
+        }
         updateLaunchPetUI();
+        updateServiceStateUI(isPiWebAlive, PiMetConfig.getWebPort(this));
 
         // 刷新悬浮球与悬浮菜单样式
         if (floatingBall != null) {

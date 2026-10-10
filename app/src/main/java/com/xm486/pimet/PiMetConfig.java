@@ -46,6 +46,22 @@ public final class PiMetConfig {
     public static final String KEY_AI_BASE_URL = "ai_base_url";
     public static final String KEY_AI_MODEL = "ai_model";
 
+    // 网页翻译配置键
+    public static final String KEY_TRANS_ENGINE = "trans_engine";
+    public static final String KEY_TRANS_CUSTOM_BASE_URL = "trans_custom_base_url";
+    public static final String KEY_TRANS_CUSTOM_API_KEY = "trans_custom_api_key";
+    public static final String KEY_TRANS_CUSTOM_MODEL = "trans_custom_model";
+    public static final String KEY_TRANS_DISPLAY_MODE = "trans_display_mode";
+    public static final String KEY_TRANS_LIVE = "trans_live";
+
+    public static final String TRANS_ENGINE_AUTO = "auto";
+    public static final String TRANS_ENGINE_AI = "ai";
+    public static final String TRANS_ENGINE_FREE = "free";
+    public static final String TRANS_ENGINE_CUSTOM = "custom";
+
+    public static final String TRANS_MODE_REPLACE = "replace";
+    public static final String TRANS_MODE_BILINGUAL = "bilingual";
+
     public static final String NPM_MIRROR_TAOBAO = "https://registry.npmmirror.com";
     public static final String NPM_MIRROR_OFFICIAL = "https://registry.npmjs.org";
 
@@ -174,6 +190,55 @@ public final class PiMetConfig {
 
     public static void setAiModel(Context context, String model) {
         getPrefs(context).edit().putString(KEY_AI_MODEL, model).apply();
+    }
+
+    // 网页翻译配置 getter / setter
+    public static String getTransEngine(Context context) {
+        return getPrefs(context).getString(KEY_TRANS_ENGINE, TRANS_ENGINE_AUTO);
+    }
+
+    public static void setTransEngine(Context context, String engine) {
+        getPrefs(context).edit().putString(KEY_TRANS_ENGINE, engine).apply();
+    }
+
+    public static String getTransCustomBaseUrl(Context context) {
+        return getPrefs(context).getString(KEY_TRANS_CUSTOM_BASE_URL, "https://api.deepseek.com/v1");
+    }
+
+    public static void setTransCustomBaseUrl(Context context, String url) {
+        getPrefs(context).edit().putString(KEY_TRANS_CUSTOM_BASE_URL, url).apply();
+    }
+
+    public static String getTransCustomApiKey(Context context) {
+        return getPrefs(context).getString(KEY_TRANS_CUSTOM_API_KEY, "");
+    }
+
+    public static void setTransCustomApiKey(Context context, String apiKey) {
+        getPrefs(context).edit().putString(KEY_TRANS_CUSTOM_API_KEY, apiKey).apply();
+    }
+
+    public static String getTransCustomModel(Context context) {
+        return getPrefs(context).getString(KEY_TRANS_CUSTOM_MODEL, "deepseek-chat");
+    }
+
+    public static void setTransCustomModel(Context context, String model) {
+        getPrefs(context).edit().putString(KEY_TRANS_CUSTOM_MODEL, model).apply();
+    }
+
+    public static String getTransDisplayMode(Context context) {
+        return getPrefs(context).getString(KEY_TRANS_DISPLAY_MODE, TRANS_MODE_REPLACE);
+    }
+
+    public static void setTransDisplayMode(Context context, String mode) {
+        getPrefs(context).edit().putString(KEY_TRANS_DISPLAY_MODE, mode).apply();
+    }
+
+    public static boolean isTransLiveEnabled(Context context) {
+        return getPrefs(context).getBoolean(KEY_TRANS_LIVE, true);
+    }
+
+    public static void setTransLiveEnabled(Context context, boolean enabled) {
+        getPrefs(context).edit().putBoolean(KEY_TRANS_LIVE, enabled).apply();
     }
 
     /**
