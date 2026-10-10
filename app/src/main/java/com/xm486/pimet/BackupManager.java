@@ -188,8 +188,9 @@ public final class BackupManager {
                         totalCount += petCount[0];
                     }
 
+                    final int snapshotCount = totalCount;
                     if (progressListener != null) {
-                        MAIN_HANDLER.post(() -> progressListener.onProgress(95, "正在完成归档封包...", "总计打包文件数: " + totalCount));
+                        MAIN_HANDLER.post(() -> progressListener.onProgress(95, "正在完成归档封包...", "总计打包文件数: " + snapshotCount));
                     }
                 }
 
@@ -322,11 +323,11 @@ public final class BackupManager {
                     PiMetConfig.syncFromContainer(context);
                 } catch (Throwable ignored) {}
 
+                final int finalRestored = restoredCount;
                 if (progressListener != null) {
-                    MAIN_HANDLER.post(() -> progressListener.onProgress(100, "✔ 全部数据已成功还原！", "总计恢复 " + restoredCount + " 个配置文件与数据"));
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(100, "✔ 全部数据已成功还原！", "总计恢复 " + finalRestored + " 个配置文件与数据"));
                 }
 
-                final int finalRestored = restoredCount;
                 MAIN_HANDLER.post(() -> callback.onResult(true, finalRestored,
                         "✔ 成功无损恢复 " + finalRestored + " 项配置、聊天记录、子代理与插件生态！"));
             } catch (Throwable t) {
