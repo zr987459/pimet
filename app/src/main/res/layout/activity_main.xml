@@ -90,6 +90,68 @@
                         android:indeterminate="true"
                         android:visibility="gone" />
 
+                    <!-- 启动前端口自定义快捷栏 -->
+                    <LinearLayout
+                        android:id="@+id/cardLaunchPortQuickSet"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="#161B22"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="12dp"
+                        android:paddingTop="8dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🌐 启动端口:"
+                            android:textColor="#F0F6FC"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <EditText
+                            android:id="@+id/launchPortInput"
+                            android:layout_width="72dp"
+                            android:layout_height="32dp"
+                            android:layout_marginStart="8dp"
+                            android:background="#0D1117"
+                            android:gravity="center"
+                            android:hint="30141"
+                            android:inputType="number"
+                            android:maxLength="5"
+                            android:text="30141"
+                            android:textColor="#58A6FF"
+                            android:textColorHint="#484F58"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/btnLaunchSavePort"
+                            android:layout_width="wrap_content"
+                            android:layout_height="30dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:text="保存"
+                            android:textColor="#C9D1D9"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/launchPortTipTv"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="启动前可直接自定义"
+                            android:textColor="#6E7681"
+                            android:textSize="10.5sp" />
+                    </LinearLayout>
+
                     <!-- 大主按钮: 启动或进入工作台 -->
                     <TextView
                         android:id="@+id/btnLaunchMain"
@@ -921,113 +983,371 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <!-- 🌟 横列二级分类菜单 (Horizontal Category Tabs) -->
-                <HorizontalScrollView
+                <!-- 🌟 从上往下二级分类导航菜单卡片 (Vertical Secondary Menu) -->
+                <LinearLayout
+                    android:id="@+id/cardSettingsMenu"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:scrollbars="none"
-                    android:overScrollMode="never"
-                    android:layout_marginBottom="12dp">
+                    android:layout_marginBottom="12dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="12dp">
 
                     <LinearLayout
-                        android:id="@+id/settingsCategoryBar"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
                         <TextView
-                            android:id="@+id/chipCategoryPorts"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:background="@drawable/bg_chip_selected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="⚡ 端口与服务"
-                            android:textColor="#FFFFFF"
-                            android:textSize="12sp"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="📑 设置分类二级菜单"
+                            android:textColor="#F0F6FC"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
 
                         <TextView
-                            android:id="@+id/chipCategoryUpdate"
+                            android:id="@+id/btnSettingsShowAll"
                             android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="🔄 更新中心"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/chipCategoryPet"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="🐾 桌面宠物"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/chipCategoryPrivileges"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="🛡️ 系统特权"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/chipCategoryStorage"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="💾 容器存储"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/chipCategoryAbout"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="ℹ️ 关于系统"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/chipCategoryAll"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:layout_marginStart="8dp"
-                            android:background="@drawable/bg_chip_unselected"
-                            android:gravity="center"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:text="📋 全部设置"
-                            android:textColor="#8B949E"
-                            android:textSize="12sp" />
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:paddingStart="10dp"
+                            android:paddingTop="4dp"
+                            android:paddingEnd="10dp"
+                            android:paddingBottom="4dp"
+                            android:text="展开全部卡片"
+                            android:textColor="#58A6FF"
+                            android:textSize="11sp" />
                     </LinearLayout>
-                </HorizontalScrollView>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:layout_marginBottom="10dp"
+                        android:text="从上往下点击二级菜单项，快速直达对应功能卡片"
+                        android:textColor="#6E7681"
+                        android:textSize="10.5sp" />
+
+                    <!-- 1. 端口与网络服务 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemPorts"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="⚡"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitlePorts"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="端口与网络服务"
+                                android:textColor="#58A6FF"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="Pi-Web 端口、Operit / Clawbench 凭证与镜像源"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowPorts"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#58A6FF"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 2. 软件更新中心 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemUpdate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🔄"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitleUpdate"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="软件更新中心"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="PiMet 客户端版本、Pi-Web 工作台高速平滑升级"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowUpdate"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 3. 桌面宠物管理 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemPet"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🐾"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitlePet"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="桌面宠物管理"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="桌宠形象预览、物理弹跳、主动搭讪对话频率"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowPet"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 4. 系统特权与权限 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemPrivileges"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🛡️"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitlePrivileges"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="系统特权与权限"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="Shizuku 免 Root 授权、开机自启、悬浮窗权限"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowPrivileges"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 5. 容器存储与清理 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemStorage"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="💾"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitleStorage"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="容器存储与清理"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="PRoot 存储占用分析、临时日志与 npm 缓存清理"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowStorage"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 6. 关于与开源致敬 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemAbout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ℹ️"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitleAbout"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="关于与致敬"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="PiMet 版本信息、技术架构、开源协议"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowAbout"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <!-- 多服务自定义端口设置卡片 -->
                 <LinearLayout
@@ -1459,7 +1779,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="2dp"
-                                android:text="当前版本: v1.3.6"
+                                android:text="当前版本: v1.3.7"
                                 android:textColor="#8B949E"
                                 android:textSize="11sp" />
                         </LinearLayout>

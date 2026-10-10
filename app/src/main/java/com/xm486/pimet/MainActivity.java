@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
@@ -221,14 +222,37 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsPiWebVersionTv;
     private View btnCheckPiWebUpdate;
 
-    // 设置页横向二级分类芯片
-    private TextView chipCategoryPorts;
-    private TextView chipCategoryUpdate;
-    private TextView chipCategoryPet;
-    private TextView chipCategoryPrivileges;
-    private TextView chipCategoryStorage;
-    private TextView chipCategoryAbout;
-    private TextView chipCategoryAll;
+    // 启动页自定义端口快捷输入组件
+    private EditText launchPortInput;
+    private View btnLaunchSavePort;
+
+    // 设置页从上往下二级分类菜单组件
+    private View menuItemPorts;
+    private TextView menuTitlePorts;
+    private TextView menuArrowPorts;
+
+    private View menuItemUpdate;
+    private TextView menuTitleUpdate;
+    private TextView menuArrowUpdate;
+
+    private View menuItemPet;
+    private TextView menuTitlePet;
+    private TextView menuArrowPet;
+
+    private View menuItemPrivileges;
+    private TextView menuTitlePrivileges;
+    private TextView menuArrowPrivileges;
+
+    private View menuItemStorage;
+    private TextView menuTitleStorage;
+    private TextView menuArrowStorage;
+
+    private View menuItemAbout;
+    private TextView menuTitleAbout;
+    private TextView menuArrowAbout;
+
+    private TextView btnSettingsShowAll;
+    private boolean settingsShowAllCards = false;
 
     // 设置页各个卡片
     private View cardSettingsPorts;
@@ -246,7 +270,6 @@ public class MainActivity extends AppCompatActivity {
     private static final int SETTINGS_CAT_PRIVILEGES = 3;
     private static final int SETTINGS_CAT_STORAGE = 4;
     private static final int SETTINGS_CAT_ABOUT = 5;
-    private static final int SETTINGS_CAT_ALL = 6;
     private int currentSettingsCategory = SETTINGS_CAT_PORTS;
 
     // Pi-Web 工作台视图组件
@@ -446,18 +469,39 @@ public class MainActivity extends AppCompatActivity {
         btnLaunchLogClear = findViewById(R.id.btnLaunchLogClear);
         launchLogTv = findViewById(R.id.launchLogTv);
 
+        launchPortInput = findViewById(R.id.launchPortInput);
+        btnLaunchSavePort = findViewById(R.id.btnLaunchSavePort);
+
         settingsAppVersionTv = findViewById(R.id.settingsAppVersionTv);
         btnCheckAppUpdate = findViewById(R.id.btnCheckAppUpdate);
         settingsPiWebVersionTv = findViewById(R.id.settingsPiWebVersionTv);
         btnCheckPiWebUpdate = findViewById(R.id.btnCheckPiWebUpdate);
 
-        chipCategoryPorts = findViewById(R.id.chipCategoryPorts);
-        chipCategoryUpdate = findViewById(R.id.chipCategoryUpdate);
-        chipCategoryPet = findViewById(R.id.chipCategoryPet);
-        chipCategoryPrivileges = findViewById(R.id.chipCategoryPrivileges);
-        chipCategoryStorage = findViewById(R.id.chipCategoryStorage);
-        chipCategoryAbout = findViewById(R.id.chipCategoryAbout);
-        chipCategoryAll = findViewById(R.id.chipCategoryAll);
+        menuItemPorts = findViewById(R.id.menuItemPorts);
+        menuTitlePorts = findViewById(R.id.menuTitlePorts);
+        menuArrowPorts = findViewById(R.id.menuArrowPorts);
+
+        menuItemUpdate = findViewById(R.id.menuItemUpdate);
+        menuTitleUpdate = findViewById(R.id.menuTitleUpdate);
+        menuArrowUpdate = findViewById(R.id.menuArrowUpdate);
+
+        menuItemPet = findViewById(R.id.menuItemPet);
+        menuTitlePet = findViewById(R.id.menuTitlePet);
+        menuArrowPet = findViewById(R.id.menuArrowPet);
+
+        menuItemPrivileges = findViewById(R.id.menuItemPrivileges);
+        menuTitlePrivileges = findViewById(R.id.menuTitlePrivileges);
+        menuArrowPrivileges = findViewById(R.id.menuArrowPrivileges);
+
+        menuItemStorage = findViewById(R.id.menuItemStorage);
+        menuTitleStorage = findViewById(R.id.menuTitleStorage);
+        menuArrowStorage = findViewById(R.id.menuArrowStorage);
+
+        menuItemAbout = findViewById(R.id.menuItemAbout);
+        menuTitleAbout = findViewById(R.id.menuTitleAbout);
+        menuArrowAbout = findViewById(R.id.menuArrowAbout);
+
+        btnSettingsShowAll = findViewById(R.id.btnSettingsShowAll);
 
         cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
         cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
@@ -468,13 +512,13 @@ public class MainActivity extends AppCompatActivity {
         cardSettingsPetProactive = findViewById(R.id.cardSettingsPetProactive);
         cardSettingsAbout = findViewById(R.id.cardSettingsAbout);
 
-        if (chipCategoryPorts != null) chipCategoryPorts.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PORTS));
-        if (chipCategoryUpdate != null) chipCategoryUpdate.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_UPDATE));
-        if (chipCategoryPet != null) chipCategoryPet.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PET));
-        if (chipCategoryPrivileges != null) chipCategoryPrivileges.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PRIVILEGES));
-        if (chipCategoryStorage != null) chipCategoryStorage.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_STORAGE));
-        if (chipCategoryAbout != null) chipCategoryAbout.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ABOUT));
-        if (chipCategoryAll != null) chipCategoryAll.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ALL));
+        if (menuItemPorts != null) menuItemPorts.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PORTS));
+        if (menuItemUpdate != null) menuItemUpdate.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_UPDATE));
+        if (menuItemPet != null) menuItemPet.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PET));
+        if (menuItemPrivileges != null) menuItemPrivileges.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PRIVILEGES));
+        if (menuItemStorage != null) menuItemStorage.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_STORAGE));
+        if (menuItemAbout != null) menuItemAbout.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ABOUT));
+        if (btnSettingsShowAll != null) btnSettingsShowAll.setOnClickListener(v -> toggleSettingsShowAll());
 
         switchSettingsCategory(currentSettingsCategory);
 
@@ -2109,8 +2153,20 @@ public class MainActivity extends AppCompatActivity {
 
     private void initLaunchPanel() {
         int port = PiMetConfig.getWebPort(this);
-        launchMetricPortTv.setText(String.valueOf(port));
-        launchPortBadge.setText("PORT " + port);
+        if (launchMetricPortTv != null) {
+            launchMetricPortTv.setText(String.valueOf(port));
+            launchMetricPortTv.setOnClickListener(v -> promptCustomLaunchPort());
+        }
+        if (launchPortBadge != null) {
+            launchPortBadge.setText("PORT " + port);
+            launchPortBadge.setOnClickListener(v -> promptCustomLaunchPort());
+        }
+        if (launchPortInput != null) {
+            launchPortInput.setText(String.valueOf(port));
+        }
+        if (btnLaunchSavePort != null) {
+            btnLaunchSavePort.setOnClickListener(v -> saveLaunchPortFromInput());
+        }
 
         btnLaunchMain.setOnClickListener(v -> {
             if (isPiWebAlive) {
@@ -2271,6 +2327,57 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    private void saveLaunchPortFromInput() {
+        if (launchPortInput == null) return;
+        try {
+            int oldPort = PiMetConfig.getWebPort(this);
+            int newPort = Integer.parseInt(launchPortInput.getText().toString().trim());
+            if (newPort < 1024 || newPort > 65535) {
+                Toast.makeText(this, "端口需在 1024 ~ 65535 范围内", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            PiMetConfig.setWebPort(this, newPort);
+            PetRegistry.setPiWebPort(this, newPort);
+            refreshSettingsPortFields();
+            updateLaunchStatusUI(isPiWebAlive);
+            if (isPiWebAlive && oldPort != newPort) {
+                new AlertDialog.Builder(this)
+                        .setTitle("🔄 重启 Pi-Web 服务生效")
+                        .setMessage("启动端口已由 " + oldPort + " 调整为 " + newPort + "。\n当前服务正在旧端口运行，是否立即重启服务？")
+                        .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
+                        .setNegativeButton("稍后手动重启", null)
+                        .show();
+            } else {
+                Toast.makeText(this, "✔ 启动端口已设定为 " + newPort + "，点击启动服务即可生效！", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "请输入合法的端口数字", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void promptCustomLaunchPort() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(PiMetConfig.getWebPort(this)));
+        input.setSelection(input.getText().length());
+        input.setTextColor(0xFFF0F6FC);
+        input.setBackgroundColor(0xFF0D1117);
+        input.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+
+        new AlertDialog.Builder(this)
+                .setTitle("🌐 自定义 Pi-Web 启动端口")
+                .setMessage("请输入 1024 ~ 65535 范围内的端口号：")
+                .setView(input)
+                .setPositiveButton("保存生效", (d, w) -> {
+                    if (launchPortInput != null) {
+                        launchPortInput.setText(input.getText().toString().trim());
+                    }
+                    saveLaunchPortFromInput();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
     private void updateLaunchStatusUI(boolean alive) {
         int port = PiMetConfig.getWebPort(this);
         if (launchPortBadge != null) {
@@ -2278,6 +2385,9 @@ public class MainActivity extends AppCompatActivity {
         }
         if (launchMetricPortTv != null) {
             launchMetricPortTv.setText(String.valueOf(port));
+        }
+        if (launchPortInput != null && !launchPortInput.hasFocus()) {
+            launchPortInput.setText(String.valueOf(port));
         }
         if (piWebOfflineSubTv != null) {
             piWebOfflineSubTv.setText("端口 " + port + " 尚未启动监听，请先启动服务。");
@@ -3423,7 +3533,7 @@ public class MainActivity extends AppCompatActivity {
                                             "\n【下载源】" + info.registryUsed +
                                             "\n\n平滑升级将直接在内置 PRoot 容器内执行增量更新，完整保留你的工程代码、配置文件、插件生态和会话记录。\n\n是否立即执行平滑更新？")
                                     .setPositiveButton("🚀 立即平滑更新", (d, w) -> {
-                                        performPiWebInPlaceUpdate();
+                                        performPiWebInPlaceUpdate(info != null ? info.tarballUrl : null);
                                     })
                                     .setNegativeButton("稍后再说", null)
                                     .show();
@@ -3490,18 +3600,94 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void performPiWebInPlaceUpdate() {
-        ProgressDialog progressDialog = new ProgressDialog(this);
-        progressDialog.setTitle("正在平滑升级 Pi-Web");
-        progressDialog.setMessage("正在拉取最新 npm 模块并优化离线资源，请稍候...");
-        progressDialog.setCancelable(false);
-        progressDialog.show();
+        performPiWebInPlaceUpdate(null);
+    }
 
-        UpdateManager.updatePiWebInPlace(this, (success, newVer, message) -> {
-            try {
-                if (progressDialog.isShowing()) progressDialog.dismiss();
-            } catch (Throwable ignored) {}
+    private void performPiWebInPlaceUpdate(String tarballUrl) {
+        // 构建带有实时进度条和日志流的高速平滑升级对话框
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16));
+        layout.setBackgroundColor(0xFF0D1117);
+
+        TextView tvStage = new TextView(this);
+        tvStage.setText("正在准备升级环境...");
+        tvStage.setTextColor(0xFFF0F6FC);
+        tvStage.setTextSize(13f);
+        tvStage.setTypeface(null, Typeface.BOLD);
+        layout.addView(tvStage);
+
+        ProgressBar pBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pBar.setMax(100);
+        pBar.setProgress(5);
+        LinearLayout.LayoutParams pbParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(6));
+        pbParams.topMargin = dpToPx(10);
+        pbParams.bottomMargin = dpToPx(6);
+        pBar.setLayoutParams(pbParams);
+        layout.addView(pBar);
+
+        TextView tvPercent = new TextView(this);
+        tvPercent.setText("5%");
+        tvPercent.setTextColor(0xFF58A6FF);
+        tvPercent.setTextSize(11f);
+        tvPercent.setGravity(Gravity.END);
+        layout.addView(tvPercent);
+
+        TextView tvLogHeader = new TextView(this);
+        tvLogHeader.setText("实时控制台输出：");
+        tvLogHeader.setTextColor(0xFF8B949E);
+        tvLogHeader.setTextSize(11f);
+        tvLogHeader.setPadding(0, dpToPx(8), 0, dpToPx(4));
+        layout.addView(tvLogHeader);
+
+        ScrollView logScrollView = new ScrollView(this);
+        LinearLayout.LayoutParams svParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(120));
+        logScrollView.setLayoutParams(svParams);
+        logScrollView.setBackgroundColor(0xFF161B22);
+        logScrollView.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+
+        TextView tvLiveLog = new TextView(this);
+        tvLiveLog.setTextColor(0xFF7EE787);
+        tvLiveLog.setTextSize(10f);
+        tvLiveLog.setTypeface(Typeface.MONOSPACE);
+        tvLiveLog.setText("[info] 启动更新流水线...\n");
+        logScrollView.addView(tvLiveLog);
+        layout.addView(logScrollView);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("🚀 Pi-Web 平滑增量升级")
+                .setView(layout)
+                .setCancelable(false)
+                .setPositiveButton("后台升级中...", null)
+                .create();
+
+        dialog.show();
+        Button positiveBtn = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+        if (positiveBtn != null) positiveBtn.setEnabled(false);
+
+        UpdateManager.updatePiWebInPlace(this, tarballUrl, (percent, stage, logLine) -> {
+            pBar.setProgress(percent);
+            tvPercent.setText(percent + "%");
+            if (stage != null && !stage.isEmpty()) {
+                tvStage.setText(stage);
+            }
+            if (logLine != null && !logLine.isEmpty()) {
+                tvLiveLog.append(logLine + "\n");
+                logScrollView.post(() -> logScrollView.fullScroll(View.FOCUS_DOWN));
+            }
+        }, (success, newVer, message) -> {
+            if (positiveBtn != null) {
+                positiveBtn.setEnabled(true);
+                positiveBtn.setText("完成");
+                positiveBtn.setOnClickListener(v -> dialog.dismiss());
+            }
 
             if (success) {
+                pBar.setProgress(100);
+                tvPercent.setText("100%");
+                tvStage.setText("✔ 升级成功！当前版本: v" + newVer);
                 if (settingsPiWebVersionTv != null) {
                     settingsPiWebVersionTv.setText("已安装版本: v" + newVer);
                 }
@@ -3515,6 +3701,8 @@ public class MainActivity extends AppCompatActivity {
                         })
                         .show();
             } else {
+                tvStage.setText("❌ 升级失败");
+                tvStage.setTextColor(0xFFF85149);
                 new AlertDialog.Builder(this)
                         .setTitle("升级失败")
                         .setMessage(message != null ? message : "更新过程中遇到错误，请检查网络或稍后重试。")
@@ -3526,16 +3714,53 @@ public class MainActivity extends AppCompatActivity {
 
     public void switchSettingsCategory(int category) {
         currentSettingsCategory = category;
+        settingsShowAllCards = false;
+        if (btnSettingsShowAll != null) {
+            btnSettingsShowAll.setText("展开全部卡片");
+            btnSettingsShowAll.setTextColor(0xFF58A6FF);
+        }
 
-        updateChipState(chipCategoryPorts, category == SETTINGS_CAT_PORTS);
-        updateChipState(chipCategoryUpdate, category == SETTINGS_CAT_UPDATE);
-        updateChipState(chipCategoryPet, category == SETTINGS_CAT_PET);
-        updateChipState(chipCategoryPrivileges, category == SETTINGS_CAT_PRIVILEGES);
-        updateChipState(chipCategoryStorage, category == SETTINGS_CAT_STORAGE);
-        updateChipState(chipCategoryAbout, category == SETTINGS_CAT_ABOUT);
-        updateChipState(chipCategoryAll, category == SETTINGS_CAT_ALL);
+        updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, category == SETTINGS_CAT_PORTS);
+        updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, category == SETTINGS_CAT_UPDATE);
+        updateMenuItemState(menuItemPet, menuTitlePet, menuArrowPet, category == SETTINGS_CAT_PET);
+        updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, category == SETTINGS_CAT_PRIVILEGES);
+        updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
+        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
 
-        boolean showAll = (category == SETTINGS_CAT_ALL);
+        applySettingsCardsVisibility();
+    }
+
+    private void toggleSettingsShowAll() {
+        settingsShowAllCards = !settingsShowAllCards;
+        if (btnSettingsShowAll != null) {
+            btnSettingsShowAll.setText(settingsShowAllCards ? "收起只看当前分类" : "展开全部卡片");
+            btnSettingsShowAll.setTextColor(settingsShowAllCards ? 0xFF3FB950 : 0xFF58A6FF);
+        }
+        applySettingsCardsVisibility();
+    }
+
+    private void updateMenuItemState(View item, TextView title, TextView arrow, boolean isSelected) {
+        if (item == null) return;
+        if (isSelected) {
+            item.setBackgroundColor(0xFF21262D);
+            if (title != null) title.setTextColor(0xFF58A6FF);
+            if (arrow != null) {
+                arrow.setTextColor(0xFF58A6FF);
+                arrow.setText("▼");
+            }
+        } else {
+            item.setBackgroundColor(0xFF161B22);
+            if (title != null) title.setTextColor(0xFFF0F6FC);
+            if (arrow != null) {
+                arrow.setTextColor(0xFF8B949E);
+                arrow.setText("›");
+            }
+        }
+    }
+
+    private void applySettingsCardsVisibility() {
+        boolean showAll = settingsShowAllCards;
+        int category = currentSettingsCategory;
 
         // 端口与网络类卡片
         if (cardSettingsPorts != null) {
@@ -3571,19 +3796,6 @@ public class MainActivity extends AppCompatActivity {
         // 关于卡片
         if (cardSettingsAbout != null) {
             cardSettingsAbout.setVisibility((showAll || category == SETTINGS_CAT_ABOUT) ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    private void updateChipState(TextView chip, boolean isSelected) {
-        if (chip == null) return;
-        if (isSelected) {
-            chip.setBackgroundResource(R.drawable.bg_chip_selected);
-            chip.setTextColor(0xFFFFFFFF);
-            chip.setTypeface(null, Typeface.BOLD);
-        } else {
-            chip.setBackgroundResource(R.drawable.bg_chip_unselected);
-            chip.setTextColor(0xFF8B949E);
-            chip.setTypeface(null, Typeface.NORMAL);
         }
     }
 

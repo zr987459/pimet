@@ -62,6 +62,11 @@ public final class UpdateManager {
         public String latestVersion;
         public String registryUsed;
         public boolean hasUpdate;
+        public String tarballUrl;
+    }
+
+    public interface UpdateProgressListener {
+        void onProgress(int percent, String stage, String logLine);
     }
 
     private static class RouteCandidate {
@@ -160,6 +165,10 @@ public final class UpdateManager {
                 info.latestVersion = latestVer;
                 info.registryUsed = usedUrl != null && usedUrl.contains("npmmirror") ? "国内加速镜像 (npmmirror)" : "npm 官方源";
                 info.hasUpdate = hasUpdate;
+                JSONObject distObj = json.optJSONObject("dist");
+                if (distObj != null) {
+                    info.tarballUrl = distObj.optString("tarball", "");
+                }
 
                 MAIN_HANDLER.post(() -> callback.onResult(true, info,
                         hasUpdate ? "发现 Pi-Web 新版本 v" + latestVer : "当前 Pi-Web 已是最新版本 (v" + installed + ")"));
@@ -173,19 +182,199 @@ public final class UpdateManager {
      * 在 Linux 容器内原地平滑增量升级 Pi-Web (@agegr/pi-web)
      */
     public static void updatePiWebInPlace(Context context, Callback<String> callback) {
+        updatePiWebInPlace(context, null, null, callback);
+    }
+
+    /**
+     * 在 Linux 容器内原地平滑增量升级 Pi-Web，支持极速直装与实时终端进度回调
+     */
+    public static void updatePiWebInPlace(Context context, String tarballUrl,
+                                          UpdateProgressListener progressListener,
+                                          Callback<String> callback) {
         new Thread(() -> {
             try {
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(5, "正在初始化升级环境...", "检测镜像源与网络环境..."));
+                }
+
                 String registry = PiMetConfig.getNpmRegistry(context);
                 if (registry == null || registry.isEmpty()) registry = "https://registry.npmmirror.com/";
                 String normalizedRegistry = registry.endsWith("/") ? registry : (registry + "/");
 
-                String cmd = "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
-                        "npm install -g --loglevel=error --no-audit --no-fund @agegr/pi-web@latest --registry=" + normalizedRegistry;
+                // 如果未提供直接 tarballUrl，尝试快速获取
+                String downloadTarball = tarballUrl;
+                if (downloadTarball == null || downloadTarball.isEmpty()) {
+                    if (progressListener != null) {
+                        MAIN_HANDLER.post(() -> progressListener.onProgress(10, "正在解析 @agegr/pi-web 最新资源包...", "GET " + normalizedRegistry + "@agegr/pi-web/latest"));
+                    }
+                    try {
+                        URL u = new URL(normalizedRegistry + "@agegr/pi-web/latest");
+                        HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                        conn.setConnectTimeout(4000);
+                        conn.setReadTimeout(4000);
+                        if (conn.getResponseCode() == 200) {
+                            StringBuilder sb = new StringBuilder();
+                            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                                String l;
+                                while ((l = r.readLine()) != null) sb.append(l);
+                            }
+                            JSONObject j = new JSONObject(sb.toString());
+                            JSONObject d = j.optJSONObject("dist");
+                            if (d != null) {
+                                downloadTarball = d.optString("tarball", "");
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
 
-                int code = ProotManager.executeCommandSync(context, cmd);
-                ProotManager.optimizePiWebOffline(context);
+                boolean fastSuccess = false;
+                File rootfsDir = ProotManager.getRootfsDir(context);
+                File tmpDir = new File(rootfsDir, "tmp");
+                if (!tmpDir.exists()) tmpDir.mkdirs();
+                File targetTgz = new File(tmpDir, "pi-web-update.tgz");
+
+                // 【引擎 A: 极速直下增量安装引擎】(Direct Tarball Engine)
+                if (downloadTarball != null && !downloadTarball.isEmpty()) {
+                    try {
+                        if (progressListener != null) {
+                            final String urlTip = downloadTarball;
+                            MAIN_HANDLER.post(() -> progressListener.onProgress(15, "正在从镜像源高速下载增量资源包 (6.7MB)...", "HTTP GET " + urlTip));
+                        }
+
+                        URL u = new URL(downloadTarball);
+                        HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+                        conn.setConnectTimeout(8000);
+                        conn.setReadTimeout(30000);
+                        conn.setInstanceFollowRedirects(true);
+                        int respCode = conn.getResponseCode();
+
+                        if (respCode == 301 || respCode == 302 || respCode == 307) {
+                            String redirectUrl = conn.getHeaderField("Location");
+                            if (redirectUrl != null && !redirectUrl.isEmpty()) {
+                                conn.disconnect();
+                                u = new URL(redirectUrl);
+                                conn = (HttpURLConnection) u.openConnection();
+                                conn.setConnectTimeout(8000);
+                                conn.setReadTimeout(30000);
+                                respCode = conn.getResponseCode();
+                            }
+                        }
+
+                        if (respCode == 200) {
+                            long totalLen = conn.getContentLengthLong();
+                            try (InputStream in = conn.getInputStream();
+                                 FileOutputStream out = new FileOutputStream(targetTgz)) {
+                                byte[] buf = new byte[8192];
+                                int len;
+                                long readBytes = 0;
+                                long lastNotify = 0;
+
+                                while ((len = in.read(buf)) != -1) {
+                                    out.write(buf, 0, len);
+                                    readBytes += len;
+
+                                    long now = System.currentTimeMillis();
+                                    if (now - lastNotify > 200 || readBytes == totalLen) {
+                                        lastNotify = now;
+                                        int pct = totalLen > 0 ? (int) (15 + (readBytes * 55 / totalLen)) : 40;
+                                        final int fPct = Math.min(70, pct);
+                                        final String fStage = totalLen > 0
+                                                ? String.format("正在高速下载更新包: %.1fMB / %.1fMB (%d%%)",
+                                                readBytes / 1048576f, totalLen / 1048576f, (int) (readBytes * 100 / totalLen))
+                                                : String.format("已接收 %.1fMB...", readBytes / 1048576f);
+                                        final String fLog = "已接收 " + readBytes + (totalLen > 0 ? " / " + totalLen : "") + " 字节";
+
+                                        if (progressListener != null) {
+                                            MAIN_HANDLER.post(() -> progressListener.onProgress(fPct, fStage, fLog));
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (targetTgz.exists() && targetTgz.length() > 100000) {
+                                if (progressListener != null) {
+                                    MAIN_HANDLER.post(() -> progressListener.onProgress(75, "下载完成，正在原地增量部署至 Linux 容器...", "tar -xzf /tmp/pi-web-update.tgz -C /usr/local/lib/node_modules/@agegr/pi-web --strip-components=1"));
+                                }
+
+                                String extractCmd = "mkdir -p /usr/local/lib/node_modules/@agegr/pi-web && " +
+                                        "tar -xzf /tmp/pi-web-update.tgz -C /usr/local/lib/node_modules/@agegr/pi-web --strip-components=1 2>&1";
+                                int extCode = ProotManager.executeCommandSync(context, extractCmd);
+                                targetTgz.delete();
+
+                                if (extCode == 0) {
+                                    fastSuccess = true;
+                                    if (progressListener != null) {
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(88, "增量解包完成，正在注入离线优化资源...", "optimizePiWebOffline..."));
+                                    }
+                                    ProotManager.optimizePiWebOffline(context);
+                                }
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.w(TAG, "Fast tarball update encountered issue, falling back to npm streaming", t);
+                        if (progressListener != null) {
+                            MAIN_HANDLER.post(() -> progressListener.onProgress(30, "极速下载出现波动，自动切换为 npm 流式同步模式...", "原因: " + t.getMessage()));
+                        }
+                    }
+                }
+
+                // 【引擎 B: npm 流式增量同步引擎】(Streaming npm Fallback)
+                if (!fastSuccess) {
+                    if (progressListener != null) {
+                        MAIN_HANDLER.post(() -> progressListener.onProgress(30, "正在连接 npm 镜像源同步依赖...", "npm install -g --ignore-scripts --prefer-online @agegr/pi-web@latest"));
+                    }
+
+                    List<String> installCmd = Arrays.asList(
+                            "/bin/bash", "-c",
+                            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
+                            "export npm_config_registry=\"" + normalizedRegistry + "\"; " +
+                            "npm install -g --loglevel=info --ignore-scripts --no-audit --no-fund --prefer-online @agegr/pi-web@latest"
+                    );
+
+                    ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", installCmd);
+                    pb.redirectErrorStream(true);
+                    Process process = pb.start();
+
+                    try (InputStream in = process.getInputStream()) {
+                        byte[] buffer = new byte[1024];
+                        int read;
+                        StringBuilder lineBuf = new StringBuilder();
+                        while ((read = in.read(buffer)) != -1) {
+                            String chunk = new String(buffer, 0, read, StandardCharsets.UTF_8);
+                            for (int i = 0; i < chunk.length(); i++) {
+                                char c = chunk.charAt(i);
+                                if (c == '\n' || c == '\r') {
+                                    if (lineBuf.length() > 0) {
+                                        final String line = lineBuf.toString();
+                                        lineBuf.setLength(0);
+                                        if (progressListener != null) {
+                                            MAIN_HANDLER.post(() -> {
+                                                progressListener.onProgress(50, "npm 正在安装与同步依赖...", line);
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    lineBuf.append(c);
+                                }
+                            }
+                        }
+                    }
+
+                    int exitCode = process.waitFor();
+                    if (exitCode != 0) {
+                        if (progressListener != null) {
+                            MAIN_HANDLER.post(() -> progressListener.onProgress(0, "升级失败", "npm 退出码: " + exitCode));
+                        }
+                        MAIN_HANDLER.post(() -> callback.onResult(false, null, "升级失败，退出码: " + exitCode));
+                        return;
+                    }
+                    ProotManager.optimizePiWebOffline(context);
+                }
 
                 String newVer = getInstalledPiWebVersion(context);
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(95, "正在重载 Pi-Web 工作台服务...", "检测端口连通性..."));
+                }
 
                 // 若 Pi-Web 服务正在后台运行，平滑重启以加载新代码
                 int webPort = PiMetConfig.getWebPort(context);
@@ -193,9 +382,15 @@ public final class UpdateManager {
                     PiWebManager.restart(context, null);
                 }
 
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(100, "✔ 升级已全部完成！", "当前 Pi-Web 运行版本: v" + newVer));
+                }
                 MAIN_HANDLER.post(() -> callback.onResult(true, newVer, "✔ Pi-Web 已成功平滑升级至 v" + newVer));
             } catch (Throwable t) {
                 Log.e(TAG, "updatePiWebInPlace failed", t);
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(0, "升级异常", t.getMessage()));
+                }
                 MAIN_HANDLER.post(() -> callback.onResult(false, null, "升级过程出现异常: " + t.getMessage()));
             }
         }).start();
