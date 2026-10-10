@@ -1514,6 +1514,10 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         }
     }
 
+    public PetChatBridge getChatBridge() {
+        return chatBridge;
+    }
+
     /** AI 配置变化（#operit/#api 指令）：刷新状态卡模式标签与输入框提示，并联动切换对应绑定的角色形象 */
     public void onChatConfigChanged() {
         ChatConfig config = ChatConfig.load(this);
