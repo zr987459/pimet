@@ -522,9 +522,9 @@ public class MainActivity extends AppCompatActivity {
         menuTitlePorts = findViewById(R.id.menuTitlePorts);
         menuArrowPorts = findViewById(R.id.menuArrowPorts);
 
-        menuItemUpdate = findViewById(R.id.menuItemUpdate);
-        menuTitleUpdate = findViewById(R.id.menuTitleUpdate);
-        menuArrowUpdate = findViewById(R.id.menuArrowUpdate);
+        menuItemUpdate = null;
+        menuTitleUpdate = null;
+        menuArrowUpdate = null;
 
         menuItemPet = findViewById(R.id.menuItemPet);
         menuTitlePet = findViewById(R.id.menuTitlePet);
