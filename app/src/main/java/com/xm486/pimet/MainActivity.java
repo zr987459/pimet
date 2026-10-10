@@ -5094,9 +5094,7 @@ public class MainActivity extends AppCompatActivity {
     private void confirmAndImportBackupUri(Uri uri) {
         new AlertDialog.Builder(this)
                 .setTitle("⚠️ 确认无损还原备份包？")
-                .setMessage("即将从所选外部文件无损恢复全部数据与配置。
-包含聊天记忆、子代理、插件生态、端口及应用偏好。
-是否继续？")
+                .setMessage("即将从所选外部文件无损恢复全部数据与配置。\n包含聊天记忆、子代理、插件生态、端口及应用偏好。\n是否继续？")
                 .setPositiveButton("立即还原", (d, w) -> {
                     BackupProgressHolder holder = showBackupProgressDialog("📥 正在无损还原配置与数据...");
                     BackupManager.importBackupFromUri(this, uri, (pct, stage, logLine) -> {
