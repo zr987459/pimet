@@ -5313,7 +5313,7 @@ public class MainActivity extends AppCompatActivity {
             GradientDrawable ballBg = new GradientDrawable();
             ballBg.setColor(palette.bgPanel);
             ballBg.setShape(GradientDrawable.OVAL);
-            ballBg.setStroke(Math.max(1, dpToPx(1.5f)), palette.border);
+            ballBg.setStroke(Math.max(1, dpToPx(1)), palette.border);
             floatingBall.setBackground(ballBg);
             floatingBall.setTextColor(palette.accent);
         }
