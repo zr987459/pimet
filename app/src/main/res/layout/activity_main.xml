@@ -1483,6 +1483,7 @@
 
             <!-- 窗口顶栏 (Window Header Bar) -->
             <LinearLayout
+                android:id="@+id/viewSettingsSubHeader"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
                 android:background="#161B22"
