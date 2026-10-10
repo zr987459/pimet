@@ -283,9 +283,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             }
         }
 
-        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-        int maxW = Math.min(dp(220), (int)(dm.widthPixels * 0.78f));
-        bubbleView.setMaxWidth(maxW);
+        applyBubbleDimensions();
         bubbleView.setText("💬 " + msg);
 
         // 核心：测量气泡高度并将桌宠顶开至气泡下方，杜绝气泡遮挡桌宠
@@ -408,24 +406,40 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     }
 
 
-    /** 气泡最大宽度动态调整（120-360dp） */
-    public void applyBubbleWidth(int widthDp) {
+    /** 气泡尺寸与字号自适应动态调整 */
+    public void applyBubbleDimensions() {
         if (bubbleView == null) return;
-        int w = dp(Math.max(120, Math.min(360, widthDp)));
-        bubbleView.setMaxWidth(w);
+        int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
+        int ts = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
+        bw = Math.max(100, Math.min(320, bw));
+        ts = Math.max(9, Math.min(18, ts));
+        bubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, ts);
+        int padH = Math.round(ts * 1.15f);
+        int padV = Math.round(ts * 0.75f);
+        bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV));
+        int maxW = Math.min(dp(bw), (int)(getResources().getDisplayMetrics().widthPixels * 0.75f));
+        bubbleView.setMaxWidth(maxW);
     }
+
+    public void applyBubbleWidth(int widthDp) {
+        PetRegistry.setIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, widthDp);
+        applyBubbleDimensions();
+    }
+
+    public void applyBubbleTextSize(int textSizeSp) {
+        PetRegistry.setIntPref(this, PetRegistry.KEY_BUBBLE_TEXT_SIZE, textSizeSp);
+        applyBubbleDimensions();
+    }
+
     /** 创建任务完成对话气泡（圆角背景 + 白字） */
     private void buildBubble(int petHeightPx) {
         bubbleView = new TextView(this);
         bubbleView.setGravity(Gravity.CENTER);
         bubbleView.setTextColor(0xFFF1F5F9);
-        bubbleView.setTextSize(12f);
         bubbleView.setMaxLines(5);
         bubbleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
-        bubbleView.setMaxWidth(dp(bw));
         bubbleView.setLineSpacing(dp(2), 1.15f);
-        bubbleView.setPadding(dp(14), dp(9), dp(14), dp(9));
+        applyBubbleDimensions();
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xF0181A22);
         bg.setCornerRadius(dp(14));
@@ -661,6 +675,16 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return overlayRoot;
     }
 
+    public int[] getPetScreenPosition() {
+        if (overlayRoot != null && overlayRoot.getLayoutParams() instanceof WindowManager.LayoutParams) {
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            int w = petView != null && petView.getWidth() > 0 ? petView.getWidth() : dp(PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE));
+            int h = petView != null && petView.getHeight() > 0 ? petView.getHeight() : w;
+            return new int[]{lp.x, lp.y, w, h};
+        }
+        return new int[]{dp(16), dp(160), dp(72), dp(72)};
+    }
+
     public TextView getChatBubble() {
         return bubbleView;
     }
@@ -696,10 +720,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
      */
     public void layoutChatBubble() {
         if (bubbleView == null || petView == null || statusCard == null) return;
-        int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
-        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-        int maxW = Math.min(dp(bw), (int)(dm.widthPixels * 0.78f));
-        bubbleView.setMaxWidth(maxW);
+        applyBubbleDimensions();
+        int maxW = bubbleView.getMaxWidth();
         int wSpec = View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST);
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(180), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);

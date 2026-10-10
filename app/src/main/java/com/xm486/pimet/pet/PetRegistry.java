@@ -334,6 +334,7 @@ public class PetRegistry {
     public static final String KEY_FLING_DURATION = "physics_fling_duration";   // 最长飞行时长 ms
     public static final String KEY_PET_SIZE = "pet_size";                       // 宠物大小（宽度 dp）
     public static final String KEY_BUBBLE_WIDTH = "bubble_width";             // 气泡最大宽度 dp
+    public static final String KEY_BUBBLE_TEXT_SIZE = "bubble_text_size";     // 气泡文字字号 sp
     public static final String KEY_CARD_WIDTH = "card_width";                   // 状态卡宽度 dp
     public static final String KEY_CARD_SCALE = "card_scale";                   // 状态卡整体缩放 60-100%
     public static final String KEY_MENU_WIDTH = "menu_width";                   // 长按菜单宽度 dp
@@ -359,7 +360,8 @@ public class PetRegistry {
     public static final int DEFAULT_STOP_SPEED = 40;
     public static final int DEFAULT_FLING_DURATION = 6000;
     public static final int DEFAULT_PET_SIZE = 56;
-    public static final int DEFAULT_BUBBLE_WIDTH = 220;
+    public static final int DEFAULT_BUBBLE_WIDTH = 160;
+    public static final int DEFAULT_BUBBLE_TEXT_SIZE = 12;
     public static final int DEFAULT_CARD_WIDTH = 200;
     public static final int DEFAULT_CARD_SCALE = 100;
     public static final int DEFAULT_MENU_WIDTH = 160;

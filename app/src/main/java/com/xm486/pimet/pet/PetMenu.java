@@ -362,71 +362,31 @@ public class PetMenu {
             petAgentRow.addView(btnProactive, new LinearLayout.LayoutParams(0, dp(23), 1f));
             root.addView(petAgentRow);
 
-            // ---- 底部操作功能键行 1: [💬 快捷聊天(直接打开对应网页端)] [🌐 工作台] ----
-            LinearLayout actionRow1 = new LinearLayout(context);
-            actionRow1.setOrientation(LinearLayout.HORIZONTAL);
-            actionRow1.setGravity(Gravity.CENTER_VERTICAL);
-
-            TextView chatBtn = buildCompactActionBtn("💬 快捷聊天", 0x2210B981, 0x5510B981, 0xFFA7F3D0, v -> {
-                dismiss();
-                try {
-                    String target = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
-                    openConsole(target);
-                } catch (Throwable t) {
-                    Log.e("PetMenu", "chatBtn error", t);
-                }
-            });
-            actionRow1.addView(chatBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
-
-            View space1 = new View(context);
-            actionRow1.addView(space1, new LinearLayout.LayoutParams(dp(3), 1));
-
-            TextView webBtn = buildCompactActionBtn("🌐 工作台", 0x223B82F6, 0x553B82F6, 0xFF93C5FD, v -> {
-                dismiss();
-                try {
-                    if (activity != null) {
-                        activity.switchTab(1);
-                    } else {
-                        Intent intent = new Intent(context, MainActivity.class);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                        intent.putExtra("pimet.open_web", true);
-                        context.startActivity(intent);
-                    }
-                } catch (Throwable t) {
-                    Log.e("PetMenu", "webBtn failed", t);
-                }
-            });
-            actionRow1.addView(webBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
-            root.addView(actionRow1);
-
-            // ---- 底部操作功能键行 2: [⚙️ 设置] [🔴 关闭] ----
-            LinearLayout actionRow2 = new LinearLayout(context);
-            actionRow2.setOrientation(LinearLayout.HORIZONTAL);
-            actionRow2.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams ar2Lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
-            ar2Lp.topMargin = dp(3);
+            // ---- 底部操作功能键行: 仅保留 [⚙️ 详细设置] 与 [🔴 关闭桌宠] ----
+            LinearLayout actionRow = new LinearLayout(context);
+            actionRow.setOrientation(LinearLayout.HORIZONTAL);
+            actionRow.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams arLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(26));
+            arLp.topMargin = dp(4);
 
             TextView setBtn = buildCompactActionBtn("⚙️ 设置", 0x22F59E0B, 0x55F59E0B, 0xFFFCD34D, v -> {
                 dismiss();
                 try {
-                    if (activity != null) {
-                        activity.switchTab(3);
-                    } else {
-                        Intent intent = new Intent(context, MainActivity.class);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                        intent.putExtra("pimet.open_settings", true);
-                        intent.putExtra("devpetm.open_ai_tab", true);
-                        context.startActivity(intent);
-                    }
+                    PetParamsDialog.show(context, service, () -> {
+                        // 回调更新界面或桌宠状态
+                        if (service != null) {
+                            service.applyBubbleDimensions();
+                        }
+                    });
                 } catch (Throwable t) {
-                    Log.e("PetMenu", "setBtn failed", t);
+                    Log.e("PetMenu", "open PetParamsDialog failed", t);
                 }
             });
-            actionRow2.addView(setBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
+            actionRow.addView(setBtn, new LinearLayout.LayoutParams(0, dp(26), 1.1f));
 
             View space3 = new View(context);
-            actionRow2.addView(space3, new LinearLayout.LayoutParams(dp(3), 1));
+            actionRow.addView(space3, new LinearLayout.LayoutParams(dp(6), 1));
 
             TextView stopBtn = buildCompactActionBtn("🔴 关闭", 0x22EF4444, 0x55EF4444, 0xFFFCA5A5, v -> {
                 dismiss();
@@ -442,8 +402,8 @@ public class PetMenu {
                     Log.e("PetMenu", "stopBtn failed", t);
                 }
             });
-            actionRow2.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(23), 1f));
-            root.addView(actionRow2, ar2Lp);
+            actionRow.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
+            root.addView(actionRow, arLp);
 
             dialog.setContentView(root);
 
@@ -466,7 +426,34 @@ public class PetMenu {
                 WindowManager.LayoutParams lp = window.getAttributes();
                 lp.width = dp(initialMenuWidth);
                 lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-                lp.gravity = Gravity.CENTER;
+
+                PetOverlayService effectiveService = (service != null) ? service : PetOverlayService.getInstance();
+                if (effectiveService != null && effectiveService.getOverlayRoot() != null) {
+                    lp.gravity = Gravity.TOP | Gravity.START;
+                    int[] pos = effectiveService.getPetScreenPosition();
+                    int petX = pos[0];
+                    int petY = pos[1];
+                    int petW = pos[2];
+                    int menuW = dp(initialMenuWidth);
+
+                    android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+                    int screenW = dm.widthPixels;
+                    int screenH = dm.heightPixels;
+
+                    // 若桌宠在屏幕右半边，菜单排在桌宠左侧；若桌宠在左半边，菜单排在桌宠右侧，杜绝遮挡桌宠
+                    if (petX + petW / 2 > screenW / 2) {
+                        lp.x = Math.max(dp(8), petX - menuW - dp(8));
+                    } else {
+                        lp.x = Math.min(screenW - menuW - dp(8), petX + petW + dp(8));
+                    }
+
+                    // 垂直方向与桌宠对齐并防止超出上下屏幕边界
+                    int targetY = Math.max(dp(36), petY - dp(10));
+                    int maxAllowedY = screenH - dp(320);
+                    lp.y = Math.min(Math.max(dp(36), targetY), Math.max(dp(36), maxAllowedY));
+                } else {
+                    lp.gravity = Gravity.CENTER;
+                }
                 window.setAttributes(lp);
             }
 

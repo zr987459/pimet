@@ -3994,7 +3994,8 @@ public class MainActivity extends AppCompatActivity {
                 title = "⚡ 端口与网络服务";
                 break;
             case SETTINGS_CAT_UPDATE:
-                title = "🔄 软件更新中心";
+            case SETTINGS_CAT_ABOUT:
+                title = "✨ 关于与版本更新";
                 break;
             case SETTINGS_CAT_PET:
                 title = "🐾 桌面宠物管理";
@@ -4004,9 +4005,6 @@ public class MainActivity extends AppCompatActivity {
                 break;
             case SETTINGS_CAT_STORAGE:
                 title = "💾 容器存储与清理";
-                break;
-            case SETTINGS_CAT_ABOUT:
-                title = "ℹ️ 关于与致敬";
                 break;
             case SETTINGS_CAT_THEME:
                 title = "🎨 界面外观与设计风格";
@@ -4018,11 +4016,13 @@ public class MainActivity extends AppCompatActivity {
         }
 
         updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, category == SETTINGS_CAT_PORTS);
-        updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, category == SETTINGS_CAT_UPDATE);
+        if (menuItemUpdate != null) {
+            updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, category == SETTINGS_CAT_UPDATE);
+        }
         updateMenuItemState(menuItemPet, menuTitlePet, menuArrowPet, category == SETTINGS_CAT_PET);
         updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, category == SETTINGS_CAT_PRIVILEGES);
         updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
-        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
+        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT || category == SETTINGS_CAT_UPDATE);
         updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, category == SETTINGS_CAT_THEME);
 
         applySettingsCardsVisibility();
@@ -4089,12 +4089,13 @@ public class MainActivity extends AppCompatActivity {
             cardSettingsRegistry.setVisibility(category == SETTINGS_CAT_PORTS ? View.VISIBLE : View.GONE);
         }
 
-        // 更新中心卡片
-        if (cardSettingsUpdate != null) {
-            cardSettingsUpdate.setVisibility(category == SETTINGS_CAT_UPDATE ? View.VISIBLE : View.GONE);
+        // 更新中心与关于卡片合并展示
+        if (cardSettingsAbout != null) {
+            cardSettingsAbout.setVisibility((category == SETTINGS_CAT_ABOUT || category == SETTINGS_CAT_UPDATE) ? View.VISIBLE : View.GONE);
         }
-
-        // 桌面宠物卡片
+        if (cardSettingsUpdate != null) {
+            cardSettingsUpdate.setVisibility(View.VISIBLE);
+        }
         if (cardSettingsPetPreview != null) {
             cardSettingsPetPreview.setVisibility(category == SETTINGS_CAT_PET ? View.VISIBLE : View.GONE);
         }
@@ -5293,11 +5294,13 @@ public class MainActivity extends AppCompatActivity {
 
         // 刷新设置条目菜单状态
         updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, currentSettingsCategory == SETTINGS_CAT_PORTS);
-        updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, currentSettingsCategory == SETTINGS_CAT_UPDATE);
+        if (menuItemUpdate != null) {
+            updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, currentSettingsCategory == SETTINGS_CAT_UPDATE);
+        }
         updateMenuItemState(menuItemPet, menuTitlePet, menuArrowPet, currentSettingsCategory == SETTINGS_CAT_PET);
         updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, currentSettingsCategory == SETTINGS_CAT_PRIVILEGES);
         updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, currentSettingsCategory == SETTINGS_CAT_STORAGE);
-        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, currentSettingsCategory == SETTINGS_CAT_ABOUT);
+        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, currentSettingsCategory == SETTINGS_CAT_ABOUT || currentSettingsCategory == SETTINGS_CAT_UPDATE);
         updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, currentSettingsCategory == SETTINGS_CAT_THEME);
 
         // 仅在非工作台可见或专职页面时进行开销较大的列表重绘，杜绝会话中卡顿

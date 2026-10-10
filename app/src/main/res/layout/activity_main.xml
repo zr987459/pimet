@@ -1112,58 +1112,7 @@
                             android:textSize="16sp" />
                     </LinearLayout>
 
-                    <!-- 2. 软件更新中心 -->
-                    <LinearLayout
-                        android:id="@+id/menuItemUpdate"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:background="#161B22"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:padding="10dp">
 
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="🔄"
-                            android:textSize="16sp" />
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="10dp"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:id="@+id/menuTitleUpdate"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="软件更新中心"
-                                android:textColor="#F0F6FC"
-                                android:textSize="13sp"
-                                android:textStyle="bold" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="1dp"
-                                android:text="PiMet 客户端版本、Pi-Web 工作台高速平滑升级"
-                                android:textColor="#8B949E"
-                                android:textSize="10.5sp" />
-                        </LinearLayout>
-
-                        <TextView
-                            android:id="@+id/menuArrowUpdate"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="›"
-                            android:textColor="#8B949E"
-                            android:textSize="16sp" />
-                    </LinearLayout>
 
                                         <!-- 3. 界面外观与设计风格 -->
                     <LinearLayout
@@ -1406,7 +1355,7 @@
                                 android:id="@+id/menuTitleAbout"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="关于与致敬"
+                                android:text="关于与版本更新"
                                 android:textColor="#F0F6FC"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -1415,7 +1364,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="1dp"
-                                android:text="PiMet 版本信息、技术架构、开源协议"
+                                android:text="版本检测、组件平滑升级、技术架构与开源协议"
                                 android:textColor="#8B949E"
                                 android:textSize="10.5sp" />
                         </LinearLayout>
@@ -2299,128 +2248,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 系统与软件无感平滑更新卡片 (Update Center) -->
-                <LinearLayout
-                    android:id="@+id/cardSettingsUpdate"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/bg_card_modern"
-                    android:orientation="vertical"
-                    android:padding="16dp">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="🔄 组件与应用更新中心"
-                        android:textColor="#F0F6FC"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="支持 Pi-Web 工作台平滑增量升级与 PiMet 客户端多线路安全更新，绝不重置用户配置与会话数据"
-                        android:textColor="#8B949E"
-                        android:textSize="12sp" />
-
-                    <!-- 1. Pi-Web 工作台更新行 -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="14dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🌐 Pi-Web 工作台 (@agegr/pi-web)"
-                                android:textColor="#E6EDF3"
-                                android:textSize="13sp"
-                                android:textStyle="bold" />
-
-                            <TextView
-                                android:id="@+id/settingsPiWebVersionTv"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="已安装版本: 检测中..."
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-                        </LinearLayout>
-
-                        <TextView
-                            android:id="@+id/btnCheckPiWebUpdate"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="🔄 检查更新"
-                            android:textColor="#58A6FF"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginTop="12dp"
-                        android:layout_marginBottom="12dp"
-                        android:background="#21262D" />
-
-                    <!-- 2. PiMet 客户端应用更新行 -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <LinearLayout
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:orientation="vertical">
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="🚀 PiMet 客户端应用"
-                                android:textColor="#E6EDF3"
-                                android:textSize="13sp"
-                                android:textStyle="bold" />
-
-                            <TextView
-                                android:id="@+id/settingsAppVersionTv"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="当前版本: v1.3.7"
-                                android:textColor="#8B949E"
-                                android:textSize="11sp" />
-                        </LinearLayout>
-
-                        <TextView
-                            android:id="@+id/btnCheckAppUpdate"
-                            android:layout_width="wrap_content"
-                            android:layout_height="32dp"
-                            android:background="@drawable/bg_btn_primary"
-                            android:gravity="center"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:text="✨ 检查新版"
-                            android:textColor="#FFFFFF"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-                </LinearLayout>
 
                 <!-- npm 镜像源设置卡片 -->
                 <LinearLayout
@@ -2539,7 +2367,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 🛡️ 设备特权与高级权限管理卡片 -->
+                <!-- 🛡️ 设备特权与高级权限管理卡片 (Unboxed Row Layout) -->
                 <LinearLayout
                     android:id="@+id/cardSettingsPrivileges"
                     android:layout_width="match_parent"
@@ -2560,125 +2388,305 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="4dp"
                         android:lineSpacingExtra="2dp"
-                        android:text="获取 Root、Shizuku、全盘文件管理、剪贴板实时同步与后台电池优化豁免，赋能 AI 智能体读写手机全盘代码与系统级交互能力。"
+                        android:text="配置 Root、Shizuku、文件与后台保活权限，赋能 AI 智能体读写代码与系统交互能力。"
                         android:textColor="#8B949E"
-                        android:textSize="12sp" />
+                        android:textSize="11.5sp" />
 
-                    <!-- 第一行: Root 与 Shizuku -->
+                    <!-- 1. Root 提权行 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:orientation="horizontal">
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🛡️ Root 超级权限"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="获取底层 uid=0 特权，突破沙盒与网络端口限制"
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/btnPrivilegeRoot"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:minHeight="36dp"
-                            android:layout_marginEnd="4dp"
-                            android:layout_weight="1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:paddingStart="4dp"
-                            android:paddingEnd="4dp"
-                            android:text="🛡️ Root 提权"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="申请提权"
                             android:textColor="#58A6FF"
-                            android:textSize="11.5sp"
-                            android:singleLine="true"
-                            android:ellipsize="end" />
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#15FFFFFF" />
+
+                    <!-- 2. Shizuku 免 Root 授权行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="⚡ Shizuku 免 Root 授权"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/settingsShizukuStatusTv"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Shizuku 状态: 检测中..."
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/btnPrivilegeShizuku"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:minHeight="36dp"
-                            android:layout_marginStart="4dp"
-                            android:layout_weight="1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:paddingStart="4dp"
-                            android:paddingEnd="4dp"
-                            android:text="⚡ Shizuku 授权"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="Shizuku 授权"
                             android:textColor="#58A6FF"
-                            android:textSize="11.5sp"
-                            android:singleLine="true"
-                            android:ellipsize="end" />
+                            android:textSize="12sp" />
                     </LinearLayout>
 
-                    <TextView
-                        android:id="@+id/settingsShizukuStatusTv"
+                    <View
                         android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="Shizuku 状态: 检测中..."
-                        android:textColor="#8B949E"
-                        android:textSize="11sp"
-                        android:singleLine="false"
-                        android:lineSpacingExtra="2dp" />
+                        android:layout_height="1dp"
+                        android:background="#15FFFFFF" />
 
-                    <!-- 第二行: 全盘文件与剪贴板同步 -->
+                    <!-- 3. 全盘文件访问权限行 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="horizontal">
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📂 所有文件访问权限"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="允许智能体和容器读写 /sdcard 与外部存储文件"
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/btnPrivilegeAllFiles"
-                            android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginEnd="6dp"
-                            android:layout_weight="1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:text="📂 全盘文件访问"
-                            android:textColor="#C9D1D9"
-                            android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/btnSyncClipboard"
-                            android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginStart="6dp"
-                            android:layout_weight="1"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:text="📋 剪贴板即时同步"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="文件授权"
                             android:textColor="#C9D1D9"
                             android:textSize="12sp" />
                     </LinearLayout>
 
-                    <!-- 第三行: 电池白名单与系统详情 -->
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#15FFFFFF" />
+
+                    <!-- 4. 剪贴板即时同步行 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="horizontal">
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="📋 剪贴板即时同步"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="容器终端与 Android 宿主双向即时同步剪贴板"
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/btnSyncClipboard"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="即时同步"
+                            android:textColor="#C9D1D9"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#15FFFFFF" />
+
+                    <!-- 5. 电池优化白名单行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🔋 后台电池保活白名单"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="豁免系统后台省电限制，息屏状态保持后台稳定运行"
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/btnBatteryIgnoreOpt"
-                            android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginEnd="6dp"
-                            android:layout_weight="1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:text="🔋 申请电池白名单"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="申请豁免"
                             android:textColor="#58A6FF"
                             android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="#15FFFFFF" />
+
+                    <!-- 6. 系统应用详情设置行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="⚙️ 系统应用详情与自启动"
+                                android:textColor="#E6EDF3"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="跳转 Android 系统设置页，配置悬浮窗与开机自启等"
+                                android:textColor="#8B949E"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/btnAutoStartSettings"
-                            android:layout_width="0dp"
-                            android:layout_height="36dp"
-                            android:layout_marginStart="6dp"
-                            android:layout_weight="1"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
-                            android:text="⚙️ 系统应用详情页"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="系统设置"
                             android:textColor="#C9D1D9"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -3004,7 +3012,7 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 致敬与开源卡片 -->
+                <!-- 🌟 关于与版本更新综合卡片 (About & Update Center) -->
                 <LinearLayout
                     android:id="@+id/cardSettingsAbout"
                     android:layout_width="match_parent"
@@ -3017,7 +3025,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="✨ 关于 PiMet"
+                        android:text="✨ 关于 PiMet 与版本更新"
                         android:textColor="#F0F6FC"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -3025,16 +3033,169 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="PiMet 是基于 PRoot 打造的 Android 原生隔离容器，专为 Pi-Web 与 Pi Coding Agent 优化的专属 Shell。"
+                        android:layout_marginTop="4dp"
+                        android:text="PiMet 是基于 PRoot 打造的 Android 原生隔离开发环境，专为 Pi-Web 与 Pi Coding Agent 优化的专属 Shell 基座。"
                         android:textColor="#8B949E"
-                        android:textSize="12sp" />
+                        android:textSize="11.5sp" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#21262D" />
+
+                    <!-- 嵌入式更新中心区域 (cardSettingsUpdate) -->
+                    <LinearLayout
+                        android:id="@+id/cardSettingsUpdate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🔄 组件与应用更新中心"
+                            android:textColor="#F0F6FC"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="支持 Pi-Web 工作台与客户端增量平滑升级，绝不重置用户配置与会话数据"
+                            android:textColor="#8B949E"
+                            android:textSize="11sp" />
+
+                        <!-- 1. Pi-Web 工作台更新行 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="🌐 Pi-Web 工作台 (@agegr/pi-web)"
+                                    android:textColor="#E6EDF3"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/settingsPiWebVersionTv"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="已安装版本: 检测中..."
+                                    android:textColor="#8B949E"
+                                    android:textSize="11sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/btnCheckPiWebUpdate"
+                                android:layout_width="wrap_content"
+                                android:layout_height="32dp"
+                                android:background="@drawable/bg_btn_secondary"
+                                android:gravity="center"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:text="🔄 检查更新"
+                                android:textColor="#58A6FF"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvPiWebUpdateStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text=""
+                            android:textColor="#3FB950"
+                            android:textSize="11sp"
+                            android:visibility="gone" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginTop="10dp"
+                            android:layout_marginBottom="10dp"
+                            android:background="#21262D" />
+
+                        <!-- 2. PiMet 客户端应用更新行 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="🚀 PiMet 客户端应用"
+                                    android:textColor="#E6EDF3"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/settingsAppVersionTv"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="当前版本: v1.4.4"
+                                    android:textColor="#8B949E"
+                                    android:textSize="11sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/btnCheckAppUpdate"
+                                android:layout_width="wrap_content"
+                                android:layout_height="32dp"
+                                android:background="@drawable/bg_btn_primary"
+                                android:gravity="center"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:text="✨ 检查新版"
+                                android:textColor="#FFFFFF"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/tvUpdateStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text=""
+                            android:textColor="#3FB950"
+                            android:textSize="11sp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="12dp"
+                        android:background="#21262D" />
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="致敬开源灵感: DSHA (DSH-APP/DSHA) · DSH-Folk · Pi-Web"
+                        android:text="致敬开源灵感: DSHA (DSH-APP/DSHA) · DSH-Folk · Pi-Web · Pi Coding Agent"
                         android:textColor="#58A6FF"
                         android:textSize="11sp" />
                 </LinearLayout>
