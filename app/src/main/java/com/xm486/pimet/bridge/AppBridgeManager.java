@@ -275,11 +275,33 @@ public class AppBridgeManager {
 
                 case "tap":
                 case "click": {
+                    String targetText = json.optString("text", json.optString("click_text", json.optString("target", "")));
+                    String targetId = json.optString("target_id", json.optString("id", ""));
+
+                    // 1. 优先尝试语义级/文字级精准点击 (自动溯源可点击父容器)
+                    if (!TextUtils.isEmpty(targetText)) {
+                        boolean ok = service.clickByText(targetText);
+                        if (ok) {
+                            res.put("success", true);
+                            res.put("message", "已通过语义节点溯源成功点击目标: [" + targetText + "]");
+                            return res;
+                        }
+                    }
+                    if (!TextUtils.isEmpty(targetId)) {
+                        boolean ok = service.clickById(targetId);
+                        if (ok) {
+                            res.put("success", true);
+                            res.put("message", "已通过 ID 节点溯源成功点击: " + targetId);
+                            return res;
+                        }
+                    }
+
+                    // 2. 坐标点击降级
                     float x = (float) json.optDouble("x", -1);
                     float y = (float) json.optDouble("y", -1);
                     if (x < 0 || y < 0) {
                         res.put("success", false);
-                        res.put("error", "坐标参数错误: x=" + x + ", y=" + y);
+                        res.put("error", "未找到匹配文本且未提供有效的坐标参数 (x=" + x + ", y=" + y + ")");
                         return res;
                     }
                     boolean ok = service.click(x, y);
