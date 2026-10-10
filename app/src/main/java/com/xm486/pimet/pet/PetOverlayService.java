@@ -201,6 +201,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         super.onCreate();
         sInstance = this;
         isRunning = true;
+        PetRegistry.setPetEnabled(this, true);
         try {
             sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
         } catch (Throwable ignored) {}
@@ -1570,6 +1571,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             overlayRoot = null;
         }
         isRunning = false;
+        PetRegistry.setPetEnabled(this, false);
         if (sInstance == this) {
             sInstance = null;
         }

@@ -97,7 +97,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:background="#161B22"
+                        android:background="@drawable/bg_sunken"
                         android:gravity="center_vertical"
                         android:orientation="horizontal"
                         android:paddingStart="12dp"
@@ -118,7 +118,7 @@
                             android:layout_width="72dp"
                             android:layout_height="32dp"
                             android:layout_marginStart="8dp"
-                            android:background="#0D1117"
+                            android:background="@drawable/bg_input_field"
                             android:gravity="center"
                             android:hint="30141"
                             android:inputType="number"
@@ -660,7 +660,18 @@
                             android:text="🔄"
                             android:textSize="14sp" />
 
-                        <!-- 🔍 网页文字缩放 -->
+                        <!-- 🌐 中文翻译切换 -->
+                        <TextView
+                            android:id="@+id/btnFloatTranslate"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:gravity="center"
+                            android:text="译"
+                            android:textColor="#C9D1D9"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <!-- 🔍 网页文字缩放调节 -->
                         <TextView
                             android:id="@+id/btnFloatZoom"
                             android:layout_width="40dp"
@@ -670,23 +681,13 @@
                             android:textColor="#C9D1D9"
                             android:textSize="10.5sp" />
 
-                        <!-- 📁 导入手机文件/图片 -->
+                        <!-- 🎨 快速切换主题 -->
                         <TextView
-                            android:id="@+id/btnFloatImport"
+                            android:id="@+id/btnFloatTheme"
                             android:layout_width="40dp"
                             android:layout_height="36dp"
                             android:gravity="center"
-                            android:text="📁"
-                            android:textColor="#C9D1D9"
-                            android:textSize="15sp" />
-
-                        <!-- 📋 剪贴板快速操作 -->
-                        <TextView
-                            android:id="@+id/btnFloatClipboard"
-                            android:layout_width="40dp"
-                            android:layout_height="36dp"
-                            android:gravity="center"
-                            android:text="📋"
+                            android:text="🎨"
                             android:textSize="14sp" />
 
                         <!-- ↗ 外部浏览器打开 -->

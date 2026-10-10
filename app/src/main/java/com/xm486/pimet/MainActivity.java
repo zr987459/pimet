@@ -324,8 +324,9 @@ public class MainActivity extends AppCompatActivity {
     private TextView floatingBall;
     private TextView btnFloatFullscreen;
     private View btnFloatReload;
+    private TextView btnFloatTranslate;
     private TextView btnFloatZoom;
-    private View btnFloatImport;
+    private TextView btnFloatTheme;
     private View btnFloatBrowser;
     private View btnFloatClose;
 
@@ -376,7 +377,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnPrivilegeShizuku;
     private TextView btnPrivilegeAllFiles;
     private TextView btnSyncClipboard;
-    private View btnFloatClipboard;
 
     private Button btnToggleProactiveSettings;
     private Button btnAdjustProactiveIntervalSettings;
@@ -390,10 +390,11 @@ public class MainActivity extends AppCompatActivity {
     private final BroadcastReceiver overlayStateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            updatePetDisplay(PetRegistry.isPetEnabled(MainActivity.this));
+            boolean running = PetOverlayService.isRunning();
+            updatePetDisplay(running);
             updateLaunchPetUI();
             if (btnToggleGlobalOverlay != null) {
-                btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
+                btnToggleGlobalOverlay.setText(running
                         ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
                         : "🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
             }
@@ -624,8 +625,9 @@ public class MainActivity extends AppCompatActivity {
         btnFloatPetSwitch = null;
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
         btnFloatReload = findViewById(R.id.btnFloatReload);
+        btnFloatTranslate = findViewById(R.id.btnFloatTranslate);
         btnFloatZoom = findViewById(R.id.btnFloatZoom);
-        btnFloatImport = findViewById(R.id.btnFloatImport);
+        btnFloatTheme = findViewById(R.id.btnFloatTheme);
         btnFloatBrowser = findViewById(R.id.btnFloatBrowser);
         btnFloatClose = findViewById(R.id.btnFloatClose);
 
@@ -671,7 +673,6 @@ public class MainActivity extends AppCompatActivity {
         settingsShizukuStatusTv = findViewById(R.id.settingsShizukuStatusTv);
         btnPrivilegeAllFiles = findViewById(R.id.btnPrivilegeAllFiles);
         btnSyncClipboard = findViewById(R.id.btnSyncClipboard);
-        btnFloatClipboard = findViewById(R.id.btnFloatClipboard);
 
         // 桌面宠物设置组件
         tvCurrentPetName = findViewById(R.id.tvCurrentPetName);
@@ -2315,14 +2316,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateLaunchPetUI() {
-        boolean enabled = PetRegistry.isPetEnabled(this) || PetOverlayService.isRunning();
+        boolean running = PetOverlayService.isRunning();
+        if (!running && PetRegistry.isPetEnabled(this)) {
+            PetRegistry.setPetEnabled(this, false);
+        }
+        boolean enabled = running;
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         if (launchPetStatusTv != null) {
             launchPetStatusTv.setText(enabled ? "状态: 已开启" : "状态: 已关闭");
-            launchPetStatusTv.setTextColor(enabled ? 0xFF3FB950 : 0xFF8B949E);
+            launchPetStatusTv.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetStateBadge != null) {
             launchPetStateBadge.setText(enabled ? "已开" : "已关");
-            launchPetStateBadge.setTextColor(enabled ? 0xFF3FB950 : 0xFF8B949E);
+            launchPetStateBadge.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetIconTv != null) {
             launchPetIconTv.setText(enabled ? "🐾" : "💤");
@@ -2330,7 +2336,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void togglePetFromLaunch() {
-        boolean currentlyActive = PetOverlayService.isRunning() || PetRegistry.isPetEnabled(this);
+        boolean currentlyActive = PetOverlayService.isRunning();
         boolean willEnable = !currentlyActive;
         PetRegistry.setPetEnabled(this, willEnable);
         if (willEnable) {
@@ -3104,18 +3110,18 @@ public class MainActivity extends AppCompatActivity {
                 updatePiWebDisplay();
             }
         });
-        btnFloatZoom.setOnClickListener(v -> cycleWebZoom());
-        btnFloatImport.setOnClickListener(v -> {
-            floatingMenuVertical.setVisibility(View.GONE);
-            launchFilePickerForContainer();
+        btnFloatTranslate.setOnClickListener(v -> {
+            toggleWebTranslation();
+        });
+        btnFloatZoom.setOnClickListener(v -> {
+            showZoomDialog();
+        });
+        btnFloatTheme.setOnClickListener(v -> {
+            cycleThemeQuick();
         });
         btnFloatBrowser.setOnClickListener(v -> {
             floatingMenuVertical.setVisibility(View.GONE);
             openExternalBrowser();
-        });
-        btnFloatClipboard.setOnClickListener(v -> {
-            floatingMenuVertical.setVisibility(View.GONE);
-            showClipboardActionsDialog();
         });
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
     }
@@ -3128,18 +3134,234 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void cycleWebZoom() {
-        int zoom = PiMetConfig.getWebZoom(this);
-        int nextZoom;
-        if (zoom < 100) nextZoom = 100;
-        else if (zoom < 120) nextZoom = 120;
-        else if (zoom < 140) nextZoom = 140;
-        else nextZoom = 80;
+    private boolean isWebTranslated = false;
 
-        PiMetConfig.setWebZoom(this, nextZoom);
-        piWebWebView.getSettings().setTextZoom(nextZoom);
-        btnFloatZoom.setText(nextZoom + "%");
-        Toast.makeText(this, "工作台文字缩放: " + nextZoom + "%", Toast.LENGTH_SHORT).show();
+    private void toggleWebTranslation() {
+        if (piWebWebView == null) return;
+        isWebTranslated = !isWebTranslated;
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        if (btnFloatTranslate != null) {
+            btnFloatTranslate.setText(isWebTranslated ? "原" : "译");
+            btnFloatTranslate.setTextColor(isWebTranslated ? palette.accent : palette.text);
+        }
+
+        if (!isWebTranslated) {
+            piWebWebView.reload();
+            Toast.makeText(this, "🌐 已还原原始网页语言", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Toast.makeText(this, "🌐 正在应用中文界面翻译...", Toast.LENGTH_SHORT).show();
+
+        String js = "(function() {" +
+                "  if (window.__pimet_translated) return;" +
+                "  window.__pimet_translated = true;" +
+                "  var dict = {" +
+                "    'Session': '会话', 'Sessions': '会话列表', 'New Session': '新建会话'," +
+                "    'Terminal': '终端', 'Settings': '设置', 'Files': '文件', 'File': '文件'," +
+                "    'Plugins': '插件', 'Extensions': '扩展', 'Skills': '技能', 'Models': '模型'," +
+                "    'MCP Servers': 'MCP服务', 'Subagents': '子代理', 'Tools': '工具'," +
+                "    'Memory': '记忆库', 'Delete': '删除', 'Stop': '停止', 'Run': '运行'," +
+                "    'Restart': '重启', 'Save': '保存', 'Cancel': '取消', 'Clear': '清空'," +
+                "    'Copy': '复制', 'Refresh': '刷新', 'Search': '搜索', 'Filter': '筛选'," +
+                "    'Send': '发送', 'Attach': '附加', 'Upload': '上传', 'Download': '下载'," +
+                "    'Rename': '重命名', 'Close': '关闭', 'Confirm': '确认', 'Back': '返回'," +
+                "    'Edit': '编辑', 'Online': '在线', 'Offline': '离线', 'Idle': '就绪'," +
+                "    'Busy': '忙碌', 'Thinking': '思考中...', 'Running': '运行中'," +
+                "    'Ready': '就绪', 'Waiting': '等待中', 'Connected': '已连接'," +
+                "    'Disconnected': '未连接', 'Loading...': '加载中...'," +
+                "    'System Prompt': '系统提示词', 'User': '用户', 'Assistant': '助手'," +
+                "    'Agent': '智能体', 'Temperature': '温度参数', 'Max Tokens': '最大Token'," +
+                "    'Context Window': '上下文窗口', 'Ask anything...': '输入任何问题...'," +
+                "    'Type a message...': '输入消息...'" +
+                "  };" +
+                "  function translateNode(node) {" +
+                "    if (!node) return;" +
+                "    if (node.nodeType === 3) {" +
+                "      var t = node.nodeValue ? node.nodeValue.trim() : '';" +
+                "      if (t && dict[t]) { node.nodeValue = node.nodeValue.replace(t, dict[t]); }" +
+                "    } else if (node.nodeType === 1 && node.childNodes) {" +
+                "      if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE' || node.tagName === 'TEXTAREA') return;" +
+                "      if (node.placeholder && dict[node.placeholder]) { node.placeholder = dict[node.placeholder]; }" +
+                "      if (node.title && dict[node.title]) { node.title = dict[node.title]; }" +
+                "      for (var i = 0; i < node.childNodes.length; i++) {" +
+                "        translateNode(node.childNodes[i]);" +
+                "      }" +
+                "    }" +
+                "  }" +
+                "  translateNode(document.body);" +
+                "  var observer = new MutationObserver(function(mutations) {" +
+                "    mutations.forEach(function(m) {" +
+                "      m.addedNodes.forEach(function(n) { translateNode(n); });" +
+                "    });" +
+                "  });" +
+                "  observer.observe(document.body, { childList: true, subtree: true });" +
+                "})();";
+
+        piWebWebView.evaluateJavascript(js, null);
+    }
+
+    private void showZoomDialog() {
+        int currentZoom = PiMetConfig.getWebZoom(this);
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16));
+        layout.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
+
+        TextView title = new TextView(this);
+        title.setText("🔍 工作台显示缩放调节");
+        title.setTextSize(15f);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setTextColor(palette.text);
+        layout.addView(title);
+
+        TextView tvVal = new TextView(this);
+        tvVal.setText("当前缩放比例: " + currentZoom + "%");
+        tvVal.setTextSize(13f);
+        tvVal.setTextColor(palette.accent);
+        tvVal.setPadding(0, dpToPx(8), 0, dpToPx(12));
+        layout.addView(tvVal);
+
+        // 步进按钮行 [-10%] [重置 100%] [+10%]
+        LinearLayout stepRow = new LinearLayout(this);
+        stepRow.setOrientation(LinearLayout.HORIZONTAL);
+        stepRow.setGravity(Gravity.CENTER);
+
+        TextView btnMinus = new TextView(this);
+        btnMinus.setText("➖ 缩小 10%");
+        btnMinus.setTextColor(palette.text);
+        btnMinus.setTextSize(12f);
+        btnMinus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        btnMinus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+
+        TextView btnReset = new TextView(this);
+        btnReset.setText("🔄 100%");
+        btnReset.setTextColor(palette.accent);
+        btnReset.setTextSize(12f);
+        btnReset.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        btnReset.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        resetLp.leftMargin = dpToPx(8);
+        resetLp.rightMargin = dpToPx(8);
+        btnReset.setLayoutParams(resetLp);
+
+        TextView btnPlus = new TextView(this);
+        btnPlus.setText("➕ 放大 10%");
+        btnPlus.setTextColor(palette.text);
+        btnPlus.setTextSize(12f);
+        btnPlus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        btnPlus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+
+        stepRow.addView(btnMinus);
+        stepRow.addView(btnReset);
+        stepRow.addView(btnPlus);
+        layout.addView(stepRow);
+
+        // 常用预设行: 80% | 100% | 125% | 150% | 200%
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        presetRow.setGravity(Gravity.CENTER);
+        presetRow.setPadding(0, dpToPx(12), 0, 0);
+
+        int[] presets = {80, 100, 125, 150, 175, 200};
+        final List<TextView> presetViews = new ArrayList<>();
+        for (int p : presets) {
+            final int presetVal = p;
+            TextView pBtn = new TextView(this);
+            pBtn.setText(presetVal + "%");
+            pBtn.setTextSize(11f);
+            pBtn.setTextColor(presetVal == currentZoom ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
+            pBtn.setBackground(presetVal == currentZoom ? ThemeManager.createPrimaryButtonDrawable(this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
+            pBtn.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
+            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            pLp.rightMargin = dpToPx(4);
+            pBtn.setLayoutParams(pLp);
+            pBtn.setOnClickListener(v -> {
+                applyWebZoom(presetVal);
+                tvVal.setText("当前缩放比例: " + presetVal + "%");
+                for (int i = 0; i < presets.length; i++) {
+                    boolean active = presets[i] == presetVal;
+                    presetViews.get(i).setTextColor(active ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
+                    presetViews.get(i).setBackground(active ? ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(MainActivity.this, palette, 6f));
+                }
+            });
+            presetViews.add(pBtn);
+            presetRow.addView(pBtn);
+        }
+        layout.addView(presetRow);
+
+        // 完成按键
+        TextView btnDone = new TextView(this);
+        btnDone.setText("完成");
+        btnDone.setTextSize(13f);
+        btnDone.setTypeface(null, Typeface.BOLD);
+        btnDone.setGravity(Gravity.CENTER);
+        btnDone.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+        btnDone.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 8f));
+        btnDone.setPadding(0, dpToPx(10), 0, dpToPx(10));
+        LinearLayout.LayoutParams doneLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        doneLp.topMargin = dpToPx(16);
+        btnDone.setLayoutParams(doneLp);
+        layout.addView(btnDone);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(layout)
+                .create();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        }
+        btnDone.setOnClickListener(v -> dialog.dismiss());
+
+        btnMinus.setOnClickListener(v -> {
+            int z = Math.max(50, PiMetConfig.getWebZoom(this) - 10);
+            applyWebZoom(z);
+            tvVal.setText("当前缩放比例: " + z + "%");
+        });
+        btnReset.setOnClickListener(v -> {
+            applyWebZoom(100);
+            tvVal.setText("当前缩放比例: 100%");
+        });
+        btnPlus.setOnClickListener(v -> {
+            int z = Math.min(300, PiMetConfig.getWebZoom(this) + 10);
+            applyWebZoom(z);
+            tvVal.setText("当前缩放比例: " + z + "%");
+        });
+
+        dialog.show();
+    }
+
+    private void applyWebZoom(int zoom) {
+        PiMetConfig.setWebZoom(this, zoom);
+        if (piWebWebView != null) {
+            piWebWebView.getSettings().setTextZoom(zoom);
+        }
+        if (btnFloatZoom != null) {
+            btnFloatZoom.setText(zoom + "%");
+        }
+    }
+
+    private void cycleThemeQuick() {
+        String currentPref = ThemeManager.getThemePreference(this);
+        String nextTheme;
+        if (ThemeManager.THEME_AUTO.equals(currentPref)) {
+            nextTheme = ThemeManager.THEME_LIGHT;
+        } else if (ThemeManager.THEME_LIGHT.equals(currentPref)) {
+            nextTheme = ThemeManager.THEME_DARK;
+        } else if (ThemeManager.THEME_DARK.equals(currentPref)) {
+            nextTheme = ThemeManager.THEME_MIST;
+        } else if (ThemeManager.THEME_MIST.equals(currentPref)) {
+            nextTheme = ThemeManager.THEME_ROSE;
+        } else if (ThemeManager.THEME_ROSE.equals(currentPref)) {
+            nextTheme = ThemeManager.THEME_PINE;
+        } else {
+            nextTheme = ThemeManager.THEME_AUTO;
+        }
+        selectTheme(nextTheme);
     }
 
     private void toggleFullscreen(boolean fullscreen) {
@@ -4854,12 +5076,14 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         initPetMonitor();
         applyPetParams();
-        updatePetDisplay(PetRegistry.isPetEnabled(this));
+        boolean isPetRunning = PetOverlayService.isRunning();
+        updatePetDisplay(isPetRunning);
+        updateLaunchPetUI();
         updatePetPreview();
         buildPetList();
         buildPhysicsSettings();
         if (btnToggleGlobalOverlay != null) {
-            btnToggleGlobalOverlay.setText(PetOverlayService.isRunning()
+            btnToggleGlobalOverlay.setText(isPetRunning
                     ? "🌐 系统全局桌宠悬浮窗: 运行中 (点击关闭)"
                     : "🌐 系统全局桌宠悬浮窗: 未开启 (点击开启)");
         }
@@ -5082,6 +5306,24 @@ public class MainActivity extends AppCompatActivity {
         // 刷新桌宠与物理参数样式
         buildPhysicsSettings();
         buildPetList();
+        updateLaunchPetUI();
+
+        // 刷新悬浮球与悬浮菜单样式
+        if (floatingBall != null) {
+            GradientDrawable ballBg = new GradientDrawable();
+            ballBg.setColor(palette.bgPanel);
+            ballBg.setShape(GradientDrawable.OVAL);
+            ballBg.setStroke(Math.max(1, dpToPx(1.5f)), palette.border);
+            floatingBall.setBackground(ballBg);
+            floatingBall.setTextColor(palette.accent);
+        }
+        if (floatingMenuVertical != null) {
+            floatingMenuVertical.setBackground(ThemeManager.createCardDrawable(this, palette, 12f));
+            ThemeManager.applyThemeToHierarchy(floatingMenuVertical, palette);
+        }
+        if (btnFloatTranslate != null) {
+            btnFloatTranslate.setTextColor(isWebTranslated ? palette.accent : palette.text);
+        }
 
         if (piWebWebView != null) {
             ThemeManager.syncThemeToWebView(piWebWebView, this);

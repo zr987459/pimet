@@ -336,7 +336,11 @@ public class ThemeManager {
         if (v instanceof EditText) {
             EditText et = (EditText) v;
             et.setBackground(createInputDrawable(ctx, palette, 8f));
-            et.setTextColor(palette.text);
+            if ("launchPortInput".equals(idName)) {
+                et.setTextColor(palette.accent);
+            } else {
+                et.setTextColor(palette.text);
+            }
             et.setHintTextColor(palette.textMuted);
             return;
         }
@@ -474,15 +478,33 @@ public class ThemeManager {
                     v.setBackground(createNavBarDrawable(ctx, palette));
                     return;
                 }
-                // 下沉等宽文本/日志/控制台区域
+                // 悬浮工具球
+                if (idName.equals("floatingBall")) {
+                    GradientDrawable ballBg = new GradientDrawable();
+                    ballBg.setColor(palette.bgPanel);
+                    ballBg.setShape(GradientDrawable.OVAL);
+                    ballBg.setStroke(Math.max(1, dpToPx(ctx, 1.5f)), palette.border);
+                    v.setBackground(ballBg);
+                    if (v instanceof TextView) {
+                        ((TextView) v).setTextColor(palette.accent);
+                    }
+                    return;
+                }
+                // 悬浮球垂直展开菜单
+                if (idName.equals("floatingMenuVertical")) {
+                    v.setBackground(createCardDrawable(ctx, palette, 12f));
+                    return;
+                }
+                // 下沉等宽文本/日志/控制台区域与快捷配置栏
                 if (idName.equals("viewDetailedLogContainer") || idName.equals("physicsContainer")
-                        || idName.equals("launchConsoleScroll")) {
+                        || idName.equals("launchConsoleScroll") || idName.equals("cardLaunchPortQuickSet")) {
                     v.setBackground(createSunkenDrawable(ctx, palette, 10f));
                     return;
                 }
-                // 卡片容器
+                // 卡片容器 (包含首页状态卡、双指标卡、文件管理卡片、桌宠开关卡片、日志控制台等)
                 if (idName.startsWith("card") || idName.endsWith("Card")
-                        || idName.equals("piWebOfflineCard") || idName.equals("floatingPetChatCard")) {
+                        || idName.equals("piWebOfflineCard") || idName.equals("floatingPetChatCard")
+                        || idName.equals("btnLaunchFileManager") || idName.equals("btnLaunchPetToggle")) {
                     v.setBackground(createCardDrawable(ctx, palette, 14f));
                     return;
                 }
