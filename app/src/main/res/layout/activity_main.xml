@@ -1003,21 +1003,15 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="📑 设置分类二级菜单"
+                            android:text="📑 系统设置分类"
                             android:textColor="#F0F6FC"
-                            android:textSize="13sp"
+                            android:textSize="13.5sp"
                             android:textStyle="bold" />
 
                         <TextView
-                            android:id="@+id/btnSettingsShowAll"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:paddingStart="10dp"
-                            android:paddingTop="4dp"
-                            android:paddingEnd="10dp"
-                            android:paddingBottom="4dp"
-                            android:text="展开全部卡片"
+                            android:text="点击进入窗口 ›"
                             android:textColor="#58A6FF"
                             android:textSize="11sp" />
                     </LinearLayout>
@@ -1027,7 +1021,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="3dp"
                         android:layout_marginBottom="10dp"
-                        android:text="从上往下点击二级菜单项，快速直达对应功能卡片"
+                        android:text="点击下方二级菜单项，将在独立窗口中打开对应的配置管理界面"
                         android:textColor="#6E7681"
                         android:textSize="10.5sp" />
 
@@ -1348,6 +1342,169 @@
                             android:textSize="16sp" />
                     </LinearLayout>
                 </LinearLayout>
+
+                <!-- 📦 数据与配置无损迁移卡片 -->
+                <LinearLayout
+                    android:id="@+id/cardSettingsBackup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="16dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📦"
+                            android:textSize="16sp" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="数据与配置无损迁移"
+                            android:textColor="#F0F6FC"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="将当前系统的全部聊天记忆、子代理、插件生态、端口设置及应用偏好打包导出为 zip，一键迁移至新 PiMet 无损还原。"
+                        android:textColor="#8B949E"
+                        android:textSize="11sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnSettingsExportBackup"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginEnd="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_btn_primary"
+                            android:gravity="center"
+                            android:text="📤 导出备份包 (.zip)"
+                            android:textColor="#FFFFFF"
+                            android:textSize="11.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/btnSettingsImportBackup"
+                            android:layout_width="0dp"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:text="📥 导入还原包 (.zip)"
+                            android:textColor="#58A6FF"
+                            android:textSize="11.5sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- ================= 独立二级设置窗口 (Settings Sub-Window) ================= -->
+        <LinearLayout
+            android:id="@+id/viewSettingsSubWindow"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#0D1117"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 窗口顶栏 (Window Header Bar) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:background="#161B22"
+                android:gravity="center_vertical"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:elevation="4dp">
+
+                <!-- 返回按钮 -->
+                <LinearLayout
+                    android:id="@+id/btnSettingsSubWindowBack"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="10dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="‹ 返回设置"
+                        android:textColor="#58A6FF"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="20dp"
+                    android:layout_marginStart="4dp"
+                    android:layout_marginEnd="10dp"
+                    android:background="#30363D" />
+
+                <!-- 窗口标题 -->
+                <TextView
+                    android:id="@+id/tvSettingsSubWindowTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:text="⚡ 端口与网络服务"
+                    android:textColor="#F0F6FC"
+                    android:textSize="14.5sp"
+                    android:textStyle="bold" />
+
+                <!-- 关闭窗口按钮 -->
+                <TextView
+                    android:id="@+id/btnSettingsSubWindowClose"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/bg_btn_secondary"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textColor="#8B949E"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- 窗口卡片滚动容器 -->
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:id="@+id/layoutSettingsSubCards"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
 
                 <!-- 多服务自定义端口设置卡片 -->
                 <LinearLayout
@@ -2416,6 +2573,7 @@
                 </LinearLayout>
             </LinearLayout>
         </ScrollView>
+    </LinearLayout>
         <!-- 桌宠全屏交互聊天工作台 (点击桌宠或聊天按钮展开/收起) -->
         <LinearLayout
             android:id="@+id/floatingPetChatCard"

@@ -254,6 +254,14 @@ public class MainActivity extends AppCompatActivity {
     private TextView btnSettingsShowAll;
     private boolean settingsShowAllCards = false;
 
+    // 二级设置独立窗口组件
+    private View viewSettingsSubWindow;
+    private View btnSettingsSubWindowBack;
+    private TextView tvSettingsSubWindowTitle;
+    private View btnSettingsSubWindowClose;
+    private View btnSettingsExportBackup;
+    private View btnSettingsImportBackup;
+
     // 设置页各个卡片
     private View cardSettingsPorts;
     private View cardSettingsUpdate;
@@ -512,15 +520,32 @@ public class MainActivity extends AppCompatActivity {
         cardSettingsPetProactive = findViewById(R.id.cardSettingsPetProactive);
         cardSettingsAbout = findViewById(R.id.cardSettingsAbout);
 
-        if (menuItemPorts != null) menuItemPorts.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PORTS));
-        if (menuItemUpdate != null) menuItemUpdate.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_UPDATE));
-        if (menuItemPet != null) menuItemPet.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PET));
-        if (menuItemPrivileges != null) menuItemPrivileges.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_PRIVILEGES));
-        if (menuItemStorage != null) menuItemStorage.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_STORAGE));
-        if (menuItemAbout != null) menuItemAbout.setOnClickListener(v -> switchSettingsCategory(SETTINGS_CAT_ABOUT));
+        viewSettingsSubWindow = findViewById(R.id.viewSettingsSubWindow);
+        btnSettingsSubWindowBack = findViewById(R.id.btnSettingsSubWindowBack);
+        tvSettingsSubWindowTitle = findViewById(R.id.tvSettingsSubWindowTitle);
+        btnSettingsSubWindowClose = findViewById(R.id.btnSettingsSubWindowClose);
+        btnSettingsExportBackup = findViewById(R.id.btnSettingsExportBackup);
+        btnSettingsImportBackup = findViewById(R.id.btnSettingsImportBackup);
+
+        if (btnSettingsSubWindowBack != null) btnSettingsSubWindowBack.setOnClickListener(v -> closeSettingsSubWindow());
+        if (btnSettingsSubWindowClose != null) btnSettingsSubWindowClose.setOnClickListener(v -> closeSettingsSubWindow());
+
+        if (menuItemPorts != null) menuItemPorts.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_PORTS));
+        if (menuItemUpdate != null) menuItemUpdate.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_UPDATE));
+        if (menuItemPet != null) menuItemPet.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_PET));
+        if (menuItemPrivileges != null) menuItemPrivileges.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_PRIVILEGES));
+        if (menuItemStorage != null) menuItemStorage.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_STORAGE));
+        if (menuItemAbout != null) menuItemAbout.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_ABOUT));
         if (btnSettingsShowAll != null) btnSettingsShowAll.setOnClickListener(v -> toggleSettingsShowAll());
 
-        switchSettingsCategory(currentSettingsCategory);
+        if (btnSettingsExportBackup != null) btnSettingsExportBackup.setOnClickListener(v -> {
+            new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
+        });
+        if (btnSettingsImportBackup != null) btnSettingsImportBackup.setOnClickListener(v -> {
+            new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
+        });
+
+        applySettingsCardsVisibility();
 
         // Pi-Web 组件
         piWebProgressBar = findViewById(R.id.piWebProgressBar);
@@ -611,6 +636,7 @@ public class MainActivity extends AppCompatActivity {
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
         if (viewPlugins != null) viewPlugins.setVisibility(index == 2 ? View.VISIBLE : View.GONE);
         viewSettings.setVisibility(index == 3 ? View.VISIBLE : View.GONE);
+        if (viewSettingsSubWindow != null) viewSettingsSubWindow.setVisibility(View.GONE);
 
         // 更新底栏颜色
         int activeColor = 0xFF58A6FF;
@@ -3712,6 +3738,61 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    public void openSettingsSubWindow(int category) {
+        currentSettingsCategory = category;
+
+        String title = "⚡ 端口与网络服务";
+        switch (category) {
+            case SETTINGS_CAT_PORTS:
+                title = "⚡ 端口与网络服务";
+                break;
+            case SETTINGS_CAT_UPDATE:
+                title = "🔄 软件更新中心";
+                break;
+            case SETTINGS_CAT_PET:
+                title = "🐾 桌面宠物管理";
+                break;
+            case SETTINGS_CAT_PRIVILEGES:
+                title = "🛡️ 系统特权与权限";
+                break;
+            case SETTINGS_CAT_STORAGE:
+                title = "💾 容器存储与清理";
+                break;
+            case SETTINGS_CAT_ABOUT:
+                title = "ℹ️ 关于与致敬";
+                break;
+        }
+
+        if (tvSettingsSubWindowTitle != null) {
+            tvSettingsSubWindowTitle.setText(title);
+        }
+
+        updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, category == SETTINGS_CAT_PORTS);
+        updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, category == SETTINGS_CAT_UPDATE);
+        updateMenuItemState(menuItemPet, menuTitlePet, menuArrowPet, category == SETTINGS_CAT_PET);
+        updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, category == SETTINGS_CAT_PRIVILEGES);
+        updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
+        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
+
+        applySettingsCardsVisibility();
+
+        if (viewSettingsSubWindow != null) {
+            viewSettingsSubWindow.setVisibility(View.VISIBLE);
+        }
+        if (viewSettings != null) {
+            viewSettings.setVisibility(View.GONE);
+        }
+    }
+
+    public void closeSettingsSubWindow() {
+        if (viewSettingsSubWindow != null) {
+            viewSettingsSubWindow.setVisibility(View.GONE);
+        }
+        if (viewSettings != null) {
+            viewSettings.setVisibility(View.VISIBLE);
+        }
+    }
+
     public void switchSettingsCategory(int category) {
         currentSettingsCategory = category;
         settingsShowAllCards = false;
@@ -3746,7 +3827,7 @@ public class MainActivity extends AppCompatActivity {
             if (title != null) title.setTextColor(0xFF58A6FF);
             if (arrow != null) {
                 arrow.setTextColor(0xFF58A6FF);
-                arrow.setText("▼");
+                arrow.setText("进入 ›");
             }
         } else {
             item.setBackgroundColor(0xFF161B22);
@@ -4004,6 +4085,11 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public void onBackPressed() {
+        if (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE) {
+            closeSettingsSubWindow();
+            return;
+        }
+
         if (floatingMenuVertical != null && floatingMenuVertical.getVisibility() == View.VISIBLE) {
             floatingMenuVertical.setVisibility(View.GONE);
             return;

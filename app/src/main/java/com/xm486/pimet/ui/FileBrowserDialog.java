@@ -24,10 +24,12 @@ import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.xm486.pimet.BackupManager;
 import com.xm486.pimet.proot.ProotManager;
 
 import java.io.BufferedReader;
@@ -181,6 +183,12 @@ public class FileBrowserDialog {
 
         View spaceH2 = new View(context);
         header.addView(spaceH2, new LinearLayout.LayoutParams(dp(6), 1));
+
+        TextView btnBackup = buildActionBtn("📦 迁移备份", 0x228B5CF6, 0xFFC4B5FD, v -> showBackupMigrationDialog());
+        header.addView(btnBackup);
+
+        View spaceH3 = new View(context);
+        header.addView(spaceH3, new LinearLayout.LayoutParams(dp(6), 1));
 
         TextView btnClose = buildActionBtn("✕ 关闭", 0x22EF4444, 0xFFFCA5A5, v -> {
             if (dialog != null) dialog.dismiss();
@@ -652,6 +660,15 @@ public class FileBrowserDialog {
             View sp2 = new View(context);
             btnRow.addView(sp2, new LinearLayout.LayoutParams(dp(8), 1));
         } else {
+            if (item.name.toLowerCase().endsWith(".zip")) {
+                TextView btnRestore = buildActionBtn("📥 还原此备份", 0x228B5CF6, 0xFFC4B5FD, v -> {
+                    d.dismiss();
+                    confirmAndImportBackup(item.file);
+                });
+                btnRow.addView(btnRestore);
+                View spR = new View(context);
+                btnRow.addView(spR, new LinearLayout.LayoutParams(dp(8), 1));
+            }
             TextView btnPreview = buildActionBtn("🔍 预览文件", 0x2210B981, 0xFFA7F3D0, v -> {
                 d.dismiss();
                 showFilePreviewDialog(item.file);
@@ -731,6 +748,18 @@ public class FileBrowserDialog {
         tvMeta.setPadding(0, dp(4), 0, dp(8));
         root.addView(tvMeta);
 
+        boolean isZip = file.getName().toLowerCase().endsWith(".zip");
+        final AlertDialog[] previewDialogRef = new AlertDialog[1];
+        if (isZip) {
+            TextView btnRestoreThis = buildActionBtn("📥 一键无损还原此配置包 (无损迁移)", 0x228B5CF6, 0xFFC4B5FD, v -> {
+                if (previewDialogRef[0] != null) previewDialogRef[0].dismiss();
+                confirmAndImportBackup(file);
+            });
+            LinearLayout.LayoutParams rblp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rblp.bottomMargin = dp(8);
+            root.addView(btnRestoreThis, rblp);
+        }
+
         // 内容显示区（限制只读前 64KB 文本，避免超大文件卡死）
         ScrollView sv = new ScrollView(context);
         TextView tvContent = new TextView(context);
@@ -745,7 +774,9 @@ public class FileBrowserDialog {
         cbg.setStroke(dp(1), 0xFF30363D);
         tvContent.setBackground(cbg);
 
-        if (file.length() > 5 * 1024 * 1024) {
+        if (isZip) {
+            tvContent.setText("[ZIP 压缩归档包]\n\n此文件为 ZIP 归档。点击上方「📥 一键无损还原此配置包」可快速校验并将其作为 PiMet 迁移包还原至当前环境（涵盖聊天记忆、子代理、插件生态及全部应用偏好）。");
+        } else if (file.length() > 5 * 1024 * 1024) {
             tvContent.setText("[文件过大 (" + formatSize(file.length()) + ")，请通过终端查看]");
         } else {
             try (BufferedReader reader = new BufferedReader(
@@ -774,6 +805,7 @@ public class FileBrowserDialog {
 
         builder.setView(root);
         AlertDialog previewDialog = builder.create();
+        previewDialogRef[0] = previewDialog;
 
         Window window = previewDialog.getWindow();
         if (window != null) {
@@ -786,4 +818,308 @@ public class FileBrowserDialog {
 
         previewDialog.show();
     }
+
+    // =========================================================================
+    // 📦 数据与配置无损迁移 (Backup / Restore Migration)
+    // =========================================================================
+
+    private static class ProgressDialogHolder {
+        AlertDialog dialog;
+        TextView tvTitle;
+        TextView tvStage;
+        TextView tvDetail;
+        ProgressBar progressBar;
+    }
+
+    private ProgressDialogHolder showBackupProgressDialog(String title) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0D1117);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+
+        TextView tvTitle = new TextView(context);
+        tvTitle.setText(title);
+        tvTitle.setTextColor(0xFFF0F6FC);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        TextView tvStage = new TextView(context);
+        tvStage.setText("准备中...");
+        tvStage.setTextColor(0xFF58A6FF);
+        tvStage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvStage.setPadding(0, dp(8), 0, dp(4));
+        root.addView(tvStage);
+
+        ProgressBar progressBar = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setMax(100);
+        progressBar.setProgress(0);
+        LinearLayout.LayoutParams pblp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8));
+        pblp.topMargin = dp(4);
+        pblp.bottomMargin = dp(8);
+        root.addView(progressBar, pblp);
+
+        TextView tvDetail = new TextView(context);
+        tvDetail.setText("");
+        tvDetail.setTextColor(0xFF8B949E);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTypeface(Typeface.MONOSPACE);
+        tvDetail.setSingleLine(true);
+        tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        root.addView(tvDetail);
+
+        builder.setView(root);
+        builder.setCancelable(false);
+        AlertDialog d = builder.create();
+
+        Window window = d.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.width = (int) (context.getResources().getDisplayMetrics().widthPixels * 0.90f);
+            window.setAttributes(lp);
+        }
+        d.show();
+
+        ProgressDialogHolder holder = new ProgressDialogHolder();
+        holder.dialog = d;
+        holder.tvTitle = tvTitle;
+        holder.tvStage = tvStage;
+        holder.tvDetail = tvDetail;
+        holder.progressBar = progressBar;
+        return holder;
+    }
+
+    public void showBackupMigrationDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0D1117);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+
+        TextView tvTitle = new TextView(context);
+        tvTitle.setText("📦 PiMet 配置与数据无损迁移");
+        tvTitle.setTextColor(0xFFF0F6FC);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        TextView tvDesc = new TextView(context);
+        tvDesc.setText("支持将当前的聊天记忆、子代理、插件生态、端口及全部偏好设置打包导出为 zip 文件，或将备份包无损还原至当前环境。");
+        tvDesc.setTextColor(0xFF8B949E);
+        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvDesc.setPadding(0, dp(4), 0, dp(14));
+        root.addView(tvDesc);
+
+        final AlertDialog[] diagRef = new AlertDialog[1];
+
+        // 按钮 1: 立即打包导出
+        TextView btnExport = buildActionBtn("📤 导出全量备份包 (.zip)", 0x223B82F6, 0xFF93C5FD, v -> {
+            if (diagRef[0] != null) diagRef[0].dismiss();
+            performExportBackup();
+        });
+        btnExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnExport.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        elp.bottomMargin = dp(8);
+        root.addView(btnExport, elp);
+
+        // 按钮 2: 扫描当前目录或下载目录中的备份包
+        TextView btnScan = buildActionBtn("📥 从当前目录或下载目录导入还原", 0x2210B981, 0xFFA7F3D0, v -> {
+            if (diagRef[0] != null) diagRef[0].dismiss();
+            showRestorePicker();
+        });
+        btnScan.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnScan.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.bottomMargin = dp(8);
+        root.addView(btnScan, slp);
+
+        TextView btnClose = buildActionBtn("取消", 0x2230363D, 0xFF8B949E, v -> {
+            if (diagRef[0] != null) diagRef[0].dismiss();
+        });
+        btnClose.setPadding(dp(12), dp(8), dp(12), dp(8));
+        btnClose.setGravity(Gravity.CENTER);
+        root.addView(btnClose, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        builder.setView(root);
+        AlertDialog d = builder.create();
+        diagRef[0] = d;
+
+        Window window = d.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.width = (int) (context.getResources().getDisplayMetrics().widthPixels * 0.90f);
+            window.setAttributes(lp);
+        }
+        d.show();
+    }
+
+    private void performExportBackup() {
+        ProgressDialogHolder holder = showBackupProgressDialog("📦 正在打包全量配置与数据...");
+
+        // 如果当前正在浏览某个可写目录（如 Downloads 或外部存储），优先存入当前目录
+        File targetFile = null;
+        if (currentDir != null && currentDir.canWrite()) {
+            targetFile = new File(currentDir, BackupManager.generateBackupFileName());
+        }
+
+        BackupManager.exportBackup(context, targetFile, (percent, stage, logLine) -> {
+            holder.progressBar.setProgress(percent);
+            holder.tvStage.setText(stage + " (" + percent + "%)");
+            holder.tvDetail.setText(logLine);
+        }, (success, file, message) -> {
+            holder.dialog.dismiss();
+
+            AlertDialog.Builder resB = new AlertDialog.Builder(context);
+            LinearLayout r = new LinearLayout(context);
+            r.setOrientation(LinearLayout.VERTICAL);
+            r.setBackgroundColor(0xFF0D1117);
+            r.setPadding(dp(16), dp(16), dp(16), dp(16));
+
+            TextView t = new TextView(context);
+            t.setText(success ? "✔ 备份导出成功" : "❌ 备份导出失败");
+            t.setTextColor(success ? 0xFF3FB950 : 0xFFF85149);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            r.addView(t);
+
+            TextView msg = new TextView(context);
+            msg.setText(message);
+            msg.setTextColor(0xFFC9D1D9);
+            msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            msg.setPadding(0, dp(8), 0, dp(14));
+            r.addView(msg);
+
+            final AlertDialog[] resDiagRef = new AlertDialog[1];
+
+            if (success && file != null) {
+                TextView btnShare = buildActionBtn("📤 分享 / 发送备份包", 0x228B5CF6, 0xFFC4B5FD, v -> {
+                    BackupManager.shareBackupFile(context, file);
+                });
+                btnShare.setPadding(dp(12), dp(8), dp(12), dp(8));
+                btnShare.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams splp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                splp.bottomMargin = dp(6);
+                r.addView(btnShare, splp);
+
+                TextView btnCopy = buildActionBtn("📋 复制备份路径", 0x223B82F6, 0xFF93C5FD, v -> {
+                    ClipboardManager cm = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(ClipData.newPlainText("BackupPath", file.getAbsolutePath()));
+                        Toast.makeText(context, "已复制路径到剪切板", Toast.LENGTH_SHORT).show();
+                    }
+                });
+                btnCopy.setPadding(dp(12), dp(8), dp(12), dp(8));
+                btnCopy.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams cplp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                cplp.bottomMargin = dp(6);
+                r.addView(btnCopy, cplp);
+
+                loadCurrentDir();
+            }
+
+            TextView btnOk = buildActionBtn("确定", 0x2230363D, 0xFF8B949E, v -> {
+                if (resDiagRef[0] != null) resDiagRef[0].dismiss();
+            });
+            btnOk.setPadding(dp(12), dp(8), dp(12), dp(8));
+            btnOk.setGravity(Gravity.CENTER);
+            r.addView(btnOk, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            resB.setView(r);
+            AlertDialog d = resB.create();
+            resDiagRef[0] = d;
+            d.show();
+        });
+    }
+
+    private void showRestorePicker() {
+        List<File> zipCandidates = new ArrayList<>();
+
+        // 1. 扫描当前目录下的 .zip 文件
+        if (currentDir != null && currentDir.exists()) {
+            File[] files = currentDir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().toLowerCase().endsWith(".zip")) {
+                        zipCandidates.add(f);
+                    }
+                }
+            }
+        }
+
+        // 2. 扫描系统 Downloads 目录下的 PiMet-Backup-*.zip
+        try {
+            File dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (dlDir != null && dlDir.exists() && dlDir != currentDir) {
+                File[] files = dlDir.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.isFile() && f.getName().toLowerCase().endsWith(".zip") && !zipCandidates.contains(f)) {
+                            zipCandidates.add(f);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (zipCandidates.isEmpty()) {
+            new AlertDialog.Builder(context)
+                    .setTitle("未发现备份包")
+                    .setMessage("当前浏览目录及系统 Downloads 文件夹中未发现 .zip 格式备份文件。\n\n提示：您可在文件浏览器中先导航至包含备份包的文件夹，点击该 .zip 文件即可一键无损还原。")
+                    .setPositiveButton("我知道了", null)
+                    .show();
+            return;
+        }
+
+        String[] names = new String[zipCandidates.size()];
+        for (int i = 0; i < zipCandidates.size(); i++) {
+            File f = zipCandidates.get(i);
+            names[i] = f.getName() + " (" + formatSize(f.length()) + ")";
+        }
+
+        new AlertDialog.Builder(context)
+                .setTitle("选择要导入还原的备份包")
+                .setItems(names, (d, which) -> {
+                    if (which >= 0 && which < zipCandidates.size()) {
+                        confirmAndImportBackup(zipCandidates.get(which));
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    public void confirmAndImportBackup(File zipFile) {
+        if (zipFile == null || !zipFile.exists()) {
+            Toast.makeText(context, "备份文件不存在", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(context)
+                .setTitle("⚠️ 确认无损还原备份包？")
+                .setMessage("即将从以下文件还原全量数据：\n" + zipFile.getName() + " (" + formatSize(zipFile.length()) + ")\n\n包含内容：\n• 桌面宠物聊天记忆与好感度\n• 全部子代理配置与技能生态\n• NPM 插件与扩展依赖清单\n• 本地多服务端口与偏好设置\n\n现有环境的同名配置将被安全覆盖同步。是否继续？")
+                .setPositiveButton("立即还原", (d, which) -> {
+                    ProgressDialogHolder holder = showBackupProgressDialog("📥 正在无损还原配置与数据...");
+                    BackupManager.importBackup(context, zipFile, (percent, stage, logLine) -> {
+                        holder.progressBar.setProgress(percent);
+                        holder.tvStage.setText(stage + " (" + percent + "%)");
+                        holder.tvDetail.setText(logLine);
+                    }, (success, restoredCount, message) -> {
+                        holder.dialog.dismiss();
+
+                        new AlertDialog.Builder(context)
+                                .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
+                                .setMessage(message + (success ? "\n\n建议重启相关后台服务或刷新界面以使所有新配置完全生效。" : ""))
+                                .setPositiveButton("确定", (d2, w2) -> {
+                                    loadCurrentDir();
+                                })
+                                .show();
+                    });
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
 }
+
