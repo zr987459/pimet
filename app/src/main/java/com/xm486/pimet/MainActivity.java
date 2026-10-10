@@ -251,9 +251,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView menuTitleAbout;
     private TextView menuArrowAbout;
 
-    private TextView btnSettingsShowAll;
-    private boolean settingsShowAllCards = false;
-
     // 二级设置独立窗口组件
     private View viewSettingsSubWindow;
     private View btnSettingsSubWindowBack;
@@ -509,8 +506,6 @@ public class MainActivity extends AppCompatActivity {
         menuTitleAbout = findViewById(R.id.menuTitleAbout);
         menuArrowAbout = findViewById(R.id.menuArrowAbout);
 
-        btnSettingsShowAll = findViewById(R.id.btnSettingsShowAll);
-
         cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
         cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
         cardSettingsRegistry = findViewById(R.id.cardSettingsRegistry);
@@ -536,7 +531,6 @@ public class MainActivity extends AppCompatActivity {
         if (menuItemPrivileges != null) menuItemPrivileges.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_PRIVILEGES));
         if (menuItemStorage != null) menuItemStorage.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_STORAGE));
         if (menuItemAbout != null) menuItemAbout.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_ABOUT));
-        if (btnSettingsShowAll != null) btnSettingsShowAll.setOnClickListener(v -> toggleSettingsShowAll());
 
         if (btnSettingsExportBackup != null) btnSettingsExportBackup.setOnClickListener(v -> {
             new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
@@ -3795,11 +3789,6 @@ public class MainActivity extends AppCompatActivity {
 
     public void switchSettingsCategory(int category) {
         currentSettingsCategory = category;
-        settingsShowAllCards = false;
-        if (btnSettingsShowAll != null) {
-            btnSettingsShowAll.setText("展开全部卡片");
-            btnSettingsShowAll.setTextColor(0xFF58A6FF);
-        }
 
         updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, category == SETTINGS_CAT_PORTS);
         updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, category == SETTINGS_CAT_UPDATE);
@@ -3808,15 +3797,6 @@ public class MainActivity extends AppCompatActivity {
         updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
         updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
 
-        applySettingsCardsVisibility();
-    }
-
-    private void toggleSettingsShowAll() {
-        settingsShowAllCards = !settingsShowAllCards;
-        if (btnSettingsShowAll != null) {
-            btnSettingsShowAll.setText(settingsShowAllCards ? "收起只看当前分类" : "展开全部卡片");
-            btnSettingsShowAll.setTextColor(settingsShowAllCards ? 0xFF3FB950 : 0xFF58A6FF);
-        }
         applySettingsCardsVisibility();
     }
 
@@ -3840,43 +3820,42 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void applySettingsCardsVisibility() {
-        boolean showAll = settingsShowAllCards;
         int category = currentSettingsCategory;
 
         // 端口与网络类卡片
         if (cardSettingsPorts != null) {
-            cardSettingsPorts.setVisibility((showAll || category == SETTINGS_CAT_PORTS) ? View.VISIBLE : View.GONE);
+            cardSettingsPorts.setVisibility(category == SETTINGS_CAT_PORTS ? View.VISIBLE : View.GONE);
         }
         if (cardSettingsRegistry != null) {
-            cardSettingsRegistry.setVisibility((showAll || category == SETTINGS_CAT_PORTS) ? View.VISIBLE : View.GONE);
+            cardSettingsRegistry.setVisibility(category == SETTINGS_CAT_PORTS ? View.VISIBLE : View.GONE);
         }
 
         // 更新中心卡片
         if (cardSettingsUpdate != null) {
-            cardSettingsUpdate.setVisibility((showAll || category == SETTINGS_CAT_UPDATE) ? View.VISIBLE : View.GONE);
+            cardSettingsUpdate.setVisibility(category == SETTINGS_CAT_UPDATE ? View.VISIBLE : View.GONE);
         }
 
         // 桌面宠物卡片
         if (cardSettingsPetPreview != null) {
-            cardSettingsPetPreview.setVisibility((showAll || category == SETTINGS_CAT_PET) ? View.VISIBLE : View.GONE);
+            cardSettingsPetPreview.setVisibility(category == SETTINGS_CAT_PET ? View.VISIBLE : View.GONE);
         }
         if (cardSettingsPetProactive != null) {
-            cardSettingsPetProactive.setVisibility((showAll || category == SETTINGS_CAT_PET) ? View.VISIBLE : View.GONE);
+            cardSettingsPetProactive.setVisibility(category == SETTINGS_CAT_PET ? View.VISIBLE : View.GONE);
         }
 
         // 特权与权限卡片
         if (cardSettingsPrivileges != null) {
-            cardSettingsPrivileges.setVisibility((showAll || category == SETTINGS_CAT_PRIVILEGES) ? View.VISIBLE : View.GONE);
+            cardSettingsPrivileges.setVisibility(category == SETTINGS_CAT_PRIVILEGES ? View.VISIBLE : View.GONE);
         }
 
         // 容器存储与清理卡片
         if (cardSettingsStorage != null) {
-            cardSettingsStorage.setVisibility((showAll || category == SETTINGS_CAT_STORAGE) ? View.VISIBLE : View.GONE);
+            cardSettingsStorage.setVisibility(category == SETTINGS_CAT_STORAGE ? View.VISIBLE : View.GONE);
         }
 
         // 关于卡片
         if (cardSettingsAbout != null) {
-            cardSettingsAbout.setVisibility((showAll || category == SETTINGS_CAT_ABOUT) ? View.VISIBLE : View.GONE);
+            cardSettingsAbout.setVisibility(category == SETTINGS_CAT_ABOUT ? View.VISIBLE : View.GONE);
         }
     }
 
