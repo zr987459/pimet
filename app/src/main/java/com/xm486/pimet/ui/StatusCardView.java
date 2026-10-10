@@ -37,6 +37,12 @@ public class StatusCardView extends LinearLayout {
     private Button attachButton;    // 附件/相册导入按钮
     private OnClickListener chipClickListener;
 
+    // ---- 详细监控区域视图 ----
+    private LinearLayout monitorDetailContainer;
+    private TextView monitorTargetTv;
+    private TextView monitorActionTv;
+    private TextView monitorMetricsTv;
+
     /** 聊天处理阶段：active 时顶栏显示 chatPhaseText（细粒度：思考中/工具/搜索/回复中），
      * 让位给监控文案；endChatPhase 后恢复监控驱动 */
     private volatile boolean chatPhaseActive = false;
@@ -84,6 +90,48 @@ public class StatusCardView extends LinearLayout {
         modeView.setPadding(dp(8), 0, 0, 0);
         header.addView(modeView, new LayoutParams(LayoutParams.WRAP_CONTENT,
                 LayoutParams.WRAP_CONTENT));
+
+        // ---- 详细监控区（位于状态顶栏与聊天输入框之间） ----
+        monitorDetailContainer = new LinearLayout(context);
+        monitorDetailContainer.setOrientation(VERTICAL);
+        GradientDrawable detBg = new GradientDrawable();
+        detBg.setColor(0x24000000);
+        detBg.setCornerRadius(dp(8));
+        detBg.setStroke(dp(1), 0x22FFFFFF);
+        monitorDetailContainer.setBackground(detBg);
+        monitorDetailContainer.setPadding(dp(8), dp(5), dp(8), dp(5));
+
+        LinearLayout line1 = new LinearLayout(context);
+        line1.setOrientation(HORIZONTAL);
+        line1.setGravity(Gravity.CENTER_VERTICAL);
+
+        monitorTargetTv = new TextView(context);
+        monitorTargetTv.setTextSize(10f);
+        monitorTargetTv.setTextColor(0xFF38BDF8);
+        monitorTargetTv.setMaxLines(1);
+        monitorTargetTv.setEllipsize(TextUtils.TruncateAt.END);
+        monitorTargetTv.setText("🎯 监控: pi-web");
+        line1.addView(monitorTargetTv, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+
+        monitorMetricsTv = new TextView(context);
+        monitorMetricsTv.setTextSize(9.5f);
+        monitorMetricsTv.setTextColor(0xAAFFFFFF);
+        monitorMetricsTv.setMaxLines(1);
+        line1.addView(monitorMetricsTv, new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT));
+        monitorDetailContainer.addView(line1);
+
+        monitorActionTv = new TextView(context);
+        monitorActionTv.setTextSize(10.5f);
+        monitorActionTv.setTextColor(0xEEF8FAFC);
+        monitorActionTv.setMaxLines(2);
+        monitorActionTv.setEllipsize(TextUtils.TruncateAt.END);
+        monitorActionTv.setPadding(0, dp(2), 0, 0);
+        monitorActionTv.setText("⚡ 服务正常运行，守护待命");
+        monitorDetailContainer.addView(monitorActionTv);
+
+        LayoutParams detLp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        detLp.topMargin = dp(6);
+        addView(monitorDetailContainer, detLp);
 
         // ---- 输入框 + 发送按钮 ----
         LinearLayout inputRow = new LinearLayout(context);
@@ -172,23 +220,75 @@ public class StatusCardView extends LinearLayout {
         this.chipClickListener = listener;
     }
 
-    /** 用最新快照刷新状态点（监控信息主要走气泡，这里只留一个点） */
+    /** 用最新快照刷新状态点与中间详细监控 */
     public void update(OperitState.Snapshot snap) {
-        // 聊天阶段激活时：监控的细粒度状态（思考中/工具执行中/回复中…）透到顶栏文案，
-        // 空闲/未知则不覆盖「正在处理…」，避免等待期间顶栏完全卡死
+        if (snap == null) return;
+
+        // 1. 刷新顶栏简要状态
+        OperitState s = snap.state != null ? snap.state : OperitState.UNKNOWN;
         if (chatPhaseActive) {
-            OperitState s0 = snap.state;
-            if (s0 != null && s0 != OperitState.IDLE && s0 != OperitState.UNKNOWN) {
-                setChatPhase(s0.getEmoji() + " " + s0.getLabel());
+            if (s != OperitState.IDLE && s != OperitState.UNKNOWN) {
+                setChatPhase(s.getEmoji() + " " + s.getLabel());
             }
-            return;
+        } else {
+            stateLabel.setText(s.getLabel());
+            int c = StateStyle.overlayColor(getContext(), s);
+            stateDot.setTextColor(c);
+            stateLabel.setTextColor(c);
+            stateLabel.setTypeface(Typeface.DEFAULT_BOLD);
         }
-        OperitState s = snap.state;
-        stateLabel.setText(s.getLabel());
-        int c = StateStyle.overlayColor(getContext(), s);
-        stateDot.setTextColor(c);
-        stateLabel.setTextColor(c);
-        stateLabel.setTypeface(Typeface.DEFAULT_BOLD);
+
+        // 2. 刷新中间详细监控视图
+        if (monitorTargetTv != null) {
+            String target = (snap.agentName != null && !snap.agentName.isEmpty()) ? snap.agentName : "pi-web";
+            if (snap.model != null && !snap.model.isEmpty()) {
+                target += " · " + snap.model;
+            }
+            monitorTargetTv.setText("🎯 " + target);
+        }
+
+        if (monitorMetricsTv != null) {
+            String metrics = "";
+            if (snap.inputTokens > 0 || snap.outputTokens > 0) {
+                metrics = "↑" + snap.inputTokens + " ↓" + snap.outputTokens;
+            } else if (snap.lastActiveTime > 0) {
+                long diffSec = Math.max(0, (System.currentTimeMillis() - snap.lastActiveTime) / 1000);
+                metrics = (diffSec < 60) ? (diffSec + "s前") : ((diffSec / 60) + "m前");
+            }
+            monitorMetricsTv.setText(metrics);
+        }
+
+        if (monitorActionTv != null) {
+            if (chatPhaseActive && !chatPhaseText.isEmpty()) {
+                monitorActionTv.setText("💬 " + chatPhaseText);
+            } else {
+                String action;
+                if (s == OperitState.TOOL_RUNNING) {
+                    action = "🔧 工具执行: " + (snap.lastTool != null && !snap.lastTool.isEmpty() ? snap.lastTool : "执行指令中...");
+                } else if (s == OperitState.THINKING) {
+                    action = "🤔 正在推理分析与规划任务...";
+                } else if (s == OperitState.RESPONDING) {
+                    action = "💬 正在组织流式回复...";
+                } else if (s == OperitState.WORKING) {
+                    action = "⚡ 正在执行后台任务...";
+                } else if (s == OperitState.WAITING) {
+                    action = "⏳ 等待任务与依赖返回...";
+                } else if (s == OperitState.ERROR) {
+                    action = "❌ 发生异常，请检查控制台输出";
+                } else if (s == OperitState.IDLE) {
+                    action = snap.operitRunning ? "😴 进程待命中 · 容器环境正常" : "💤 空闲待命";
+                } else {
+                    action = "🔌 状态监听中...";
+                }
+                if (snap.recentEvents != null && !snap.recentEvents.isEmpty() && s != OperitState.IDLE) {
+                    String latestEvent = snap.recentEvents.get(0);
+                    if (latestEvent != null && !latestEvent.trim().isEmpty()) {
+                        action += " (" + latestEvent.trim() + ")";
+                    }
+                }
+                monitorActionTv.setText(action);
+            }
+        }
     }
 
     /** 聊天开始：顶栏切到细粒度阶段（思考中/工具执行中/搜索中/回复中…），让位监控 */

@@ -458,9 +458,13 @@ public final class PluginManager {
 
     /**
      * 保存/更新 MCP 外部服务配置
+     * 支持 stdio 命令行服务 (command, args, env) 与 HTTP/SSE 远程服务 (url, headers, description)
      */
-    public static boolean saveMcpServer(Context context, String serverName, String command, String argsLine, String envJsonStr) {
+    public static boolean saveMcpServer(Context context, String serverName, String commandOrUrl, String argsOrDesc, String envOrHeaders) {
         try {
+            if (serverName == null || serverName.trim().isEmpty()) return false;
+            String cleanName = serverName.trim().replaceAll("[^a-zA-Z0-9_-]", "_");
+
             File rootfs = ProotManager.getRootfsDir(context);
             File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
             mcpFile.getParentFile().mkdirs();
@@ -480,24 +484,37 @@ public final class PluginManager {
             }
 
             JSONObject serverObj = new JSONObject();
-            serverObj.put("command", command.trim());
+            String target = commandOrUrl != null ? commandOrUrl.trim() : "";
 
-            if (argsLine != null && !argsLine.trim().isEmpty()) {
-                JSONArray argsArr = new JSONArray();
-                for (String arg : argsLine.trim().split("\\s+")) {
-                    if (!arg.isEmpty()) argsArr.put(arg);
+            if (target.startsWith("http://") || target.startsWith("https://")) {
+                serverObj.put("url", target);
+                if (argsOrDesc != null && !argsOrDesc.trim().isEmpty()) {
+                    serverObj.put("description", argsOrDesc.trim());
                 }
-                serverObj.put("args", argsArr);
+                if (envOrHeaders != null && !envOrHeaders.trim().isEmpty()) {
+                    try {
+                        JSONObject headersObj = new JSONObject(envOrHeaders.trim());
+                        serverObj.put("headers", headersObj);
+                    } catch (Throwable ignored) {}
+                }
+            } else {
+                serverObj.put("command", target);
+                if (argsOrDesc != null && !argsOrDesc.trim().isEmpty()) {
+                    JSONArray argsArr = new JSONArray();
+                    for (String arg : argsOrDesc.trim().split("\\s+")) {
+                        if (!arg.isEmpty()) argsArr.put(arg);
+                    }
+                    serverObj.put("args", argsArr);
+                }
+                if (envOrHeaders != null && !envOrHeaders.trim().isEmpty()) {
+                    try {
+                        JSONObject envObj = new JSONObject(envOrHeaders.trim());
+                        serverObj.put("env", envObj);
+                    } catch (Throwable ignored) {}
+                }
             }
 
-            if (envJsonStr != null && !envJsonStr.trim().isEmpty()) {
-                try {
-                    JSONObject envObj = new JSONObject(envJsonStr.trim());
-                    serverObj.put("env", envObj);
-                } catch (Throwable ignored) {}
-            }
-
-            servers.put(serverName.trim(), serverObj);
+            servers.put(cleanName, serverObj);
             writeFile(mcpFile, root.toString(2));
             return true;
         } catch (Throwable t) {
@@ -507,19 +524,149 @@ public final class PluginManager {
     }
 
     /**
-     * 新建/保存自定义 Skill 技能
+     * 新建/保存自定义 Skill 技能 (自动补全标准 Frontmatter 元数据)
      */
     public static boolean saveSkill(Context context, String skillName, String markdownContent) {
         try {
+            if (skillName == null || skillName.trim().isEmpty()) return false;
+            String cleanName = skillName.trim().replaceAll("[^a-zA-Z0-9_-]", "_");
+
             File rootfs = ProotManager.getRootfsDir(context);
-            File skillDir = new File(rootfs, "root/.pi/agent/skills/" + skillName.trim());
+            File skillDir = new File(rootfs, "root/.pi/agent/skills/" + cleanName);
             skillDir.mkdirs();
             File skillFile = new File(skillDir, "SKILL.md");
-            writeFile(skillFile, markdownContent);
+
+            String content = markdownContent != null ? markdownContent.trim() : "";
+            if (!content.startsWith("---")) {
+                content = "---\nname: " + cleanName + "\ndescription: " + cleanName + " 技能\n---\n\n" + content;
+            }
+
+            writeFile(skillFile, content);
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "saveSkill error", t);
             return false;
+        }
+    }
+
+    /**
+     * 将扩展包自动同步写入 settings.json 的 packages 列表
+     */
+    public static void addPackageToSettings(Context context, String pkgName) {
+        try {
+            if (pkgName == null || pkgName.trim().isEmpty()) return;
+            String clean = pkgName.trim();
+            if (clean.startsWith("npm install ") || clean.startsWith("npm i ")) {
+                clean = clean.replaceFirst("^npm (install|i) ", "").trim();
+            }
+            if (clean.contains("@") && !clean.startsWith("@")) {
+                clean = clean.substring(0, clean.indexOf("@")).trim();
+            }
+
+            File rootfs = ProotManager.getRootfsDir(context);
+            File settingsJson = new File(rootfs, "root/.pi/agent/settings.json");
+            JSONObject obj = new JSONObject();
+            if (settingsJson.exists()) {
+                String c = readFile(settingsJson);
+                if (c != null && !c.trim().isEmpty()) {
+                    try { obj = new JSONObject(c); } catch (Throwable ignored) {}
+                }
+            }
+            JSONArray pkgs = obj.optJSONArray("packages");
+            if (pkgs == null) {
+                pkgs = new JSONArray();
+                obj.put("packages", pkgs);
+            }
+            String target = clean.startsWith("npm:") || clean.startsWith("git:") ? clean : ("npm:" + clean);
+            boolean exists = false;
+            for (int i = 0; i < pkgs.length(); i++) {
+                if (target.equalsIgnoreCase(pkgs.optString(i, ""))) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                pkgs.put(target);
+                writeFile(settingsJson, obj.toString(2));
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "addPackageToSettings error", t);
+        }
+    }
+
+    /**
+     * 校验配置语法与格式规范是否符合 Pi 引擎要求
+     */
+    public static class ValidationResult {
+        public boolean valid;
+        public String message = "";
+        public String formatted = "";
+    }
+
+    public static ValidationResult validatePluginConfig(int type, String name, String content) {
+        ValidationResult r = new ValidationResult();
+        if (content == null || content.trim().isEmpty()) {
+            r.valid = false;
+            r.message = "配置内容不能为空";
+            return r;
+        }
+        String str = content.trim();
+
+        if (type == PluginItem.TYPE_MCP) {
+            try {
+                JSONObject obj = new JSONObject(str);
+                boolean hasCmd = obj.has("command") && !obj.optString("command").trim().isEmpty();
+                boolean hasUrl = obj.has("url") && !obj.optString("url").trim().isEmpty();
+                if (!hasCmd && !hasUrl) {
+                    r.valid = false;
+                    r.message = "MCP 配置必须包含 'command' (stdio 服务) 或 'url' (HTTP 服务)";
+                    return r;
+                }
+                r.valid = true;
+                r.formatted = obj.toString(2);
+                r.message = hasUrl ? "✔ HTTP/SSE MCP 服务配置校验通过" : "✔ stdio MCP 服务配置校验通过";
+                return r;
+            } catch (Throwable e) {
+                r.valid = false;
+                r.message = "JSON 语法解析失败: " + e.getMessage();
+                return r;
+            }
+        } else if (type == PluginItem.TYPE_SKILL) {
+            if (name == null || name.trim().isEmpty()) {
+                r.valid = false;
+                r.message = "技能名称不能为空";
+                return r;
+            }
+            if (name.contains("/") || name.contains("\\") || name.contains("..")) {
+                r.valid = false;
+                r.message = "技能名称不能包含路径分隔符或非法符号";
+                return r;
+            }
+            r.valid = true;
+            if (!str.startsWith("---")) {
+                r.formatted = "---\nname: " + name.trim() + "\ndescription: " + name.trim() + " 技能\n---\n\n" + str;
+                r.message = "✔ Skill 内容符合规范 (已自动补充标准 YAML frontmatter 元数据)";
+            } else {
+                r.formatted = str;
+                r.message = "✔ Skill 内容校验通过 (包含标准元数据)";
+            }
+            return r;
+        } else if (type == PluginItem.TYPE_SUBAGENT) {
+            if (name == null || name.trim().isEmpty()) {
+                r.valid = false;
+                r.message = "子代理名称不能为空";
+                return r;
+            }
+            r.valid = true;
+            r.formatted = str;
+            r.message = "✔ 子代理 Prompt 配置有效";
+            return r;
+        } else {
+            // Extension or package
+            r.valid = true;
+            r.formatted = str;
+            r.message = "✔ 扩展配置已就绪";
+            return r;
         }
     }
 
@@ -1028,6 +1175,9 @@ public final class PluginManager {
             if (code1 != 0) {
                 String cmd2 = "npm install -g " + input + " --registry=" + reg;
                 code1 = ProotManager.executeCommandSync(context, cmd2);
+            }
+            if (code1 == 0) {
+                addPackageToSettings(context, input);
             }
             syncPlugins(context);
             res.success = (code1 == 0);

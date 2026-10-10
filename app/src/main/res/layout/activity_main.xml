@@ -820,6 +820,18 @@
                             android:textSize="12sp"
                             android:textStyle="bold" />
                     </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/btnPluginStore"
+                        android:layout_width="match_parent"
+                        android:layout_height="38dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/bg_btn_primary"
+                        android:gravity="center"
+                        android:text="🏪 插件与生态商店 (精选库 · 热门网站 · 实时翻译)"
+                        android:textColor="#FFFFFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
 
                 <!-- 自定义插件 / npm 模块安装卡片 -->
@@ -944,6 +956,7 @@
                             android:id="@+id/chipCatSubagents"
                             android:layout_width="wrap_content"
                             android:layout_height="32dp"
+                            android:layout_marginEnd="8dp"
                             android:background="@drawable/bg_btn_secondary"
                             android:gravity="center"
                             android:paddingStart="14dp"
@@ -951,6 +964,19 @@
                             android:text="🤖 子代理/提示词"
                             android:textColor="#C9D1D9"
                             android:textSize="12sp" />
+
+                        <TextView
+                            android:id="@+id/chipCatStore"
+                            android:layout_width="wrap_content"
+                            android:layout_height="32dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:gravity="center"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="🏪 插件与生态商店"
+                            android:textColor="#38BDF8"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
                     </LinearLayout>
                 </HorizontalScrollView>
 

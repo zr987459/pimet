@@ -52,6 +52,8 @@ public class PiWebActivity extends AppCompatActivity {
     private boolean isBarCollapsed = false;
 
     public static final String EXTRA_PORT = "extra_port";
+    public static final String EXTRA_URL = "extra_url";
+    public static final String EXTRA_TITLE = "extra_title";
 
     private ValueCallback<Uri[]> filePathCallback;
     private final ActivityResultLauncher<Intent> fileChooserLauncher = registerForActivityResult(
@@ -82,9 +84,15 @@ public class PiWebActivity extends AppCompatActivity {
         ThemeHelper.applyTheme(this);
         super.onCreate(savedInstanceState);
         ThemeManager.applyWindowTheme(this, ThemeManager.getEffectivePalette(this));
-        int extra = getIntent().getIntExtra(EXTRA_PORT, 0);
-        port = (extra >= 1 && extra <= 65535) ? extra : PetRegistry.getPiWebPort(this);
-        currentUrl = "http://127.0.0.1:" + port + "/";
+        String customUrl = getIntent().getStringExtra(EXTRA_URL);
+        if (customUrl != null && !customUrl.trim().isEmpty()) {
+            currentUrl = customUrl.trim();
+            port = 0;
+        } else {
+            int extra = getIntent().getIntExtra(EXTRA_PORT, 0);
+            port = (extra >= 1 && extra <= 65535) ? extra : PetRegistry.getPiWebPort(this);
+            currentUrl = "http://127.0.0.1:" + port + "/";
+        }
         buildUi();
         loadWeb();
     }
@@ -144,7 +152,12 @@ public class PiWebActivity extends AppCompatActivity {
                 ThemeManager.syncThemeToWebView(v, PiWebActivity.this);
                 if (url != null && !url.startsWith("about:") && !url.isEmpty()) {
                     currentUrl = url;
-                    statusText.setText(getTargetName(port) + " · :" + port);
+                    if (isExternalUrl(url)) {
+                        String title = v.getTitle();
+                        statusText.setText(title != null && !title.isEmpty() ? title : url);
+                    } else {
+                        statusText.setText(getTargetName(port) + " · :" + port);
+                    }
                     statusText.setTextColor(getColor(R.color.feedback_success));
                     if (indicatorDot != null) {
                         indicatorDot.setBackgroundColor(getColor(R.color.feedback_success));
@@ -318,7 +331,20 @@ public class PiWebActivity extends AppCompatActivity {
         }
     }
 
+    private boolean isExternalUrl(String url) {
+        return url != null && (url.startsWith("http://") || url.startsWith("https://")) && !url.contains("127.0.0.1") && !url.contains("localhost");
+    }
+
     private void loadWeb() {
+        if (isExternalUrl(currentUrl)) {
+            String titleExtra = getIntent().getStringExtra(EXTRA_TITLE);
+            statusText.setText(titleExtra != null ? titleExtra : ("加载 " + currentUrl));
+            statusText.setTextColor(0xDDFFFFFF);
+            if (indicatorDot != null) indicatorDot.setBackgroundColor(0xFF38BDF8);
+            webView.loadUrl(currentUrl);
+            return;
+        }
+
         final String url = "http://127.0.0.1:" + port + "/";
         currentUrl = url;
         statusText.setText("连接 127.0.0.1:" + port + " …");

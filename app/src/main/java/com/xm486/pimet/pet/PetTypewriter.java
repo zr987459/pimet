@@ -67,13 +67,17 @@ public class PetTypewriter implements Runnable {
         service.layoutChatBubble();
 
         if (index < length) {
-            handler.postDelayed(this, 50);
+            handler.postDelayed(this, 48);
         } else {
-            // 播完：有「分段接续」回调则交给它（打完全立刻播下一段），否则 1.5s 后自动隐藏气泡
+            // 播完当前分段：
             if (onTyped != null) {
-                onTyped.run();
+                // 有后续分段：保留充裕的阅读时间（至少 2.8 秒，按字数动态延长），绝不瞬间刷掉
+                int readPause = Math.max(2800, Math.min(7000, length * 140));
+                handler.postDelayed(onTyped, readPause);
             } else {
-                service.scheduleBubbleHide(1500);
+                // 最终分段结束：预留 5.5 秒 ~ 10 秒供用户完整阅读
+                int finalPause = Math.max(5500, Math.min(10000, length * 160));
+                service.scheduleBubbleHide(finalPause);
             }
         }
     }

@@ -1406,26 +1406,18 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     private void applyPetState(OperitState.Snapshot snap) {
         if (petView == null) return;
 
-        // 状态变化：弹气泡通知（主 AI 副监控 —— 状态信息上移到气泡）
+        // 状态变化：准确反映当前状态过渡（简练准确，杜绝跑任务时虚假提前宣告完成）
         if (lastState != null && lastState != snap.state
                 && snap.state != OperitState.UNKNOWN) {
-            showStateBubble(snap.state);
-        }
-
-        // 任务完成检测：上一状态是非空闲（工作/思考/工具等），新状态变为空闲
-        if (lastState != null
-                && lastState != OperitState.UNKNOWN
-                && lastState != OperitState.IDLE
-                && snap.state == OperitState.IDLE) {
-            showCompletionBubble();
-        } else if (snap.state == OperitState.ERROR && lastState != OperitState.ERROR) {
-            // 任务失败检测：状态切换为 ERROR 时播放失败动作
-            showFailureBubble(null);
+            showStateBubble(snap);
+            if (snap.state == OperitState.ERROR && lastState != OperitState.ERROR) {
+                showFailureBubble(null);
+            }
         }
         lastState = snap.state;
 
         petView.updateState(snap.state);
-        // 状态卡只刷新徽章
+        // 状态卡刷新状态与详细监控
         statusCard.update(snap);
         if (!isPetHidden) {
             updateNotification("桌宠 · " + snap.state.getLabel());
@@ -1434,19 +1426,51 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         }
     }
 
-    /** 状态变化气泡：状态文字直接进气泡，2.5s 自动隐藏 */
-    private void showStateBubble(OperitState state) {
-        if (bubbleView == null) return;
+    /** 状态变化气泡：准确反映当前状态过渡，简明扼要，2.8s 自动优雅淡出 */
+    private void showStateBubble(OperitState.Snapshot snap) {
+        if (bubbleView == null || snap == null) return;
         // 不打断正在进行的 AI 聊天回复
         if (chatBridge != null && chatBridge.isChatting()) return;
-        // 不打断任务完成庆祝气泡（它自己会隐藏）
         bubbleHandler.removeCallbacks(bubbleHideRunnable);
-        bubbleView.setText(state.getEmoji() + " " + state.getLabel());
+
+        OperitState state = snap.state != null ? snap.state : OperitState.IDLE;
+        String text;
+        switch (state) {
+            case TOOL_RUNNING:
+                String tool = (snap.lastTool != null && !snap.lastTool.isEmpty()) ? snap.lastTool : "运行中";
+                text = "🔧 执行工具: " + tool;
+                break;
+            case THINKING:
+                text = "🤔 思考分析中...";
+                break;
+            case RESPONDING:
+                text = "💬 组织回复中...";
+                break;
+            case WORKING:
+                text = "⚡ 正在处理任务...";
+                break;
+            case WAITING:
+                text = "⏳ 等待响应...";
+                break;
+            case ERROR:
+                text = "❌ 任务异常";
+                break;
+            case IDLE:
+            default:
+                if (lastState != null && (lastState == OperitState.RESPONDING || lastState == OperitState.WORKING || lastState == OperitState.TOOL_RUNNING)) {
+                    text = "✅ 任务就绪 · 待命中";
+                } else {
+                    text = "😴 空闲待命";
+                }
+                break;
+        }
+
+        bubbleView.setText(text);
         layoutChatBubble();
         bubbleView.setVisibility(View.VISIBLE);
         bubbleView.setAlpha(0f);
-        bubbleView.animate().alpha(1f).setDuration(200).start();
-        scheduleBubbleHide(2500);
+        bubbleView.animate().alpha(1f).setDuration(180).start();
+        scheduleBubbleHide(2800);
     }
 
     /** 动态切换角色形象并持久化保存 */

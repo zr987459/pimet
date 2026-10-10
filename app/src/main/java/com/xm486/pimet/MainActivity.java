@@ -4537,6 +4537,16 @@ public class MainActivity extends AppCompatActivity {
             btnAddPluginConfig.setOnClickListener(v -> showAddPluginConfigDialog());
         }
 
+        View btnPluginStore = findViewById(R.id.btnPluginStore);
+        if (btnPluginStore != null) {
+            btnPluginStore.setOnClickListener(v -> com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory)));
+        }
+
+        View chipCatStore = findViewById(R.id.chipCatStore);
+        if (chipCatStore != null) {
+            chipCatStore.setOnClickListener(v -> com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory)));
+        }
+
         if (btnInstallCustomPlugin != null) {
             btnInstallCustomPlugin.setOnClickListener(v -> {
                 String input = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
@@ -4789,6 +4799,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showAddPluginConfigDialog() {
         String[] options = new String[]{
+                "🏪 浏览插件与生态商店 (一键安装与生态网站)",
                 "🌐 添加 MCP 外部服务 (mcp.json)",
                 "🧠 新建 Skill 专家技能 (SKILL.md)",
                 "🤖 新建 Subagent 子智能体 (.md)",
@@ -4799,15 +4810,18 @@ public class MainActivity extends AppCompatActivity {
                 .setItems(options, (dialog, which) -> {
                     switch (which) {
                         case 0:
-                            showAddMcpDialog();
+                            com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory));
                             break;
                         case 1:
-                            showAddSkillDialog();
+                            showAddMcpDialog();
                             break;
                         case 2:
-                            showAddSubagentDialog();
+                            showAddSkillDialog();
                             break;
                         case 3:
+                            showAddSubagentDialog();
+                            break;
+                        case 4:
                             showEditGlobalSettingsDialog();
                             break;
                     }
@@ -4821,18 +4835,18 @@ public class MainActivity extends AppCompatActivity {
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
 
-        final EditText nameInput = createDialogInput("服务名称 (如 fetch)", false);
-        final EditText cmdInput = createDialogInput("启动命令 (如 uvx, npx, python3)", false);
-        final EditText argsInput = createDialogInput("参数 (如 mcp-server-fetch)", false);
-        final EditText envInput = createDialogInput("环境变量 JSON (可选, 如 {\"API_KEY\":\"...\"})", true);
+        final EditText nameInput = createDialogInput("服务名称 (如 fetch 或 mt)", false);
+        final EditText cmdInput = createDialogInput("命令或 HTTP URL (如 npx, uvx, 或 http://127.0.0.1:8788/mcp)", false);
+        final EditText argsInput = createDialogInput("参数或描述 (如 mcp-server-fetch)", false);
+        final EditText envInput = createDialogInput("环境变量或 Headers JSON (可选, 如 {\"API_KEY\":\"...\"})", true);
 
         layout.addView(createDialogLabel("服务标识名:"));
         layout.addView(nameInput);
-        layout.addView(createDialogLabel("执行命令:"));
+        layout.addView(createDialogLabel("执行命令或 HTTP 地址:"));
         layout.addView(cmdInput);
-        layout.addView(createDialogLabel("运行参数 (空格隔开):"));
+        layout.addView(createDialogLabel("运行参数 / 描述信息:"));
         layout.addView(argsInput);
-        layout.addView(createDialogLabel("环境变量 (JSON 格式):"));
+        layout.addView(createDialogLabel("环境变量 / Headers (JSON 格式):"));
         layout.addView(envInput);
 
         new AlertDialog.Builder(this)
@@ -4844,11 +4858,19 @@ public class MainActivity extends AppCompatActivity {
                     String args = argsInput.getText().toString().trim();
                     String env = envInput.getText().toString().trim();
                     if (name.isEmpty() || cmd.isEmpty()) {
-                        Toast.makeText(this, "服务名称与执行命令为必填项", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "服务名称与执行命令/URL 为必填项", Toast.LENGTH_SHORT).show();
                         return;
                     }
+                    if (!env.isEmpty()) {
+                        try {
+                            new org.json.JSONObject(env);
+                        } catch (Throwable e) {
+                            Toast.makeText(this, "环境变量/Headers 必须为有效 JSON 格式: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                    }
                     boolean ok = PluginManager.saveMcpServer(this, name, cmd, args, env);
-                    Toast.makeText(this, ok ? "✔ MCP 服务已添加！" : "添加失败", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, ok ? "✔ MCP 服务已添加并生效！" : "添加失败", Toast.LENGTH_SHORT).show();
                     refreshPluginsList(currentPluginCategory);
                 })
                 .setNegativeButton("取消", null)
@@ -4945,10 +4967,20 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this)
                 .setTitle("配置: " + item.name)
                 .setView(layout)
+                .setNeutralButton("🔍 校验语法", (dialog, which) -> {
+                    String toCheck = contentInput.getText().toString().trim();
+                    PluginManager.ValidationResult vr = PluginManager.validatePluginConfig(item.type, item.name, toCheck);
+                    Toast.makeText(this, vr.message, Toast.LENGTH_LONG).show();
+                })
                 .setPositiveButton("保存修改", (dialog, which) -> {
                     String newContent = contentInput.getText().toString().trim();
-                    boolean ok = PluginManager.savePluginConfig(this, item, newContent);
-                    Toast.makeText(this, ok ? "✔ 配置已保存并更新" : "保存失败", Toast.LENGTH_SHORT).show();
+                    PluginManager.ValidationResult vr = PluginManager.validatePluginConfig(item.type, item.name, newContent);
+                    if (!vr.valid) {
+                        Toast.makeText(this, "保存拦截: " + vr.message, Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    boolean ok = PluginManager.savePluginConfig(this, item, vr.formatted != null && !vr.formatted.isEmpty() ? vr.formatted : newContent);
+                    Toast.makeText(this, ok ? "✔ 配置校验通过并已保存生效！" : "保存失败", Toast.LENGTH_SHORT).show();
                     refreshPluginsList(currentPluginCategory);
                 })
                 .setNegativeButton("关闭", null)
