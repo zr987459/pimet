@@ -1130,6 +1130,58 @@
                             android:textSize="16sp" />
                     </LinearLayout>
 
+                                        <!-- 3. 界面外观与设计风格 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemTheme"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🎨"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitleTheme"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="界面外观与设计风格"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="浅色 · 深色 · 雾青 · 蔷薇 · 松夜 · 跟随系统"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowTheme"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
                     <!-- 3. 桌面宠物管理 -->
                     <LinearLayout
                         android:id="@+id/menuItemPet"
@@ -1829,6 +1881,385 @@
                             android:text="保存并应用所有端口"
                             android:textColor="#FFFFFF"
                             android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                                <!-- 🎨 界面外观与主题风格卡片 -->
+                <LinearLayout
+                    android:id="@+id/cardSettingsTheme"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card_modern"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="🎨"
+                            android:textSize="18sp" />
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:text="界面外观与设计风格"
+                            android:textColor="#F0F6FC"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvCurrentThemeBadge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_chip_selected"
+                            android:paddingStart="8dp"
+                            android:paddingTop="3dp"
+                            android:paddingEnd="8dp"
+                            android:paddingBottom="3dp"
+                            android:text="🌙 深色 (Dark)"
+                            android:textColor="#58A6FF"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="深度对齐 Pi-Web 官方外观规范，原生界面与 Web 工作台实时同步变换，支持随系统深浅色自适应。"
+                        android:textColor="#8B949E"
+                        android:textSize="11.5sp" />
+
+                    <!-- 主题选项列表 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:orientation="vertical">
+
+                        <!-- 选项 1: 跟随系统 (Auto) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowAuto"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌓"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitleAuto"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="跟随系统 (Auto)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="实时感知系统日夜模式，深浅无缝自适应"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckAuto"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="✔"
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+
+                        <!-- 选项 2: 浅色 (Light) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowLight"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="☀️"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitleLight"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="浅色 (Light)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="明亮纯净 · 经典素雅 · 湛蓝强调色"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckLight"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+
+                        <!-- 选项 3: 深色 (Dark) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowDark"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌙"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitleDark"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="深色 (Dark)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="沉浸极客 · 低光舒适 · 经典夜间"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckDark"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+
+                        <!-- 选项 4: 雾青 (Mist) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowMist"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌿"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitleMist"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="雾青 (Mist)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="水墨云雾 · 清透青灰 · 浅墨松绿"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckMist"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+
+                        <!-- 选项 5: 蔷薇 (Rose) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowRose"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌸"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitleRose"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="蔷薇 (Rose)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="暮色柔粉 · 温润淡雅 · 浆果紫红"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckRose"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
+
+                        <!-- 选项 6: 松夜 (Pine) -->
+                        <LinearLayout
+                            android:id="@+id/themeRowPine"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_btn_secondary"
+                            android:clickable="true"
+                            android:focusable="true"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="12dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="🌲"
+                                android:textSize="18sp" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:id="@+id/tvThemeTitlePine"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="松夜 (Pine)"
+                                    android:textColor="#F0F6FC"
+                                    android:textSize="13sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="2dp"
+                                    android:text="幽深松林 · 静谧暗青 · 苍绿荧光"
+                                    android:textColor="#8B949E"
+                                    android:textSize="10.5sp" />
+                            </LinearLayout>
+
+                            <TextView
+                                android:id="@+id/tvThemeCheckPine"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text=""
+                                android:textColor="#58A6FF"
+                                android:textSize="14sp" />
+                        </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
 

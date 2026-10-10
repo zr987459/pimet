@@ -77,6 +77,7 @@ public class PiWebActivity extends AppCompatActivity {
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         ThemeHelper.applyTheme(this);
         super.onCreate(savedInstanceState);
+        ThemeManager.applyWindowTheme(this, ThemeManager.getEffectivePalette(this));
         int extra = getIntent().getIntExtra(EXTRA_PORT, 0);
         port = (extra >= 1 && extra <= 65535) ? extra : PetRegistry.getPiWebPort(this);
         currentUrl = "http://127.0.0.1:" + port + "/";
@@ -132,6 +133,7 @@ public class PiWebActivity extends AppCompatActivity {
 
             @Override
             public void onPageFinished(WebView v, String url) {
+                ThemeManager.syncThemeToWebView(v, PiWebActivity.this);
                 if (url != null && !url.startsWith("about:") && !url.isEmpty()) {
                     currentUrl = url;
                     statusText.setText(getTargetName(port) + " · :" + port);

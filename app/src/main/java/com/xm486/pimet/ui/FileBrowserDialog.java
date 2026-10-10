@@ -925,8 +925,31 @@ public class FileBrowserDialog {
         elp.bottomMargin = dp(8);
         root.addView(btnExport, elp);
 
-        // 按钮 2: 扫描当前目录或下载目录中的备份包
-        TextView btnScan = buildActionBtn("📥 从当前目录或下载目录导入还原", 0x2210B981, 0xFFA7F3D0, v -> {
+        // 按钮 2: 自主选取手机中的备份包 (调起系统文件选择器)
+        TextView btnPick = buildActionBtn("📁 自主选取并上传手机备份包 (.zip)", 0x228B5CF6, 0xFFC4B5FD, v -> {
+            if (diagRef[0] != null) diagRef[0].dismiss();
+            if (context instanceof com.xm486.pimet.MainActivity) {
+                ((com.xm486.pimet.MainActivity) context).launchBackupFilePicker();
+            } else if (context instanceof android.app.Activity) {
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                String[] mimes = {"application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*"};
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, mimes);
+                ((android.app.Activity) context).startActivityForResult(
+                        Intent.createChooser(intent, "选择 PiMet 备份压缩包 (.zip)"),
+                        2001
+                );
+            }
+        });
+        btnPick.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnPick.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        plp.bottomMargin = dp(8);
+        root.addView(btnPick, plp);
+
+        // 按钮 3: 扫描当前目录或下载目录中的备份包
+        TextView btnScan = buildActionBtn("📥 从当前目录或下载目录扫描还原", 0x2210B981, 0xFFA7F3D0, v -> {
             if (diagRef[0] != null) diagRef[0].dismiss();
             showRestorePicker();
         });

@@ -60,6 +60,62 @@ public final class BackupManager {
     private BackupManager() {}
 
     /**
+     * 从系统文件选择器返回的 Uri 中导入并无损还原备份包
+     */
+    public static void importBackupFromUri(Context context, Uri uri, ProgressListener progressListener, RestoreCallback callback) {
+        if (context == null || uri == null) {
+            if (callback != null) callback.onResult(false, 0, "参数无效");
+            return;
+        }
+
+        new Thread(() -> {
+            File tempFile = null;
+            try {
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(2, "正在准备读取备份包...", "从外部存储流式复制..."));
+                }
+
+                File cacheDir = context.getCacheDir();
+                tempFile = new File(cacheDir, "import_temp_" + System.currentTimeMillis() + ".zip");
+
+                try (java.io.InputStream is = context.getContentResolver().openInputStream(uri);
+                     FileOutputStream fos = new FileOutputStream(tempFile)) {
+                    if (is == null) {
+                        throw new java.io.IOException("无法打开所选文件的输入流");
+                    }
+                    byte[] buf = new byte[16384];
+                    int len;
+                    while ((len = is.read(buf)) != -1) {
+                        fos.write(buf, 0, len);
+                    }
+                    fos.flush();
+                }
+
+                final File fileToImport = tempFile;
+                importBackup(context, fileToImport, progressListener, (success, restoredFilesCount, message) -> {
+                    try {
+                        if (fileToImport.exists()) fileToImport.delete();
+                    } catch (Throwable ignored) {}
+                    if (callback != null) {
+                        callback.onResult(success, restoredFilesCount, message);
+                    }
+                });
+            } catch (Throwable t) {
+                Log.e(TAG, "importBackupFromUri failed", t);
+                if (tempFile != null && tempFile.exists()) {
+                    try { tempFile.delete(); } catch (Throwable ignored) {}
+                }
+                if (progressListener != null) {
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(0, "读取失败", t.getMessage()));
+                }
+                if (callback != null) {
+                    MAIN_HANDLER.post(() -> callback.onResult(false, 0, "无法读取所选备份包: " + t.getMessage()));
+                }
+            }
+        }).start();
+    }
+
+    /**
      * 获取推荐的备份文件导出存储目录
      */
     public static File getExportDirectory(Context context) {

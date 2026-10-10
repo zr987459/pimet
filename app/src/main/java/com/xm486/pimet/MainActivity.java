@@ -13,6 +13,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Typeface;
@@ -251,6 +252,31 @@ public class MainActivity extends AppCompatActivity {
     private TextView menuTitleAbout;
     private TextView menuArrowAbout;
 
+    // 界面外观与设计风格组件 (Theme)
+    private View menuItemTheme;
+    private TextView menuTitleTheme;
+    private TextView menuArrowTheme;
+    private View cardSettingsTheme;
+    private TextView tvCurrentThemeBadge;
+    private View themeRowAuto;
+    private TextView tvThemeTitleAuto;
+    private TextView tvThemeCheckAuto;
+    private View themeRowLight;
+    private TextView tvThemeTitleLight;
+    private TextView tvThemeCheckLight;
+    private View themeRowDark;
+    private TextView tvThemeTitleDark;
+    private TextView tvThemeCheckDark;
+    private View themeRowMist;
+    private TextView tvThemeTitleMist;
+    private TextView tvThemeCheckMist;
+    private View themeRowRose;
+    private TextView tvThemeTitleRose;
+    private TextView tvThemeCheckRose;
+    private View themeRowPine;
+    private TextView tvThemeTitlePine;
+    private TextView tvThemeCheckPine;
+
     // 二级设置独立窗口组件
     private View viewSettingsSubWindow;
     private View btnSettingsSubWindowBack;
@@ -275,6 +301,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int SETTINGS_CAT_PRIVILEGES = 3;
     private static final int SETTINGS_CAT_STORAGE = 4;
     private static final int SETTINGS_CAT_ABOUT = 5;
+    private static final int SETTINGS_CAT_THEME = 6;
+    public static final int REQUEST_CODE_IMPORT_BACKUP = 2001;
     private int currentSettingsCategory = SETTINGS_CAT_PORTS;
 
     // Pi-Web 工作台视图组件
@@ -506,6 +534,43 @@ public class MainActivity extends AppCompatActivity {
         menuTitleAbout = findViewById(R.id.menuTitleAbout);
         menuArrowAbout = findViewById(R.id.menuArrowAbout);
 
+        menuItemTheme = findViewById(R.id.menuItemTheme);
+        menuTitleTheme = findViewById(R.id.menuTitleTheme);
+        menuArrowTheme = findViewById(R.id.menuArrowTheme);
+
+        cardSettingsTheme = findViewById(R.id.cardSettingsTheme);
+        tvCurrentThemeBadge = findViewById(R.id.tvCurrentThemeBadge);
+        themeRowAuto = findViewById(R.id.themeRowAuto);
+        tvThemeTitleAuto = findViewById(R.id.tvThemeTitleAuto);
+        tvThemeCheckAuto = findViewById(R.id.tvThemeCheckAuto);
+        themeRowLight = findViewById(R.id.themeRowLight);
+        tvThemeTitleLight = findViewById(R.id.tvThemeTitleLight);
+        tvThemeCheckLight = findViewById(R.id.tvThemeCheckLight);
+        themeRowDark = findViewById(R.id.themeRowDark);
+        tvThemeTitleDark = findViewById(R.id.tvThemeTitleDark);
+        tvThemeCheckDark = findViewById(R.id.tvThemeCheckDark);
+        themeRowMist = findViewById(R.id.themeRowMist);
+        tvThemeTitleMist = findViewById(R.id.tvThemeTitleMist);
+        tvThemeCheckMist = findViewById(R.id.tvThemeCheckMist);
+        themeRowRose = findViewById(R.id.themeRowRose);
+        tvThemeTitleRose = findViewById(R.id.tvThemeTitleRose);
+        tvThemeCheckRose = findViewById(R.id.tvThemeCheckRose);
+        themeRowPine = findViewById(R.id.themeRowPine);
+        tvThemeTitlePine = findViewById(R.id.tvThemeTitlePine);
+        tvThemeCheckPine = findViewById(R.id.tvThemeCheckPine);
+
+        if (menuItemTheme != null) menuItemTheme.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_THEME));
+
+        if (themeRowAuto != null) themeRowAuto.setOnClickListener(v -> selectTheme(ThemeManager.THEME_AUTO));
+        if (themeRowLight != null) themeRowLight.setOnClickListener(v -> selectTheme(ThemeManager.THEME_LIGHT));
+        if (themeRowDark != null) themeRowDark.setOnClickListener(v -> selectTheme(ThemeManager.THEME_DARK));
+        if (themeRowMist != null) themeRowMist.setOnClickListener(v -> selectTheme(ThemeManager.THEME_MIST));
+        if (themeRowRose != null) themeRowRose.setOnClickListener(v -> selectTheme(ThemeManager.THEME_ROSE));
+        if (themeRowPine != null) themeRowPine.setOnClickListener(v -> selectTheme(ThemeManager.THEME_PINE));
+
+        updateThemeUIState();
+        applyAppTheme();
+
         cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
         cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
         cardSettingsRegistry = findViewById(R.id.cardSettingsRegistry);
@@ -536,7 +601,7 @@ public class MainActivity extends AppCompatActivity {
             new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
         });
         if (btnSettingsImportBackup != null) btnSettingsImportBackup.setOnClickListener(v -> {
-            new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
+            launchBackupFilePicker();
         });
 
         applySettingsCardsVisibility();
@@ -2700,6 +2765,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                ThemeManager.syncThemeToWebView(view, MainActivity.this);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
                     // 清理历史残留的输入草稿缓存，防止旧消息重复回填至输入框
                     view.evaluateJavascript(
@@ -3755,6 +3821,9 @@ public class MainActivity extends AppCompatActivity {
             case SETTINGS_CAT_ABOUT:
                 title = "ℹ️ 关于与致敬";
                 break;
+            case SETTINGS_CAT_THEME:
+                title = "🎨 界面外观与设计风格";
+                break;
         }
 
         if (tvSettingsSubWindowTitle != null) {
@@ -3767,6 +3836,7 @@ public class MainActivity extends AppCompatActivity {
         updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, category == SETTINGS_CAT_PRIVILEGES);
         updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
         updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
+        updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, category == SETTINGS_CAT_THEME);
 
         applySettingsCardsVisibility();
 
@@ -3796,6 +3866,7 @@ public class MainActivity extends AppCompatActivity {
         updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, category == SETTINGS_CAT_PRIVILEGES);
         updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, category == SETTINGS_CAT_STORAGE);
         updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, category == SETTINGS_CAT_ABOUT);
+        updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, category == SETTINGS_CAT_THEME);
 
         applySettingsCardsVisibility();
     }
@@ -3856,6 +3927,11 @@ public class MainActivity extends AppCompatActivity {
         // 关于卡片
         if (cardSettingsAbout != null) {
             cardSettingsAbout.setVisibility(category == SETTINGS_CAT_ABOUT ? View.VISIBLE : View.GONE);
+        }
+
+        // 外观与主题卡片
+        if (cardSettingsTheme != null) {
+            cardSettingsTheme.setVisibility(category == SETTINGS_CAT_THEME ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -4155,6 +4231,13 @@ public class MainActivity extends AppCompatActivity {
             }
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
+        } else if (requestCode == REQUEST_CODE_IMPORT_BACKUP) {
+            if (resultCode == RESULT_OK && data != null) {
+                Uri uri = data.getData();
+                if (uri != null) {
+                    confirmAndImportBackupUri(uri);
+                }
+            }
         } else if (requestCode == REQUEST_CODE_IMPORT_CONTAINER) {
             if (resultCode == RESULT_OK && data != null) {
                 handleImportToContainer(data);
@@ -4887,5 +4970,216 @@ public class MainActivity extends AppCompatActivity {
                     LinearLayout.LayoutParams.WRAP_CONTENT));
         }
         physicsContainer.addView(column);
+    }
+
+    // ================= 主题与外观管理 (Theme Management) =================
+    private void selectTheme(String themeId) {
+        ThemeManager.setThemePreference(this, themeId);
+        updateThemeUIState();
+        applyAppTheme();
+        Toast.makeText(this, "已应用主题: " + ThemeManager.getThemeLabel(themeId), Toast.LENGTH_SHORT).show();
+    }
+
+    private void updateThemeUIState() {
+        String currentPref = ThemeManager.getThemePreference(this);
+        ThemeManager.ThemePalette effPalette = ThemeManager.getEffectivePalette(this);
+
+        if (tvCurrentThemeBadge != null) {
+            String badgeText = ThemeManager.getThemeLabel(currentPref);
+            if (ThemeManager.THEME_AUTO.equals(currentPref)) {
+                badgeText += " (" + (effPalette.isDark ? "当前夜间" : "当前日间") + ")";
+            }
+            tvCurrentThemeBadge.setText(badgeText);
+        }
+
+        updateThemeOptionRow(themeRowAuto, tvThemeTitleAuto, tvThemeCheckAuto, ThemeManager.THEME_AUTO.equals(currentPref), effPalette);
+        updateThemeOptionRow(themeRowLight, tvThemeTitleLight, tvThemeCheckLight, ThemeManager.THEME_LIGHT.equals(currentPref), effPalette);
+        updateThemeOptionRow(themeRowDark, tvThemeTitleDark, tvThemeCheckDark, ThemeManager.THEME_DARK.equals(currentPref), effPalette);
+        updateThemeOptionRow(themeRowMist, tvThemeTitleMist, tvThemeCheckMist, ThemeManager.THEME_MIST.equals(currentPref), effPalette);
+        updateThemeOptionRow(themeRowRose, tvThemeTitleRose, tvThemeCheckRose, ThemeManager.THEME_ROSE.equals(currentPref), effPalette);
+        updateThemeOptionRow(themeRowPine, tvThemeTitlePine, tvThemeCheckPine, ThemeManager.THEME_PINE.equals(currentPref), effPalette);
+    }
+
+    private void updateThemeOptionRow(View row, TextView title, TextView check, boolean isSelected, ThemeManager.ThemePalette effPalette) {
+        if (row == null) return;
+        if (isSelected) {
+            row.setBackground(ThemeManager.createCardDrawable(effPalette, dpToPx(8)));
+            if (check != null) {
+                check.setText("✔");
+                check.setTextColor(effPalette.accent);
+            }
+            if (title != null) {
+                title.setTextColor(effPalette.accent);
+            }
+        } else {
+            row.setBackground(ThemeManager.createSecondaryButtonDrawable(effPalette, dpToPx(8)));
+            if (check != null) {
+                check.setText("");
+            }
+            if (title != null) {
+                title.setTextColor(effPalette.text);
+            }
+        }
+    }
+
+    public void applyAppTheme() {
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        ThemeManager.applyWindowTheme(this, palette);
+
+        if (bottomNavBar != null) {
+            bottomNavBar.setBackgroundColor(palette.bgPanel);
+        }
+        int activeTabColor = palette.accent;
+        int normalTabColor = palette.textMuted;
+        if (tabLaunchText != null && tabLaunch != null) {
+            tabLaunchText.setTextColor(viewLaunch.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
+        }
+        if (tabPiWebText != null && tabPiWeb != null) {
+            tabPiWebText.setTextColor(viewPiWeb.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
+        }
+        if (tabPluginsText != null && tabPlugins != null) {
+            tabPluginsText.setTextColor(viewPlugins != null && viewPlugins.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
+        }
+        if (tabSettingsText != null && tabSettings != null) {
+            tabSettingsText.setTextColor((viewSettings.getVisibility() == View.VISIBLE || (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE)) ? activeTabColor : normalTabColor);
+        }
+
+        if (viewLaunch != null) viewLaunch.setBackgroundColor(palette.bg);
+        if (viewSettings != null) viewSettings.setBackgroundColor(palette.bg);
+        if (viewSettingsSubWindow != null) viewSettingsSubWindow.setBackgroundColor(palette.bg);
+
+        View headerView = findViewById(R.id.viewSettingsSubHeader);
+        if (headerView != null) {
+            headerView.setBackgroundColor(palette.bgPanel);
+        }
+        if (tvSettingsSubWindowTitle != null) {
+            tvSettingsSubWindowTitle.setTextColor(palette.text);
+        }
+        if (btnSettingsSubWindowBack instanceof TextView) {
+            ((TextView) btnSettingsSubWindowBack).setTextColor(palette.accent);
+        }
+        if (btnSettingsSubWindowClose instanceof TextView) {
+            ((TextView) btnSettingsSubWindowClose).setTextColor(palette.textMuted);
+        }
+
+        if (piWebWebView != null) {
+            ThemeManager.syncThemeToWebView(piWebWebView, this);
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        String pref = ThemeManager.getThemePreference(this);
+        if (ThemeManager.THEME_AUTO.equals(pref)) {
+            updateThemeUIState();
+            applyAppTheme();
+        }
+    }
+
+    // ================= 备份与外部文件导入 (Backup & Restore Picker) =================
+    public void launchBackupFilePicker() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        String[] mimes = {"application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*"};
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimes);
+        try {
+            startActivityForResult(Intent.createChooser(intent, "选择 PiMet 备份压缩包 (.zip)"), REQUEST_CODE_IMPORT_BACKUP);
+        } catch (Exception e) {
+            Toast.makeText(this, "未能调起系统文件选择器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void confirmAndImportBackupUri(Uri uri) {
+        new AlertDialog.Builder(this)
+                .setTitle("⚠️ 确认无损还原备份包？")
+                .setMessage("即将从所选外部文件无损恢复全部数据与配置。
+包含聊天记忆、子代理、插件生态、端口及应用偏好。
+是否继续？")
+                .setPositiveButton("立即还原", (d, w) -> {
+                    BackupProgressHolder holder = showBackupProgressDialog("📥 正在无损还原配置与数据...");
+                    BackupManager.importBackupFromUri(this, uri, (pct, stage, logLine) -> {
+                        holder.progressBar.setProgress(pct);
+                        holder.tvStage.setText(stage + " (" + pct + "%)");
+                        holder.tvDetail.setText(logLine);
+                    }, (success, restoredCount, msg) -> {
+                        holder.dialog.dismiss();
+                        new AlertDialog.Builder(this)
+                                .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
+                                .setMessage(msg)
+                                .setPositiveButton("确定", null)
+                                .show();
+                    });
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private static class BackupProgressHolder {
+        AlertDialog dialog;
+        TextView tvStage;
+        TextView tvDetail;
+        ProgressBar progressBar;
+    }
+
+    private BackupProgressHolder showBackupProgressDialog(String title) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0D1117);
+        int pad = dpToPx(16);
+        root.setPadding(pad, pad, pad, pad);
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText(title);
+        tvTitle.setTextColor(0xFFF0F6FC);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        TextView tvStage = new TextView(this);
+        tvStage.setText("准备开始...");
+        tvStage.setTextColor(0xFF58A6FF);
+        tvStage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvStage.setPadding(0, dpToPx(8), 0, dpToPx(4));
+        root.addView(tvStage);
+
+        ProgressBar progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setMax(100);
+        progressBar.setProgress(0);
+        LinearLayout.LayoutParams pblp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(8));
+        pblp.topMargin = dpToPx(4);
+        pblp.bottomMargin = dpToPx(8);
+        root.addView(progressBar, pblp);
+
+        TextView tvDetail = new TextView(this);
+        tvDetail.setText("");
+        tvDetail.setTextColor(0xFF8B949E);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTypeface(Typeface.MONOSPACE);
+        tvDetail.setSingleLine(true);
+        tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        root.addView(tvDetail);
+
+        builder.setView(root);
+        builder.setCancelable(false);
+        AlertDialog d = builder.create();
+
+        Window window = d.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.90f);
+            window.setAttributes(lp);
+        }
+        d.show();
+
+        BackupProgressHolder holder = new BackupProgressHolder();
+        holder.dialog = d;
+        holder.tvStage = tvStage;
+        holder.tvDetail = tvDetail;
+        holder.progressBar = progressBar;
+        return holder;
     }
 }
