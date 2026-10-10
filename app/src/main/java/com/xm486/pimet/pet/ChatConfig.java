@@ -48,6 +48,7 @@ public class ChatConfig {
     public static final String KEY_MAX_TOKENS = "chat_max_tokens";
     public static final String KEY_CONTEXT_ROUNDS = "chat_context_rounds";
     public static final String KEY_TIMEOUT = "chat_timeout_seconds";
+    public static final String KEY_TARGET_SUB_AGENT = "chat_target_sub_agent";
 
     private static final String LEGACY_DIR =
             "/storage/emulated/0/Android/data/com.xm486.pimet/files";
@@ -71,6 +72,8 @@ public class ChatConfig {
     public String apiModel = "gemini-3.1-flash-lite";
     public String apiPrompt = "你是一个活泼傲娇的桌面宠物，说话简短软莙，单次回答控制在50字以内。";
     public String piWebPrompt = "";
+    /** 桌宠绑定的子代理名称，默认 pet-companion（为空表示关闭子代理自动路由） */
+    public String targetSubAgent = "pet-companion";
     /** Pi-Web 专属桌宠会话 ID，绝不串入或复用用户的当前编码会话 */
     public String piwebSessionId = "";
     public String clawbenchToken = "";
@@ -131,6 +134,7 @@ public class ChatConfig {
         config.apiModel = sp.getString(KEY_API_MODEL, config.apiModel);
         config.apiPrompt = sp.getString(KEY_API_PROMPT, config.apiPrompt);
         config.piWebPrompt = sp.getString(KEY_PIWEB_PROMPT, "");
+        config.targetSubAgent = sp.getString(KEY_TARGET_SUB_AGENT, "pet-companion");
         config.piwebSessionId = sp.getString(KEY_PIWEB_SESSION_ID, "");
         config.clawbenchToken = sp.getString(KEY_CLAWBENCH_TOKEN, PetRegistry.getClawbenchToken(context));
         config.apiProvider = sp.getString(KEY_API_PROVIDER, "custom");
@@ -153,6 +157,7 @@ public class ChatConfig {
         e.putString(KEY_API_MODEL, apiModel);
         e.putString(KEY_API_PROMPT, apiPrompt);
         e.putString(KEY_PIWEB_PROMPT, piWebPrompt);
+        e.putString(KEY_TARGET_SUB_AGENT, targetSubAgent);
         e.putString(KEY_PIWEB_SESSION_ID, piwebSessionId);
         e.putString(KEY_CLAWBENCH_TOKEN, clawbenchToken);
         e.putString(KEY_API_PROVIDER, apiProvider);

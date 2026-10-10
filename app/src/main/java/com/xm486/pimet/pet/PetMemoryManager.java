@@ -158,7 +158,7 @@ public final class PetMemoryManager {
     }
 
     /**
-     * 判断是否是询问进度的意图
+     * 判断是否是询问进程、任务、编译、运行状态等进度的意图
      */
     public static boolean isProgressQuery(String msg) {
         if (msg == null) return false;
@@ -166,7 +166,10 @@ public final class PetMemoryManager {
         return m.contains("进度") || m.contains("在干嘛") || m.contains("干什么")
                 || m.contains("做完了吗") || m.contains("完成了吗") || m.contains("好了没")
                 || m.contains("运行状态") || m.contains("当前状态") || m.contains("服务怎么样")
-                || m.contains("有没有报错") || m.contains("进行到哪");
+                || m.contains("有没有报错") || m.contains("进行到哪")
+                || m.contains("进程") || m.contains("后台") || m.contains("任务")
+                || m.contains("编译") || m.contains("构建") || m.contains("正在跑")
+                || m.contains("卡住") || m.contains("工作流") || m.contains("执行到");
     }
 
     /**

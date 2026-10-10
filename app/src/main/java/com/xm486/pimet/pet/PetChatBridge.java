@@ -135,7 +135,8 @@ public class PetChatBridge {
             EditText input = service.getChatInput();
             if (input != null) {
                 ChatConfig config = ChatConfig.load(service);
-                input.setHint("💬 向 " + config.modeLabel() + " 发送消息…");
+                String subAgent = !TextUtils.isEmpty(config.targetSubAgent) ? config.targetSubAgent : "pet-companion";
+                input.setHint("💬 向 " + config.modeLabel() + " 发送 (. 唤起 @" + subAgent + ")…");
             }
         });
     }
@@ -161,6 +162,17 @@ public class PetChatBridge {
             if (switchMode(input, "#clawbench", ChatConfig.MODE_CLAWBENCH, "已切换为 ClawBench 对话模式")) return true;
             if (switchMode(input, "#cb", ChatConfig.MODE_CLAWBENCH, "已切换为 ClawBench 对话模式")) return true;
             if (switchMode(input, "#api", ChatConfig.MODE_CUSTOM_API, "已切换为自定义 API 模式")) return true;
+            if ("#help".equalsIgnoreCase(input) || "#?".equals(input) || "帮助".equals(input)) {
+                showReply("💡 常用指令:\n" +
+                        "• . 或 。 开头: 快速唤起桌宠子代理\n" +
+                        "• 询问进程/任务/编译: 自动路由子代理\n" +
+                        "• #agent <名称>: 绑定子代理 (如 pet-companion)\n" +
+                        "• #agent off: 关闭子代理自动路由\n" +
+                        "• #reset: 重置专属会话\n" +
+                        "• #piweb / #operit / #api: 切换模式");
+                return true;
+            }
+            if (handleAgentCommand(input)) return true;
             if (setCustomApiValue(input, "#model ", ChatConfig.KEY_API_MODEL, "模型已更新")) return true;
             if (setCustomApiValue(input, "#url ", ChatConfig.KEY_API_URL, "API 地址已更新")) return true;
             if (setCustomApiValue(input, "#key ", ChatConfig.KEY_API_KEY, "API Key 已更新")) return true;
@@ -170,6 +182,33 @@ public class PetChatBridge {
             Log.w(TAG, "handleCommand failed: " + input, t);
         }
         return false;
+    }
+
+    private boolean handleAgentCommand(String input) {
+        if (!input.startsWith("#agent")) return false;
+        try {
+            ChatConfig config = ChatConfig.load(service);
+            String arg = input.substring("#agent".length()).trim();
+            if (arg.isEmpty()) {
+                String cur = TextUtils.isEmpty(config.targetSubAgent) ? "未开启 (默认伴侣)" : config.targetSubAgent;
+                showReply("🤖 当前子代理绑定: " + cur + "\n用法: #agent <名称> 绑定 (如 #agent pet-companion)\n#agent off 关闭路由\n提示: 输入 . 开头或询问进程会自动呼叫子代理！");
+                return true;
+            }
+            if ("off".equalsIgnoreCase(arg) || "none".equalsIgnoreCase(arg) || "0".equals(arg)) {
+                config.targetSubAgent = "";
+                config.save(service);
+                updateInputHint();
+                showReply("已关闭子代理路由，恢复为普通伴侣对话");
+                return true;
+            }
+            config.targetSubAgent = arg;
+            config.save(service);
+            updateInputHint();
+            showReply("🤖 已绑定子代理: @" + arg + "\n发送 . 开头或询问进程均自动路由至该代理！");
+        } catch (Throwable t) {
+            Log.w(TAG, "handleAgentCommand failed: " + input, t);
+        }
+        return true;
     }
 
     private boolean switchMode(String input, String cmd, String mode, String reply) {
@@ -270,8 +309,35 @@ public class PetChatBridge {
                         if (card != null) card.startChatPhase(fNew ? "⚡ 开启新会话中…" : "正在处理…");
                     });
                     ChatConfig config = ChatConfig.load(service);
+
+                    // 1. 快捷语法解析：以 "." 或 "。" 开头快速唤醒/切换到子代理
+                    boolean dotTrigger = false;
+                    if (cleanInput.startsWith(".") || cleanInput.startsWith("。")) {
+                        dotTrigger = true;
+                        cleanInput = cleanInput.substring(1).trim();
+                        if (cleanInput.isEmpty()) {
+                            cleanInput = "汇报当前工作区进展与服务状态";
+                        }
+                    }
+
+                    // 2. 意图检测：询问后台任务、进程、编译状态、运行进度等
+                    boolean isProgressOrSystem = PetMemoryManager.isProgressQuery(cleanInput);
+
+                    // 3. 子代理前缀自动注入（Pi-Web 模式）：
+                    if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
+                        String targetAgent = config.targetSubAgent != null ? config.targetSubAgent.trim() : "";
+                        if (targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
+                            targetAgent = "pet-companion";
+                        }
+                        if (!targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
+                            if (!cleanInput.startsWith("@")) {
+                                cleanInput = "@" + targetAgent + " " + cleanInput;
+                            }
+                        }
+                    }
+
                     // 询问具体进度时，若未配置或处于快速模式，可直接由桌宠独立记忆与进度汇报直接响应
-                    if (PetMemoryManager.isProgressQuery(cleanInput)) {
+                    if (isProgressOrSystem) {
                         String realProgress = PetMemoryManager.getSystemProgressReport(service);
                         if (ChatConfig.MODE_CUSTOM_API.equals(config.mode) && (config.apiKey == null || config.apiKey.isEmpty())) {
                             segments = Collections.singletonList(realProgress);
@@ -778,7 +844,12 @@ public class PetChatBridge {
                         ? config.piWebPrompt.trim()
                         : "【系统设定】你是常驻在手机屏幕上的动态桌宠伴侣。性格活泼、软萌体贴。请以桌宠伴侣语气与主人交谈，回答控制在1-3句以内（50字内），多用表情符号，简明可爱，不要擅自执行复杂或危险的系统命令。";
 
-                String piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
+                String piWebMsg;
+                if (message.startsWith("@")) {
+                    piWebMsg = message;
+                } else {
+                    piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
+                }
                 if (PetMemoryManager.isProgressQuery(message)) {
                     piWebMsg = piWebMsg + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
                 }
