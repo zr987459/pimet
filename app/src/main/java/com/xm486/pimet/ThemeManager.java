@@ -7,8 +7,11 @@ import android.content.res.Configuration;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.WebView;
+import android.widget.EditText;
+import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,12 +19,13 @@ import java.util.List;
 /**
  * PiMet 界面主题管理器 (ThemeManager)
  * 深度对齐 Pi-Web 官方 UI 设计语言与配色规范。
- * 支持多种主题外观：浅色 (Light)、深色 (Dark)、雾青 (Mist)、蔷薇 (Rose)、松夜 (Pine) 与 跟随系统 (Auto)。
- * 支持与系统深浅色切换联动及同步注入 Web 端 dataset.theme 与 localStorage。
+ * 支持系统自适应与 Light、Dark、Mist、Rose、Pine 5套原生色彩矩阵。
+ * 具备整树递归无损着色引擎，全面覆盖原生卡片、面板、输入框、按钮及文本。
  */
-public final class ThemeManager {
+public class ThemeManager {
+
     public static final String PREF_NAME = "pimet_theme_prefs";
-    public static final String PREF_THEME_KEY = "app_theme_mode";
+    public static final String PREF_THEME_KEY = "current_theme_id";
 
     public static final String THEME_AUTO = "auto";
     public static final String THEME_LIGHT = "light";
@@ -33,80 +37,75 @@ public final class ThemeManager {
     public static class ThemePalette {
         public final String id;
         public final String name;
-        public final String desc;
         public final int bg;
         public final int bgPanel;
         public final int bgHover;
-        public final int bgSelected;
         public final int border;
         public final int text;
         public final int textMuted;
         public final int textDim;
         public final int accent;
         public final int accentHover;
-        public final int accentContrast;
+        public final int accentSubtle;
         public final boolean isDark;
 
-        public ThemePalette(String id, String name, String desc,
-                            int bg, int bgPanel, int bgHover, int bgSelected,
+        public ThemePalette(String id, String name, int bg, int bgPanel, int bgHover,
                             int border, int text, int textMuted, int textDim,
-                            int accent, int accentHover, int accentContrast,
+                            int accent, int accentHover, int accentSubtle,
                             boolean isDark) {
             this.id = id;
             this.name = name;
-            this.desc = desc;
             this.bg = bg;
             this.bgPanel = bgPanel;
             this.bgHover = bgHover;
-            this.bgSelected = bgSelected;
             this.border = border;
             this.text = text;
             this.textMuted = textMuted;
             this.textDim = textDim;
             this.accent = accent;
             this.accentHover = accentHover;
-            this.accentContrast = accentContrast;
+            this.accentSubtle = accentSubtle;
             this.isDark = isDark;
         }
     }
 
     public static final ThemePalette PALETTE_LIGHT = new ThemePalette(
-            THEME_LIGHT, "浅色 (Light)", "明亮纯净 · 经典素雅",
-            0xFFFFFFFF, 0xFFF5F5F5, 0xFFEEEEEE, 0xFFE8E8E8,
-            0xFFE0E0E0, 0xFF1A1A1A, 0xFF515C6B, 0xFF5E6673,
-            0xFF245BCE, 0xFF1D4ED8, 0xFFFFFFFF,
+            THEME_LIGHT, "浅色 (Light)",
+            0xFFFFFFFF, 0xFFF5F5F5, 0xFFEBEBEB,
+            0xFFE0E0E0, 0xFF1A1A1A, 0xFF666666, 0xFF999999,
+            0xFF245BCE, 0xFF1B4AB8, 0xFFEBF1FD,
             false
     );
 
     public static final ThemePalette PALETTE_DARK = new ThemePalette(
-            THEME_DARK, "深色 (Dark)", "沉浸极客 · 低光舒适",
-            0xFF0D1117, 0xFF161B22, 0xFF21262D, 0xFF30363D,
+            THEME_DARK, "深色 (Dark)",
+            0xFF0D1117, 0xFF161B22, 0xFF21262D,
             0xFF30363D, 0xFFF0F6FC, 0xFF8B949E, 0xFF6E7681,
-            0xFF58A6FF, 0xFF1F6FEB, 0xFFFFFFFF,
+            0xFF58A6FF, 0xFF79B8FF, 0xFF1F2E4A,
             true
     );
 
     public static final ThemePalette PALETTE_MIST = new ThemePalette(
-            THEME_MIST, "雾青 (Mist)", "水墨云雾 · 清透青灰",
-            0xFFF4F8F7, 0xFFE9F0EE, 0xFFE0EAE7, 0xFFD7E4DF,
-            0xFFAFC4BA, 0xFF202E2B, 0xFF455F56, 0xFF52685F,
-            0xFF1E6559, 0xFF174F46, 0xFFFFFFFF,
+            THEME_MIST, "雾青 (Mist)",
+            0xFFF4F8F7, 0xFFE9F0EE, 0xFFDFE8E5,
+            0xFFAFC4BA, 0xFF202E2B, 0xFF5D7068, 0xFF8A9C94,
+            0xFF1E6559, 0xFF175248, 0xFFE3EFEA,
             false
     );
 
     public static final ThemePalette PALETTE_ROSE = new ThemePalette(
-            THEME_ROSE, "蔷薇 (Rose)", "暮色柔粉 · 温润淡雅",
-            0xFFFCF7F8, 0xFFF3EDEF, 0xFFEEE3E7, 0xFFE8DCE1,
-            0xFFCDB5BF, 0xFF34282E, 0xFF65505A, 0xFF705B65,
-            0xFF914360, 0xFF76324D, 0xFFFFFFFF,
+            THEME_ROSE, "蔷薇 (Rose)",
+            0xFFFCF7F8, 0xFFF3EDEF, 0xFFEAE1E4,
+            0xFFCDB5BF, 0xFF34282E, 0xFF7D6771, 0xFFA5909A,
+            0xFF914360, 0xFF78344D, 0xFFF7EBF0,
             false
     );
 
     public static final ThemePalette PALETTE_PINE = new ThemePalette(
-            THEME_PINE, "松夜 (Pine)", "幽深松林 · 静谧暗青",
-            0xFF19201F, 0xFF212B28, 0xFF2B3632, 0xFF35433C,
-            0xFF4A5F52, 0xFFE6EDE8, 0xFFC3D0C6, 0xFFAFC2B5,
-            0xFFACCCB7, 0xFFD0E2D3, 0xFF182B20,
+            THEME_PINE, "松夜 (Pine)",
+            0xFF19201F, 0xFF212B28, 0xFF2B3834,
+            0xFF4A5F52, 0xFFE6EDE8, 0xFF8B9F93, 0xFF6E8075,
+            0xFFACCCB7, 0xFFC3D8CB, 0xFF23352B,
             true
     );
 
@@ -131,54 +130,49 @@ public final class ThemeManager {
     }
 
     public static ThemePalette getEffectivePalette(Context context) {
-        String pref = getThemePreference(context);
-        if (THEME_AUTO.equals(pref)) {
+        String themeId = getThemePreference(context);
+        if (THEME_AUTO.equals(themeId)) {
             return isSystemNightMode(context) ? PALETTE_DARK : PALETTE_LIGHT;
         }
-        return getPaletteById(pref);
+        return getPaletteById(themeId);
     }
 
     public static ThemePalette getPaletteById(String themeId) {
-        if (themeId == null) return PALETTE_DARK;
-        switch (themeId) {
-            case THEME_LIGHT:
-                return PALETTE_LIGHT;
-            case THEME_MIST:
-                return PALETTE_MIST;
-            case THEME_ROSE:
-                return PALETTE_ROSE;
-            case THEME_PINE:
-                return PALETTE_PINE;
-            case THEME_DARK:
-            default:
-                return PALETTE_DARK;
-        }
+        if (THEME_LIGHT.equals(themeId)) return PALETTE_LIGHT;
+        if (THEME_MIST.equals(themeId)) return PALETTE_MIST;
+        if (THEME_ROSE.equals(themeId)) return PALETTE_ROSE;
+        if (THEME_PINE.equals(themeId)) return PALETTE_PINE;
+        return PALETTE_DARK;
     }
 
     public static String getThemeLabel(String themeId) {
-        if (THEME_AUTO.equals(themeId)) return "🌓 跟随系统";
-        if (THEME_LIGHT.equals(themeId)) return "☀️ 浅色 (Light)";
-        if (THEME_DARK.equals(themeId)) return "🌙 深色 (Dark)";
-        if (THEME_MIST.equals(themeId)) return "🌿 雾青 (Mist)";
-        if (THEME_ROSE.equals(themeId)) return "🌸 蔷薇 (Rose)";
-        if (THEME_PINE.equals(themeId)) return "🌲 松夜 (Pine)";
-        return "深色 (Dark)";
+        if (THEME_AUTO.equals(themeId)) return "跟随系统 (Auto)";
+        if (THEME_LIGHT.equals(themeId)) return PALETTE_LIGHT.name;
+        if (THEME_DARK.equals(themeId)) return PALETTE_DARK.name;
+        if (THEME_MIST.equals(themeId)) return PALETTE_MIST.name;
+        if (THEME_ROSE.equals(themeId)) return PALETTE_ROSE.name;
+        if (THEME_PINE.equals(themeId)) return PALETTE_PINE.name;
+        return "默认主题";
     }
 
-    /**
-     * 将主题同步应用至 Activity 窗口、状态栏与导航栏
-     */
+    public static List<String> getAllThemes() {
+        List<String> list = new ArrayList<>();
+        list.add(THEME_AUTO);
+        list.add(THEME_LIGHT);
+        list.add(THEME_DARK);
+        list.add(THEME_MIST);
+        list.add(THEME_ROSE);
+        list.add(THEME_PINE);
+        return list;
+    }
+
     public static void applyWindowTheme(Activity activity, ThemePalette palette) {
         if (activity == null || palette == null) return;
         Window window = activity.getWindow();
         if (window == null) return;
 
-        window.getDecorView().setBackgroundColor(palette.bg);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            window.setStatusBarColor(palette.bgPanel);
-            window.setNavigationBarColor(palette.bgPanel);
-        }
+        window.setStatusBarColor(palette.bg);
+        window.setNavigationBarColor(palette.bgPanel);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             View decor = window.getDecorView();
@@ -188,30 +182,58 @@ public final class ThemeManager {
             } else {
                 flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!palette.isDark) {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                } else {
+                    flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+            }
             decor.setSystemUiVisibility(flags);
         }
     }
 
-    /**
-     * 将主题状态无缝注入并同步至 Pi-Web 前端工作台 WebView
-     */
     public static void syncThemeToWebView(WebView webView, Context context) {
         if (webView == null || context == null) return;
-        try {
-            String pref = getThemePreference(context);
-            ThemePalette palette = getEffectivePalette(context);
-            String js = "try { " +
-                    "localStorage.setItem('pi-theme', '" + pref + "'); " +
-                    "document.documentElement.dataset.theme = '" + palette.id + "'; " +
-                    "document.documentElement.classList.toggle('dark', " + (palette.isDark ? "true" : "false") + "); " +
-                    "} catch(e) {}";
-            webView.evaluateJavascript(js, null);
-        } catch (Throwable ignored) {}
+        String pref = getThemePreference(context);
+        final String effectiveTheme;
+        if (THEME_AUTO.equals(pref)) {
+            effectiveTheme = isSystemNightMode(context) ? THEME_DARK : THEME_LIGHT;
+        } else {
+            effectiveTheme = pref;
+        }
+
+        String js = "(function() {" +
+                "  try {" +
+                "    localStorage.setItem('pi-theme', '" + effectiveTheme + "');" +
+                "    document.documentElement.dataset.theme = '" + effectiveTheme + "';" +
+                "    var meta = document.querySelector('meta[name=\"theme-color\"]');" +
+                "    if (!meta) {" +
+                "      meta = document.createElement('meta');" +
+                "      meta.name = 'theme-color';" +
+                "      document.head.appendChild(meta);" +
+                "    }" +
+                "    meta.content = '" + (effectiveTheme.equals("light") ? "#ffffff" : "#0d1117") + "';" +
+                "  } catch (e) {}" +
+                "})();";
+        webView.evaluateJavascript(js, null);
     }
 
-    /**
-     * 创建卡片背景 Drawable
-     */
+    public static int dpToPx(Context context, float dp) {
+        if (context == null) return (int) dp;
+        return (int) (dp * context.getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    // ================= Drawable 生成工厂 =================
+
+    public static GradientDrawable createCardDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.bgPanel);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
     public static GradientDrawable createCardDrawable(ThemePalette palette, int radiusPx) {
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(palette.bgPanel);
@@ -220,24 +242,279 @@ public final class ThemeManager {
         return gd;
     }
 
-    /**
-     * 创建强调色按钮 Drawable
-     */
-    public static GradientDrawable createAccentButtonDrawable(ThemePalette palette, int radiusPx) {
+    public static GradientDrawable createSelectedOptionDrawable(Context context, ThemePalette palette, float radiusDp) {
         GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.accent);
-        gd.setCornerRadius(radiusPx);
+        gd.setColor(palette.accentSubtle);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(2, dpToPx(context, 1.5f)), palette.accent);
         return gd;
     }
 
-    /**
-     * 创建次级按钮 Drawable
-     */
+    public static GradientDrawable createSecondaryButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.bgHover);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
     public static GradientDrawable createSecondaryButtonDrawable(ThemePalette palette, int radiusPx) {
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(palette.bgHover);
         gd.setCornerRadius(radiusPx);
         gd.setStroke(1, palette.border);
         return gd;
+    }
+
+    public static GradientDrawable createPrimaryButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.accent);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        return gd;
+    }
+
+    public static GradientDrawable createPrimaryButtonDrawable(ThemePalette palette, int radiusPx) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.accent);
+        gd.setCornerRadius(radiusPx);
+        return gd;
+    }
+
+    public static GradientDrawable createSunkenDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        int sunkenColor = palette.isDark ? palette.bg : palette.bgHover;
+        gd.setColor(sunkenColor);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
+    public static GradientDrawable createInputDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        int inputBg = palette.isDark ? palette.bg : palette.bgPanel;
+        gd.setColor(inputBg);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
+    public static GradientDrawable createBadgeDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.accentSubtle);
+        gd.setCornerRadius(dpToPx(context, radiusDp));
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
+    public static GradientDrawable createNavBarDrawable(Context context, ThemePalette palette) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(palette.bgPanel);
+        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        return gd;
+    }
+
+    // ================= 视图层级递归主题应用 (Tree Theming Engine) =================
+
+    public static void applyThemeToHierarchy(View v, ThemePalette palette) {
+        if (v == null || palette == null) return;
+
+        styleSingleView(v, palette);
+
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                applyThemeToHierarchy(vg.getChildAt(i), palette);
+            }
+        }
+    }
+
+    private static void styleSingleView(View v, ThemePalette palette) {
+        Context ctx = v.getContext();
+        String idName = getResourceEntryName(v);
+
+        // 1. 输入框 (EditText)
+        if (v instanceof EditText) {
+            EditText et = (EditText) v;
+            et.setBackground(createInputDrawable(ctx, palette, 8f));
+            et.setTextColor(palette.text);
+            et.setHintTextColor(palette.textMuted);
+            return;
+        }
+
+        // 2. 文本与交互按钮 (TextView)
+        if (v instanceof TextView) {
+            TextView tv = (TextView) v;
+            if (idName != null) {
+                // 主操作高亮按钮
+                if (idName.equals("launchStartBtn") || idName.equals("btnUpdateAllPlugins")
+                        || idName.equals("btnCheckAppUpdate") || idName.equals("btnSmartInstall")
+                        || idName.equals("btnInstallCustomPlugin") || idName.equals("btnLaunchPortApplySave")
+                        || idName.equals("btnSendFloatPetChat") || idName.equals("btnSmartFix")) {
+                    tv.setBackground(createPrimaryButtonDrawable(ctx, palette, 8f));
+                    tv.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+                    return;
+                }
+                // 停止/危险操作按钮
+                if (idName.equals("launchStopBtn") || idName.equals("btnResetContainer")
+                        || idName.equals("btnClearContainerData")) {
+                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, 8f));
+                    tv.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
+                    return;
+                }
+                // 顶栏特定文本
+                if (idName.equals("btnSettingsSubWindowBack")) {
+                    tv.setTextColor(palette.accent);
+                    return;
+                }
+                if (idName.equals("btnSettingsSubWindowClose")) {
+                    tv.setTextColor(palette.textMuted);
+                    return;
+                }
+                if (idName.equals("tvSettingsSubWindowTitle") || idName.equals("launchStateTv")
+                        || idName.equals("tvDetailedLogText")) {
+                    tv.setTextColor(palette.text);
+                    return;
+                }
+                if (idName.equals("launchSubStateTv")) {
+                    tv.setTextColor(palette.textMuted);
+                    return;
+                }
+                // 普通次级按钮
+                if (idName.startsWith("btn") || idName.endsWith("Btn")) {
+                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, 8f));
+                    if (idName.equals("btnRefreshPlugins") || idName.equals("btnSettingsExportBackup")
+                            || idName.equals("btnSettingsImportBackup")) {
+                        tv.setTextColor(palette.accent);
+                    } else {
+                        tv.setTextColor(palette.text);
+                    }
+                    return;
+                }
+                // 底栏与过滤 Chip 由各自专职逻辑刷新
+                if (idName.startsWith("chipCat") || (idName.startsWith("tab") && idName.endsWith("Text"))) {
+                    return;
+                }
+                if (idName.startsWith("tab") && idName.endsWith("Icon")) {
+                    return;
+                }
+            }
+
+            // 通用 TextView 角色探测与映射
+            Object tag = tv.getTag();
+            String role = null;
+            if (tag instanceof String && ((String) tag).startsWith("theme_role:")) {
+                role = ((String) tag).substring("theme_role:".length());
+            } else {
+                int curColor = tv.getCurrentTextColor();
+                if (isColorSimilar(curColor, 0xFF58A6FF) || isColorSimilar(curColor, 0xFF38BDF8)
+                        || isColorSimilar(curColor, 0xFF3B82F6) || isColorSimilar(curColor, 0xFF245BCE)
+                        || isColorSimilar(curColor, 0xFF1E6559) || isColorSimilar(curColor, 0xFF914360)
+                        || isColorSimilar(curColor, 0xFFACCCB7)) {
+                    role = "accent";
+                } else if (isColorSimilar(curColor, 0xFF3FB950) || isColorSimilar(curColor, 0xFF2EA043)
+                        || isColorSimilar(curColor, 0xFF238636) || isColorSimilar(curColor, 0xFF10B981)) {
+                    role = "status_success";
+                } else if (isColorSimilar(curColor, 0xFFF85149) || isColorSimilar(curColor, 0xFFDA3633)
+                        || isColorSimilar(curColor, 0xFFE5534B) || isColorSimilar(curColor, 0xFFEF4444)) {
+                    role = "status_danger";
+                } else if (isColorSimilar(curColor, 0xFFD29922) || isColorSimilar(curColor, 0xFFE3B341)
+                        || isColorSimilar(curColor, 0xFFF59E0B)) {
+                    role = "status_warning";
+                } else if (isColorSimilar(curColor, 0xFF8B949E) || isColorSimilar(curColor, 0xFFC9D1D9)
+                        || isColorSimilar(curColor, 0xFFA0AEC0) || isColorSimilar(curColor, 0xFF94A3B8)
+                        || isColorSimilar(curColor, 0xFF6E7681) || isColorSimilar(curColor, 0xFF666666)) {
+                    role = "muted";
+                } else if (isColorSimilar(curColor, 0xFFF0F6FC) || isColorSimilar(curColor, 0xFFFFFFFF)
+                        || isColorSimilar(curColor, 0xFFE6EDF3) || isColorSimilar(curColor, 0xFF1A1A1A)) {
+                    role = "primary";
+                } else {
+                    if (tv.getTextSize() >= dpToPx(ctx, 13.5f)
+                            || (tv.getTypeface() != null && tv.getTypeface().isBold())) {
+                        role = "primary";
+                    } else {
+                        role = "muted";
+                    }
+                }
+                tv.setTag("theme_role:" + role);
+            }
+
+            if ("accent".equals(role)) {
+                tv.setTextColor(palette.accent);
+            } else if ("status_success".equals(role)) {
+                tv.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
+            } else if ("status_danger".equals(role)) {
+                tv.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
+            } else if ("status_warning".equals(role)) {
+                tv.setTextColor(palette.isDark ? 0xFFD29922 : 0xFF9A6700);
+            } else if ("muted".equals(role)) {
+                tv.setTextColor(palette.textMuted);
+            } else {
+                tv.setTextColor(palette.text);
+            }
+            return;
+        }
+
+        // 3. 容器与面板 (ViewGroup)
+        if (v instanceof ViewGroup) {
+            if (idName != null) {
+                // 页面主根底色
+                if (idName.equals("viewLaunch") || idName.equals("viewPiWeb")
+                        || idName.equals("viewPlugins") || idName.equals("viewSettings")
+                        || idName.equals("viewSettingsSubWindow")) {
+                    v.setBackgroundColor(palette.bg);
+                    return;
+                }
+                // 二级窗口顶栏
+                if (idName.equals("viewSettingsSubHeader")) {
+                    v.setBackgroundColor(palette.bgPanel);
+                    return;
+                }
+                // 底栏导航栏
+                if (idName.equals("bottomNavBar")) {
+                    v.setBackground(createNavBarDrawable(ctx, palette));
+                    return;
+                }
+                // 下沉等宽文本/日志/控制台区域
+                if (idName.equals("viewDetailedLogContainer") || idName.equals("physicsContainer")
+                        || idName.equals("launchConsoleScroll")) {
+                    v.setBackground(createSunkenDrawable(ctx, palette, 10f));
+                    return;
+                }
+                // 卡片容器
+                if (idName.startsWith("card") || idName.endsWith("Card")
+                        || idName.equals("piWebOfflineCard") || idName.equals("floatingPetChatCard")) {
+                    v.setBackground(createCardDrawable(ctx, palette, 14f));
+                    return;
+                }
+                // 设置菜单选项条目
+                if (idName.startsWith("menuItem")) {
+                    v.setBackground(createSecondaryButtonDrawable(ctx, palette, 10f));
+                    return;
+                }
+            }
+            return;
+        }
+
+        // 4. 分割线 (Divider View)
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp != null && lp.height > 0 && lp.height <= dpToPx(ctx, 2.5f)) {
+            v.setBackgroundColor(palette.border);
+        }
+    }
+
+    private static String getResourceEntryName(View v) {
+        if (v == null || v.getId() == View.NO_ID) return null;
+        try {
+            return v.getResources().getResourceEntryName(v.getId());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean isColorSimilar(int c1, int c2) {
+        if (c1 == c2) return true;
+        int r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+        int r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+        return Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2) < 45;
     }
 }

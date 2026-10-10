@@ -426,6 +426,9 @@ public class MainActivity extends AppCompatActivity {
         initPluginsPanel();
         initSettingsPanel();
 
+        // 统一全面应用主题配色方案
+        applyAppTheme();
+
         // 首次状态自检
         checkServiceStatus();
 
@@ -569,9 +572,6 @@ public class MainActivity extends AppCompatActivity {
         if (themeRowRose != null) themeRowRose.setOnClickListener(v -> selectTheme(ThemeManager.THEME_ROSE));
         if (themeRowPine != null) themeRowPine.setOnClickListener(v -> selectTheme(ThemeManager.THEME_PINE));
 
-        updateThemeUIState();
-        applyAppTheme();
-
         cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
         cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
         cardSettingsRegistry = findViewById(R.id.cardSettingsRegistry);
@@ -699,8 +699,9 @@ public class MainActivity extends AppCompatActivity {
         if (viewSettingsSubWindow != null) viewSettingsSubWindow.setVisibility(View.GONE);
 
         // 更新底栏颜色
-        int activeColor = 0xFF58A6FF;
-        int normalColor = 0xFF8B949E;
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        int activeColor = palette.accent;
+        int normalColor = palette.textMuted;
 
         tabLaunchText.setTextColor(index == 0 ? activeColor : normalColor);
         tabPiWebText.setTextColor(index == 1 ? activeColor : normalColor);
@@ -858,6 +859,7 @@ public class MainActivity extends AppCompatActivity {
         java.util.List<PetRegistry.PetInfo> pets = PetRegistry.loadPets(this);
         String currentDir = PetRegistry.getPetDir(this);
         int thumbSize = dpToPx(52);
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
 
         for (PetRegistry.PetInfo pet : pets) {
             boolean selected = pet.dir.equals(currentDir);
@@ -865,7 +867,7 @@ public class MainActivity extends AppCompatActivity {
             item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
             item.setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6));
-            item.setBackgroundResource(selected ? R.drawable.bg_btn_primary : R.drawable.bg_sunken);
+            item.setBackground(selected ? ThemeManager.createPrimaryButtonDrawable(this, palette, 8f) : ThemeManager.createSunkenDrawable(this, palette, 8f));
 
             ImageView iv = new ImageView(this);
             Bitmap bmp = loadPetThumb(pet);
@@ -881,7 +883,7 @@ public class MainActivity extends AppCompatActivity {
             TextView tv = new TextView(this);
             tv.setText(pet.displayName);
             tv.setTextSize(11f);
-            tv.setTextColor(selected ? 0xFFFFFFFF : 0xFF8B949E);
+            tv.setTextColor(selected ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
             tv.setGravity(Gravity.CENTER);
             tv.setMaxLines(1);
             tv.setEllipsize(TextUtils.TruncateAt.END);
@@ -3874,18 +3876,19 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateMenuItemState(View item, TextView title, TextView arrow, boolean isSelected) {
         if (item == null) return;
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         if (isSelected) {
-            item.setBackgroundColor(0xFF21262D);
-            if (title != null) title.setTextColor(0xFF58A6FF);
+            item.setBackground(ThemeManager.createSelectedOptionDrawable(this, palette, 10f));
+            if (title != null) title.setTextColor(palette.accent);
             if (arrow != null) {
-                arrow.setTextColor(0xFF58A6FF);
+                arrow.setTextColor(palette.accent);
                 arrow.setText("进入 ›");
             }
         } else {
-            item.setBackgroundColor(0xFF161B22);
-            if (title != null) title.setTextColor(0xFFF0F6FC);
+            item.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 10f));
+            if (title != null) title.setTextColor(palette.text);
             if (arrow != null) {
-                arrow.setTextColor(0xFF8B949E);
+                arrow.setTextColor(palette.textMuted);
                 arrow.setText("›");
             }
         }
@@ -4378,33 +4381,28 @@ public class MainActivity extends AppCompatActivity {
 
     private void selectPluginCategory(int index) {
         currentPluginCategory = index;
-        int activeBg = R.drawable.bg_btn_primary;
-        int normalBg = R.drawable.bg_btn_secondary;
-        int activeText = 0xFFFFFFFF;
-        int normalText = 0xFFC9D1D9;
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        int activeText = palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF;
+        int normalText = palette.textMuted;
 
-        if (chipCatAll != null) {
-            chipCatAll.setBackgroundResource(index == 0 ? activeBg : normalBg);
-            chipCatAll.setTextColor(index == 0 ? activeText : normalText);
-        }
-        if (chipCatExtensions != null) {
-            chipCatExtensions.setBackgroundResource(index == 1 ? activeBg : normalBg);
-            chipCatExtensions.setTextColor(index == 1 ? activeText : normalText);
-        }
-        if (chipCatSkills != null) {
-            chipCatSkills.setBackgroundResource(index == 2 ? activeBg : normalBg);
-            chipCatSkills.setTextColor(index == 2 ? activeText : normalText);
-        }
-        if (chipCatMcp != null) {
-            chipCatMcp.setBackgroundResource(index == 3 ? activeBg : normalBg);
-            chipCatMcp.setTextColor(index == 3 ? activeText : normalText);
-        }
-        if (chipCatSubagents != null) {
-            chipCatSubagents.setBackgroundResource(index == 4 ? activeBg : normalBg);
-            chipCatSubagents.setTextColor(index == 4 ? activeText : normalText);
-        }
+        updateCategoryChip(chipCatAll, index == 0, palette, activeText, normalText);
+        updateCategoryChip(chipCatExtensions, index == 1, palette, activeText, normalText);
+        updateCategoryChip(chipCatSkills, index == 2, palette, activeText, normalText);
+        updateCategoryChip(chipCatMcp, index == 3, palette, activeText, normalText);
+        updateCategoryChip(chipCatSubagents, index == 4, palette, activeText, normalText);
 
         refreshPluginsList(index);
+    }
+
+    private void updateCategoryChip(TextView chip, boolean active, ThemeManager.ThemePalette palette, int activeText, int normalText) {
+        if (chip == null) return;
+        if (active) {
+            chip.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 16f));
+            chip.setTextColor(activeText);
+        } else {
+            chip.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 16f));
+            chip.setTextColor(normalText);
+        }
     }
 
     private List<PluginManager.PluginItem> cachedPluginItems = new ArrayList<>();
@@ -4459,9 +4457,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private View createPluginItemView(PluginManager.PluginItem item) {
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundResource(R.drawable.bg_card_modern);
+        card.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
         card.setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -4474,7 +4473,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(item.name);
-        title.setTextColor(0xFFF0F6FC);
+        title.setTextColor(palette.text);
         title.setTextSize(14f);
         title.setTypeface(null, Typeface.BOLD);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
@@ -4483,9 +4482,9 @@ public class MainActivity extends AppCompatActivity {
 
         TextView badge = new TextView(this);
         badge.setText(item.getTypeName());
-        badge.setTextColor(0xFF58A6FF);
+        badge.setTextColor(palette.accent);
         badge.setTextSize(11f);
-        badge.setBackgroundResource(R.drawable.bg_badge_port);
+        badge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
         badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
         header.addView(badge);
 
@@ -4493,13 +4492,13 @@ public class MainActivity extends AppCompatActivity {
             TextView vBadge = new TextView(this);
             if (item.hasUpdate && item.latestVersion != null && !item.latestVersion.isEmpty()) {
                 vBadge.setText("v" + item.version + " ➔ v" + item.latestVersion);
-                vBadge.setTextColor(0xFF3FB950);
+                vBadge.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
             } else {
                 vBadge.setText("v" + item.version);
-                vBadge.setTextColor(0xFF8B949E);
+                vBadge.setTextColor(palette.textMuted);
             }
             vBadge.setTextSize(10.5f);
-            vBadge.setBackgroundResource(R.drawable.bg_badge_port);
+            vBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
             vBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
             LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -4520,7 +4519,7 @@ public class MainActivity extends AppCompatActivity {
         }
         sbDesc.append("📁 路径: ").append(item.path);
         desc.setText(sbDesc.toString());
-        desc.setTextColor(0xFF8B949E);
+        desc.setTextColor(palette.textMuted);
         desc.setTextSize(12f);
         desc.setLineSpacing(dpToPx(2), 1f);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
@@ -4540,9 +4539,9 @@ public class MainActivity extends AppCompatActivity {
         // 1. ⚙️ 配置/查看按钮
         TextView btnConfig = new TextView(this);
         btnConfig.setText("⚙️ 配置/详情");
-        btnConfig.setTextColor(0xFFC9D1D9);
+        btnConfig.setTextColor(palette.text);
         btnConfig.setTextSize(11.5f);
-        btnConfig.setBackgroundResource(R.drawable.bg_btn_secondary);
+        btnConfig.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
         btnConfig.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
         btnConfig.setOnClickListener(v -> showEditPluginConfigDialog(item));
         actions.addView(btnConfig);
@@ -4554,9 +4553,9 @@ public class MainActivity extends AppCompatActivity {
 
             TextView btnUpdate = new TextView(this);
             btnUpdate.setText(item.latestVersion.isEmpty() ? "🆙 更新插件" : ("🆙 升级至 v" + item.latestVersion));
-            btnUpdate.setTextColor(0xFF3FB950);
+            btnUpdate.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
             btnUpdate.setTextSize(11.5f);
-            btnUpdate.setBackgroundResource(R.drawable.bg_btn_secondary);
+            btnUpdate.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
             btnUpdate.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
             btnUpdate.setOnClickListener(v -> {
                 Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
@@ -4578,9 +4577,9 @@ public class MainActivity extends AppCompatActivity {
         // 3. 🗑️ 移除按钮
         TextView btnDelete = new TextView(this);
         btnDelete.setText("🗑️ 移除");
-        btnDelete.setTextColor(0xFFF85149);
+        btnDelete.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
         btnDelete.setTextSize(11.5f);
-        btnDelete.setBackgroundResource(R.drawable.bg_btn_secondary);
+        btnDelete.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
         btnDelete.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
         btnDelete.setOnClickListener(v -> {
             new AlertDialog.Builder(this)
@@ -4909,6 +4908,8 @@ public class MainActivity extends AppCompatActivity {
     private void buildPhysicsSettings() {
         if (physicsContainer == null) return;
         physicsContainer.removeAllViews();
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        physicsContainer.setBackground(ThemeManager.createSunkenDrawable(this, palette, 10f));
 
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
@@ -4931,7 +4932,7 @@ public class MainActivity extends AppCompatActivity {
             final TextView label = new TextView(this);
             label.setText(name);
             label.setTextSize(11.5f);
-            label.setTextColor(0xFF8B949E);
+            label.setTextColor(palette.textMuted);
             label.setMaxLines(1);
             row.addView(label, new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f));
@@ -4940,7 +4941,7 @@ public class MainActivity extends AppCompatActivity {
             valueText.setText(cur + " " + unit);
             valueText.setTextSize(11.5f);
             valueText.setTypeface(Typeface.MONOSPACE);
-            valueText.setTextColor(0xFF58A6FF);
+            valueText.setTextColor(palette.accent);
             valueText.setGravity(Gravity.END);
             row.addView(valueText, new LinearLayout.LayoutParams(
                     dpToPx(62), LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -5004,7 +5005,7 @@ public class MainActivity extends AppCompatActivity {
     private void updateThemeOptionRow(View row, TextView title, TextView check, boolean isSelected, ThemeManager.ThemePalette effPalette) {
         if (row == null) return;
         if (isSelected) {
-            row.setBackground(ThemeManager.createCardDrawable(effPalette, dpToPx(8)));
+            row.setBackground(ThemeManager.createSelectedOptionDrawable(this, effPalette, 8f));
             if (check != null) {
                 check.setText("✔");
                 check.setTextColor(effPalette.accent);
@@ -5013,7 +5014,7 @@ public class MainActivity extends AppCompatActivity {
                 title.setTextColor(effPalette.accent);
             }
         } else {
-            row.setBackground(ThemeManager.createSecondaryButtonDrawable(effPalette, dpToPx(8)));
+            row.setBackground(ThemeManager.createSecondaryButtonDrawable(this, effPalette, 8f));
             if (check != null) {
                 check.setText("");
             }
@@ -5027,27 +5028,30 @@ public class MainActivity extends AppCompatActivity {
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         ThemeManager.applyWindowTheme(this, palette);
 
+        // 整树递归应用主题色彩 (启动页、插件页、设置页、二级窗口)
+        if (viewLaunch != null) ThemeManager.applyThemeToHierarchy(viewLaunch, palette);
+        if (viewPlugins != null) ThemeManager.applyThemeToHierarchy(viewPlugins, palette);
+        if (viewSettings != null) ThemeManager.applyThemeToHierarchy(viewSettings, palette);
+        if (viewSettingsSubWindow != null) ThemeManager.applyThemeToHierarchy(viewSettingsSubWindow, palette);
+
         if (bottomNavBar != null) {
-            bottomNavBar.setBackgroundColor(palette.bgPanel);
+            bottomNavBar.setBackground(ThemeManager.createNavBarDrawable(this, palette));
         }
         int activeTabColor = palette.accent;
         int normalTabColor = palette.textMuted;
-        if (tabLaunchText != null && tabLaunch != null) {
-            tabLaunchText.setTextColor(viewLaunch.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
+        if (tabLaunchText != null) {
+            tabLaunchText.setTextColor(viewLaunch != null && viewLaunch.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
         }
-        if (tabPiWebText != null && tabPiWeb != null) {
-            tabPiWebText.setTextColor(viewPiWeb.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
+        if (tabPiWebText != null) {
+            tabPiWebText.setTextColor(viewPiWeb != null && viewPiWeb.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
         }
-        if (tabPluginsText != null && tabPlugins != null) {
+        if (tabPluginsText != null) {
             tabPluginsText.setTextColor(viewPlugins != null && viewPlugins.getVisibility() == View.VISIBLE ? activeTabColor : normalTabColor);
         }
-        if (tabSettingsText != null && tabSettings != null) {
-            tabSettingsText.setTextColor((viewSettings.getVisibility() == View.VISIBLE || (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE)) ? activeTabColor : normalTabColor);
+        if (tabSettingsText != null) {
+            tabSettingsText.setTextColor(((viewSettings != null && viewSettings.getVisibility() == View.VISIBLE)
+                    || (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE)) ? activeTabColor : normalTabColor);
         }
-
-        if (viewLaunch != null) viewLaunch.setBackgroundColor(palette.bg);
-        if (viewSettings != null) viewSettings.setBackgroundColor(palette.bg);
-        if (viewSettingsSubWindow != null) viewSettingsSubWindow.setBackgroundColor(palette.bg);
 
         View headerView = findViewById(R.id.viewSettingsSubHeader);
         if (headerView != null) {
@@ -5062,6 +5066,22 @@ public class MainActivity extends AppCompatActivity {
         if (btnSettingsSubWindowClose instanceof TextView) {
             ((TextView) btnSettingsSubWindowClose).setTextColor(palette.textMuted);
         }
+
+        // 刷新设置条目菜单状态
+        updateMenuItemState(menuItemPorts, menuTitlePorts, menuArrowPorts, currentSettingsCategory == SETTINGS_CAT_PORTS);
+        updateMenuItemState(menuItemUpdate, menuTitleUpdate, menuArrowUpdate, currentSettingsCategory == SETTINGS_CAT_UPDATE);
+        updateMenuItemState(menuItemPet, menuTitlePet, menuArrowPet, currentSettingsCategory == SETTINGS_CAT_PET);
+        updateMenuItemState(menuItemPrivileges, menuTitlePrivileges, menuArrowPrivileges, currentSettingsCategory == SETTINGS_CAT_PRIVILEGES);
+        updateMenuItemState(menuItemStorage, menuTitleStorage, menuArrowStorage, currentSettingsCategory == SETTINGS_CAT_STORAGE);
+        updateMenuItemState(menuItemAbout, menuTitleAbout, menuArrowAbout, currentSettingsCategory == SETTINGS_CAT_ABOUT);
+        updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, currentSettingsCategory == SETTINGS_CAT_THEME);
+
+        // 刷新插件分类与列表项样式
+        selectPluginCategory(currentPluginCategory);
+
+        // 刷新桌宠与物理参数样式
+        buildPhysicsSettings();
+        buildPetList();
 
         if (piWebWebView != null) {
             ThemeManager.syncThemeToWebView(piWebWebView, this);

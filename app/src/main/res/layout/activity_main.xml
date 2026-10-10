@@ -28,6 +28,7 @@
 
                 <!-- 核心状态卡片 (DSHA Status Hero Card) -->
                 <LinearLayout
+                    android:id="@+id/cardLaunchHero"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card_modern"
@@ -220,6 +221,7 @@
 
                     <!-- 左指标卡: 访问端口 -->
                     <LinearLayout
+                        android:id="@+id/cardLaunchMetricPort"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginEnd="6dp"
@@ -256,6 +258,7 @@
 
                     <!-- 右指标卡: 容器环境 -->
                     <LinearLayout
+                        android:id="@+id/cardLaunchMetricEnv"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="6dp"
@@ -420,6 +423,7 @@
 
                 <!-- 实时守护日志控制台 (Live Service Log) -->
                 <LinearLayout
+                    android:id="@+id/cardLaunchLogConsole"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -501,6 +505,7 @@
                     </LinearLayout>
 
                     <ScrollView
+                        android:id="@+id/launchConsoleScroll"
                         android:layout_width="match_parent"
                         android:layout_height="140dp"
                         android:layout_marginTop="8dp"
@@ -724,6 +729,7 @@
 
                 <!-- 头部 Hero 卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardPluginsHero"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card_modern"
@@ -816,6 +822,7 @@
 
                 <!-- 自定义插件 / npm 模块安装卡片 -->
                 <LinearLayout
+                    android:id="@+id/cardPluginsInstall"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
