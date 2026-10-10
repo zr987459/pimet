@@ -13,7 +13,11 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.system.Os;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -21,6 +25,8 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.BaseAdapter;
+import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -916,7 +922,7 @@ public class FileBrowserDialog {
         final AlertDialog[] diagRef = new AlertDialog[1];
 
         // 按钮 1: 立即打包导出
-        TextView btnExport = buildActionBtn("📤 导出全量备份包 (.zip)", 0x223B82F6, 0xFF93C5FD, v -> {
+        TextView btnExport = buildActionBtn("📤 快速全量导出备份 (.zip)", 0x223B82F6, 0xFF93C5FD, v -> {
             if (diagRef[0] != null) diagRef[0].dismiss();
             performExportBackup();
         });
@@ -925,6 +931,17 @@ public class FileBrowserDialog {
         LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         elp.bottomMargin = dp(8);
         root.addView(btnExport, elp);
+
+        // 按钮 2: 自选模块与目标目录导出
+        TextView btnCustomExport = buildActionBtn("⚙️ 自选模块与目标目录导出 (.zip)", 0x2206B6D4, 0xFF67E8F9, v -> {
+            if (diagRef[0] != null) diagRef[0].dismiss();
+            showCustomExportDialog();
+        });
+        btnCustomExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnCustomExport.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams celp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        celp.bottomMargin = dp(8);
+        root.addView(btnCustomExport, celp);
 
         // 按钮 2: 自主选取手机中的备份包 (调起系统文件选择器)
         TextView btnPick = buildActionBtn("📁 自主选取并上传手机备份包 (.zip)", 0x228B5CF6, 0xFFC4B5FD, v -> {
@@ -982,15 +999,20 @@ public class FileBrowserDialog {
     }
 
     private void performExportBackup() {
-        ProgressDialogHolder holder = showBackupProgressDialog("📦 正在打包全量配置与数据...");
+        performExportBackup(null);
+    }
 
-        // 如果当前正在浏览某个可写目录（如 Downloads 或外部存储），优先存入当前目录
-        File targetFile = null;
-        if (currentDir != null && currentDir.canWrite()) {
-            targetFile = new File(currentDir, BackupManager.generateBackupFileName());
+    private void performExportBackup(BackupManager.ExportOptions options) {
+        ProgressDialogHolder holder = showBackupProgressDialog("📦 正在打包配置与数据...");
+
+        BackupManager.ExportOptions opts = options != null ? options : new BackupManager.ExportOptions();
+
+        // 如果用户未显式指定目标文件，但当前正在浏览某个可写目录（如 Downloads 或外部存储），优先存入当前目录
+        if (opts.targetOutFile == null && currentDir != null && currentDir.canWrite()) {
+            opts.targetOutFile = new File(currentDir, BackupManager.generateBackupFileName());
         }
 
-        BackupManager.exportBackup(context, targetFile, (percent, stage, logLine) -> {
+        BackupManager.exportBackup(context, opts, (percent, stage, logLine) -> {
             holder.progressBar.setProgress(percent);
             holder.tvStage.setText(stage + " (" + percent + "%)");
             holder.tvDetail.setText(logLine);
@@ -1057,6 +1079,263 @@ public class FileBrowserDialog {
             resDiagRef[0] = d;
             d.show();
         });
+    }
+
+    public void showCustomExportDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        ScrollView scroll = new ScrollView(context);
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(0xFF0D1117);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+        scroll.addView(root);
+
+        TextView tvTitle = new TextView(context);
+        tvTitle.setText("⚙️ 自选备份导出设置");
+        tvTitle.setTextColor(0xFFF0F6FC);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(tvTitle);
+
+        TextView tvSub = new TextView(context);
+        tvSub.setText("请勾选需要导出的数据模块，并选择备份保存的目标目录：");
+        tvSub.setTextColor(0xFF8B949E);
+        tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvSub.setPadding(0, dp(4), 0, dp(12));
+        root.addView(tvSub);
+
+        // 模块选择
+        TextView tvSec1 = createSectionHeader("1. 选择导出模块");
+        root.addView(tvSec1);
+
+        CheckBox cbPrefs = createCheckBox("应用偏好与端口配置 (SharedPreferences)", "端口映射、API 密钥、桌宠参数等", true);
+        root.addView(cbPrefs);
+
+        CheckBox cbSessions = createCheckBox("聊天历史与会话记忆 (sessions)", "包含所有历史对话、上下文及会话索引", true);
+        root.addView(cbSessions);
+
+        CheckBox cbAgents = createCheckBox("子代理配置与预设规则 (agents)", "pet-companion 等独立子代理角色与提示词", true);
+        root.addView(cbAgents);
+
+        CheckBox cbSkills = createCheckBox("技能、插件与扩展生态 (skills, npm)", "已安装的扩展插件、自定义 Skill 与 npm 模块", true);
+        root.addView(cbSkills);
+
+        CheckBox cbSettings = createCheckBox("模型配置与认证 (settings.json, auth.json)", "全局模型参数、provider 配置与认证 token", true);
+        root.addView(cbSettings);
+
+        CheckBox cbPets = createCheckBox("自定义桌宠皮肤与资源 (custom_pets)", "自定义导入的桌宠皮肤素材包", true);
+        root.addView(cbPets);
+
+        CheckBox cbPiCwd = createCheckBox("用户工作区工程代码 (root/pi-cwd)", "包含用户编写的代码文件与本地工程项目", true);
+        root.addView(cbPiCwd);
+
+        // 如果 root/pi-cwd 存在子目录，列出子目录可供细粒度选择
+        File rootfs = ProotManager.getRootfsDir(context);
+        File piCwdDir = new File(rootfs, "root/pi-cwd");
+        final List<CheckBox> cwdSubBoxes = new ArrayList<>();
+        if (piCwdDir.exists() && piCwdDir.isDirectory()) {
+            File[] subProjects = piCwdDir.listFiles(File::isDirectory);
+            if (subProjects != null && subProjects.length > 0) {
+                LinearLayout cwdSubLayout = new LinearLayout(context);
+                cwdSubLayout.setOrientation(LinearLayout.VERTICAL);
+                cwdSubLayout.setPadding(dp(16), dp(4), 0, dp(8));
+                TextView tvCwdSubHint = new TextView(context);
+                tvCwdSubHint.setText("可选：细粒度指定要导出的工程子目录 (不勾选则默认全部)：");
+                tvCwdSubHint.setTextColor(0xFF58A6FF);
+                tvCwdSubHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                cwdSubLayout.addView(tvCwdSubHint);
+
+                for (File sp : subProjects) {
+                    CheckBox scb = createCheckBox("📁 " + sp.getName(), sp.getAbsolutePath(), false);
+                    scb.setTag(sp.getName());
+                    cwdSubBoxes.add(scb);
+                    cwdSubLayout.addView(scb);
+                }
+                root.addView(cwdSubLayout);
+
+                cbPiCwd.setOnCheckedChangeListener((btn, isChecked) -> {
+                    cwdSubLayout.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+                });
+            }
+        }
+
+        // Section 2: 目标导出位置
+        TextView tvSec2 = createSectionHeader("2. 选择目标导出目录");
+        root.addView(tvSec2);
+
+        // 默认目标目录
+        final File[] selectedTargetDir = new File[1];
+        if (currentDir != null && currentDir.canWrite()) {
+            selectedTargetDir[0] = currentDir;
+        } else {
+            selectedTargetDir[0] = BackupManager.getExportDirectory(context);
+        }
+
+        TextView tvTargetDirPath = new TextView(context);
+        tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
+        tvTargetDirPath.setTextColor(0xFF58A6FF);
+        tvTargetDirPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvTargetDirPath.setPadding(dp(8), dp(6), dp(8), dp(6));
+        GradientDrawable pathBg = new GradientDrawable();
+        pathBg.setColor(0xFF161B22);
+        pathBg.setCornerRadius(dp(4));
+        pathBg.setStroke(dp(1), 0xFF30363D);
+        tvTargetDirPath.setBackground(pathBg);
+        root.addView(tvTargetDirPath);
+
+        // 目标目录快速切换按钮组
+        LinearLayout dirBtnRow = new LinearLayout(context);
+        dirBtnRow.setOrientation(LinearLayout.HORIZONTAL);
+        dirBtnRow.setPadding(0, dp(6), 0, dp(10));
+
+        TextView btnUseCurrent = buildActionBtn("📍 设为当前浏览目录", 0x22388BFD, 0xFF79C0FF, v -> {
+            if (currentDir != null && currentDir.canWrite()) {
+                selectedTargetDir[0] = currentDir;
+                tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
+                Toast.makeText(context, "已设为当前目录", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(context, "当前目录不可写或无效", Toast.LENGTH_SHORT).show();
+            }
+        });
+        dirBtnRow.addView(btnUseCurrent);
+
+        TextView btnUseDownloads = buildActionBtn("📥 系统下载目录", 0x22238636, 0xFF7EE787, v -> {
+            File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            if (dl != null && dl.exists()) {
+                selectedTargetDir[0] = dl;
+                tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
+                Toast.makeText(context, "已设为系统下载目录", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(context, "下载目录不可用", Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.leftMargin = dp(6);
+        dirBtnRow.addView(btnUseDownloads, dlp);
+
+        TextView btnUseAppExport = buildActionBtn("📦 内部默认目录", 0x228B5CF6, 0xFFC4B5FD, v -> {
+            selectedTargetDir[0] = BackupManager.getExportDirectory(context);
+            tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
+            Toast.makeText(context, "已设为内部备份目录", Toast.LENGTH_SHORT).show();
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.leftMargin = dp(6);
+        dirBtnRow.addView(btnUseAppExport, alp);
+
+        root.addView(dirBtnRow);
+
+        // Section 3: 额外容器自定义路径 (可选)
+        TextView tvSec3 = createSectionHeader("3. 额外容器路径 (可选，英文逗号分隔)");
+        root.addView(tvSec3);
+
+        EditText etCustomPaths = new EditText(context);
+        etCustomPaths.setHint("如: root/my_scripts, etc (可选)");
+        etCustomPaths.setHintTextColor(0xFF484F58);
+        etCustomPaths.setTextColor(0xFFC9D1D9);
+        etCustomPaths.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        etCustomPaths.setPadding(dp(8), dp(8), dp(8), dp(8));
+        GradientDrawable etBg = new GradientDrawable();
+        etBg.setColor(0xFF161B22);
+        etBg.setCornerRadius(dp(4));
+        etBg.setStroke(dp(1), 0xFF30363D);
+        etCustomPaths.setBackground(etBg);
+        root.addView(etCustomPaths);
+
+        final AlertDialog[] customDiagRef = new AlertDialog[1];
+
+        // 底部动作按钮
+        LinearLayout actRow = new LinearLayout(context);
+        actRow.setOrientation(LinearLayout.HORIZONTAL);
+        actRow.setPadding(0, dp(16), 0, 0);
+
+        TextView btnCancel = buildActionBtn("取消", 0x2230363D, 0xFF8B949E, v -> {
+            if (customDiagRef[0] != null) customDiagRef[0].dismiss();
+        });
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        clp.rightMargin = dp(6);
+        actRow.addView(btnCancel, clp);
+
+        TextView btnConfirm = buildActionBtn("🚀 开始打包导出", 0x22238636, 0xFF7EE787, v -> {
+            BackupManager.ExportOptions options = new BackupManager.ExportOptions();
+            options.includeSharedPrefs = cbPrefs.isChecked();
+            options.includeSessions = cbSessions.isChecked();
+            options.includeSubAgents = cbAgents.isChecked();
+            options.includeSkillsAndPlugins = cbSkills.isChecked();
+            options.includeSettingsAndAuth = cbSettings.isChecked();
+            options.includeCustomPets = cbPets.isChecked();
+            options.includePiCwd = cbPiCwd.isChecked();
+
+            for (CheckBox scb : cwdSubBoxes) {
+                if (scb.isChecked() && scb.getTag() != null) {
+                    options.selectedPiCwdSubDirs.add(scb.getTag().toString());
+                }
+            }
+
+            String customInput = etCustomPaths.getText().toString().trim();
+            if (!customInput.isEmpty()) {
+                String[] parts = customInput.split(",");
+                for (String p : parts) {
+                    p = p.trim();
+                    if (!p.isEmpty()) options.extraCustomDirs.add(p);
+                }
+            }
+
+            File targetDir = selectedTargetDir[0];
+            if (targetDir == null || !targetDir.exists()) {
+                targetDir = BackupManager.getExportDirectory(context);
+            }
+            options.targetOutFile = new File(targetDir, BackupManager.generateBackupFileName());
+
+            if (customDiagRef[0] != null) customDiagRef[0].dismiss();
+            performExportBackup(options);
+        });
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f);
+        actRow.addView(btnConfirm, flp);
+
+        root.addView(actRow);
+
+        builder.setView(scroll);
+        AlertDialog d = builder.create();
+        customDiagRef[0] = d;
+
+        Window window = d.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            WindowManager.LayoutParams lp = window.getAttributes();
+            lp.width = (int) (context.getResources().getDisplayMetrics().widthPixels * 0.94f);
+            lp.height = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.85f);
+            window.setAttributes(lp);
+        }
+        d.show();
+    }
+
+    private TextView createSectionHeader(String title) {
+        TextView tv = new TextView(context);
+        tv.setText(title);
+        tv.setTextColor(0xFFE6EDF3);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setPadding(0, dp(10), 0, dp(4));
+        return tv;
+    }
+
+    private CheckBox createCheckBox(String title, String subtitle, boolean checked) {
+        CheckBox cb = new CheckBox(context);
+        SpannableStringBuilder ssb = new SpannableStringBuilder();
+        ssb.append(title);
+        if (!TextUtils.isEmpty(subtitle)) {
+            ssb.append("\n");
+            int start = ssb.length();
+            ssb.append(subtitle);
+            ssb.setSpan(new ForegroundColorSpan(0xFF8B949E), start, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ssb.setSpan(new RelativeSizeSpan(0.85f), start, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        cb.setText(ssb);
+        cb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        cb.setTextColor(0xFFF0F6FC);
+        cb.setChecked(checked);
+        cb.setPadding(dp(4), dp(3), dp(4), dp(3));
+        return cb;
     }
 
     private void showRestorePicker() {

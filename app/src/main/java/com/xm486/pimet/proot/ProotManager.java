@@ -421,6 +421,11 @@ public final class ProotManager {
         File sharedMount = new File(rootfsDir, "root/shared");
         if (!sharedMount.exists()) sharedMount.mkdirs();
 
+        // 确保用户工作区目录 root/pi-cwd 存在并自愈历史工程目录，杜绝 Directory does not exist 异常
+        File piCwd = new File(rootfsDir, "root/pi-cwd");
+        if (!piCwd.exists()) piCwd.mkdirs();
+        com.xm486.pimet.BackupManager.ensureReferencedProjectDirsExist(rootfsDir);
+
         ensureContainerDns(context);
         ensureContainerGroups(context);
     }

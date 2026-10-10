@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -27,8 +28,10 @@ import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.zip.ZipEntry;
@@ -138,6 +141,24 @@ public final class BackupManager {
     }
 
     /**
+     * 自选导出选项配置 (ExportOptions)
+     */
+    public static class ExportOptions {
+        public boolean includeSharedPrefs = true;      // 应用与偏好设置 (SharedPreferences)
+        public boolean includeSessions = true;         // 会话与聊天历史 (sessions)
+        public boolean includeSubAgents = true;        // 子代理配置与规则 (agents)
+        public boolean includeSkillsAndPlugins = true; // 技能与插件扩展 (skills, npm, extensions)
+        public boolean includeSettingsAndAuth = true;  // 模型与全局设置 (settings.json, auth.json)
+        public boolean includeCustomPets = true;       // 自定义桌宠皮肤与资源 (custom_pets)
+        public boolean includePiCwd = true;            // 用户工作区工程目录 (root/pi-cwd)
+        public final Set<String> selectedPiCwdSubDirs = new HashSet<>(); // 指定的工作区子工程 (空则包含全部)
+        public final List<String> extraCustomDirs = new ArrayList<>();   // 额外自选的容器内目录路径
+        public File targetOutFile = null;
+
+        public ExportOptions() {}
+    }
+
+    /**
      * 生成标准备份包文件名
      */
     public static String generateBackupFileName() {
@@ -146,13 +167,25 @@ public final class BackupManager {
     }
 
     /**
-     * 执行全量配置、聊天记录、插件生态、子代理及设置打包导出
+     * 执行全量配置、聊天记录、插件生态、子代理及设置打包导出 (默认全量)
      */
     public static void exportBackup(Context context, File targetFile,
                                     ProgressListener progressListener,
                                     BackupCallback callback) {
+        ExportOptions options = new ExportOptions();
+        options.targetOutFile = targetFile;
+        exportBackup(context, options, progressListener, callback);
+    }
+
+    /**
+     * 支持自选内容与自选目录的细粒度备份导出
+     */
+    public static void exportBackup(Context context, ExportOptions options,
+                                    ProgressListener progressListener,
+                                    BackupCallback callback) {
+        final ExportOptions opts = options != null ? options : new ExportOptions();
         new Thread(() -> {
-            File outFile = targetFile;
+            File outFile = opts.targetOutFile;
             if (outFile == null) {
                 File dir = getExportDirectory(context);
                 outFile = new File(dir, generateBackupFileName());
@@ -176,10 +209,26 @@ public final class BackupManager {
                     }
                     JSONObject manifest = new JSONObject();
                     manifest.put("app", "PiMet");
-                    manifest.put("version", "1.3.8");
-                    manifest.put("format_version", 1);
+                    manifest.put("version", "1.4.6");
+                    manifest.put("format_version", 2);
                     manifest.put("export_time", System.currentTimeMillis());
                     manifest.put("export_date", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date()));
+
+                    JSONObject optJson = new JSONObject();
+                    optJson.put("includeSharedPrefs", opts.includeSharedPrefs);
+                    optJson.put("includeSessions", opts.includeSessions);
+                    optJson.put("includeSubAgents", opts.includeSubAgents);
+                    optJson.put("includeSkillsAndPlugins", opts.includeSkillsAndPlugins);
+                    optJson.put("includeSettingsAndAuth", opts.includeSettingsAndAuth);
+                    optJson.put("includeCustomPets", opts.includeCustomPets);
+                    optJson.put("includePiCwd", opts.includePiCwd);
+                    if (!opts.selectedPiCwdSubDirs.isEmpty()) {
+                        optJson.put("selectedPiCwdSubDirs", new org.json.JSONArray(opts.selectedPiCwdSubDirs));
+                    }
+                    if (!opts.extraCustomDirs.isEmpty()) {
+                        optJson.put("extraCustomDirs", new org.json.JSONArray(opts.extraCustomDirs));
+                    }
+                    manifest.put("options", optJson);
 
                     byte[] manifestBytes = manifest.toString(2).getBytes(StandardCharsets.UTF_8);
                     ZipEntry mEntry = new ZipEntry("manifest.json");
@@ -189,22 +238,24 @@ public final class BackupManager {
                     totalCount++;
 
                     // 2. 打包 Android SharedPreferences 全部设置与参数
-                    if (progressListener != null) {
-                        MAIN_HANDLER.post(() -> progressListener.onProgress(20, "正在打包核心偏好设置 (SharedPreferences)...", "ports, model keys, pet parameters..."));
-                    }
+                    if (opts.includeSharedPrefs) {
+                        if (progressListener != null) {
+                            MAIN_HANDLER.post(() -> progressListener.onProgress(20, "正在打包核心偏好设置 (SharedPreferences)...", "ports, model keys, pet parameters..."));
+                        }
 
-                    File dataDir = new File(context.getApplicationInfo().dataDir);
-                    File spDir = new File(dataDir, "shared_prefs");
-                    if (spDir.exists() && spDir.isDirectory()) {
-                        File[] spFiles = spDir.listFiles();
-                        if (spFiles != null) {
-                            for (File spf : spFiles) {
-                                if (spf.isFile() && spf.getName().endsWith(".xml")) {
-                                    writeZipEntry(zos, spf, "shared_prefs/" + spf.getName());
-                                    totalCount++;
-                                    if (progressListener != null) {
-                                        final String fName = spf.getName();
-                                        MAIN_HANDLER.post(() -> progressListener.onProgress(25, "打包设置项: " + fName, "shared_prefs/" + fName));
+                        File dataDir = new File(context.getApplicationInfo().dataDir);
+                        File spDir = new File(dataDir, "shared_prefs");
+                        if (spDir.exists() && spDir.isDirectory()) {
+                            File[] spFiles = spDir.listFiles();
+                            if (spFiles != null) {
+                                for (File spf : spFiles) {
+                                    if (spf.isFile() && spf.getName().endsWith(".xml")) {
+                                        writeZipEntry(zos, spf, "shared_prefs/" + spf.getName());
+                                        totalCount++;
+                                        if (progressListener != null) {
+                                            final String fName = spf.getName();
+                                            MAIN_HANDLER.post(() -> progressListener.onProgress(25, "打包设置项: " + fName, "shared_prefs/" + fName));
+                                        }
                                     }
                                 }
                             }
@@ -214,7 +265,8 @@ public final class BackupManager {
                     // 3. 打包 Linux 容器内部 ~/.pi/agent 数据 (聊天记忆、子代理、技能、扩展、模型)
                     File rootfs = ProotManager.getRootfsDir(context);
                     File piAgentDir = new File(rootfs, "root/.pi/agent");
-                    if (piAgentDir.exists() && piAgentDir.isDirectory()) {
+                    boolean needPiAgent = opts.includeSessions || opts.includeSubAgents || opts.includeSkillsAndPlugins || opts.includeSettingsAndAuth;
+                    if (needPiAgent && piAgentDir.exists() && piAgentDir.isDirectory()) {
                         if (progressListener != null) {
                             MAIN_HANDLER.post(() -> progressListener.onProgress(35, "正在扫描 ~/.pi/agent 聊天记忆与插件生态...", piAgentDir.getAbsolutePath()));
                         }
@@ -224,11 +276,39 @@ public final class BackupManager {
                         skipNames.add(".sqlite-shm");
                         skipNames.add(".cache");
 
+                        FileFilterPredicate agentFilter = (file, relPath) -> {
+                            if (file.isDirectory()) {
+                                if (!opts.includeSessions && (relPath.equals("sessions") || relPath.startsWith("sessions/"))) {
+                                    return false;
+                                }
+                                if (!opts.includeSubAgents && (relPath.equals("agents") || relPath.startsWith("agents/") || relPath.equals("subagents") || relPath.startsWith("subagents/"))) {
+                                    return false;
+                                }
+                                if (!opts.includeSkillsAndPlugins && (relPath.equals("skills") || relPath.startsWith("skills/") || relPath.equals("npm") || relPath.startsWith("npm/") || relPath.equals("extensions") || relPath.startsWith("extensions/"))) {
+                                    return false;
+                                }
+                            } else {
+                                if (!opts.includeSessions && (relPath.startsWith("sessions/") || relPath.equals("pi-web-session-state.json") || relPath.equals("pi-web-session-index.json"))) {
+                                    return false;
+                                }
+                                if (!opts.includeSubAgents && (relPath.startsWith("agents/") || relPath.startsWith("subagents/"))) {
+                                    return false;
+                                }
+                                if (!opts.includeSkillsAndPlugins && (relPath.startsWith("skills/") || relPath.startsWith("npm/") || relPath.startsWith("extensions/"))) {
+                                    return false;
+                                }
+                                if (!opts.includeSettingsAndAuth && (file.getName().equals("settings.json") || file.getName().equals("auth.json") || file.getName().equals("models.json"))) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        };
+
                         int[] piCount = new int[]{0};
-                        zipDirectoryRecursive(zos, piAgentDir, piAgentDir, "pi_agent", skipNames, (curFile) -> {
+                        zipDirectoryRecursive(zos, piAgentDir, piAgentDir, "pi_agent", skipNames, agentFilter, (curFile) -> {
                             piCount[0]++;
                             if (piCount[0] % 5 == 0 && progressListener != null) {
-                                int pct = Math.min(85, 35 + (piCount[0] / 3));
+                                int pct = Math.min(75, 35 + (piCount[0] / 3));
                                 final String rel = curFile.getName();
                                 MAIN_HANDLER.post(() -> progressListener.onProgress(pct, "正在压缩: " + rel, curFile.getAbsolutePath()));
                             }
@@ -236,11 +316,72 @@ public final class BackupManager {
                         totalCount += piCount[0];
                     }
 
-                    // 4. 检查是否有独立的自定义桌宠皮肤文件 (custom_pets)
+                    // 4. 打包用户工作区工程目录 root/pi-cwd (自选工程子目录或全部)
+                    File piCwdDir = new File(rootfs, "root/pi-cwd");
+                    if (opts.includePiCwd && piCwdDir.exists() && piCwdDir.isDirectory()) {
+                        if (progressListener != null) {
+                            MAIN_HANDLER.post(() -> progressListener.onProgress(78, "正在扫描用户工作区工程 (root/pi-cwd)...", piCwdDir.getAbsolutePath()));
+                        }
+                        int[] cwdCount = new int[]{0};
+                        if (opts.selectedPiCwdSubDirs != null && !opts.selectedPiCwdSubDirs.isEmpty()) {
+                            for (String subName : opts.selectedPiCwdSubDirs) {
+                                File subDir = new File(piCwdDir, subName);
+                                if (subDir.exists()) {
+                                    zipDirectoryRecursive(zos, subDir, piCwdDir, "pi_cwd", null, null, (cur) -> {
+                                        cwdCount[0]++;
+                                        if (cwdCount[0] % 5 == 0 && progressListener != null) {
+                                            MAIN_HANDLER.post(() -> progressListener.onProgress(82, "正在打包工程: " + cur.getName(), cur.getAbsolutePath()));
+                                        }
+                                    });
+                                }
+                            }
+                        } else {
+                            zipDirectoryRecursive(zos, piCwdDir, piCwdDir, "pi_cwd", null, null, (cur) -> {
+                                cwdCount[0]++;
+                                if (cwdCount[0] % 5 == 0 && progressListener != null) {
+                                    MAIN_HANDLER.post(() -> progressListener.onProgress(82, "正在打包工程: " + cur.getName(), cur.getAbsolutePath()));
+                                }
+                            });
+                        }
+                        totalCount += cwdCount[0];
+                    }
+
+                    // 5. 打包用户自选的额外容器目录
+                    if (opts.extraCustomDirs != null && !opts.extraCustomDirs.isEmpty()) {
+                        for (String customPath : opts.extraCustomDirs) {
+                            if (TextUtils.isEmpty(customPath)) continue;
+                            customPath = customPath.trim();
+                            File targetDir;
+                            String relInRootfs;
+                            if (customPath.startsWith("/root/")) {
+                                relInRootfs = customPath.substring(1);
+                                targetDir = new File(rootfs, relInRootfs);
+                            } else if (customPath.startsWith("/")) {
+                                relInRootfs = customPath.substring(1);
+                                targetDir = new File(rootfs, relInRootfs);
+                            } else {
+                                relInRootfs = "root/" + customPath;
+                                targetDir = new File(rootfs, relInRootfs);
+                            }
+
+                            if (targetDir.exists()) {
+                                if (progressListener != null) {
+                                    final String dName = targetDir.getName();
+                                    MAIN_HANDLER.post(() -> progressListener.onProgress(86, "打包自选目录: " + dName, targetDir.getAbsolutePath()));
+                                }
+                                int[] extraCount = new int[]{0};
+                                String entryBase = "custom_dirs/" + relInRootfs.replace(File.separatorChar, '/');
+                                zipDirectoryRecursive(zos, targetDir, targetDir, entryBase, null, null, (cur) -> extraCount[0]++);
+                                totalCount += extraCount[0];
+                            }
+                        }
+                    }
+
+                    // 6. 打包自定义桌宠皮肤文件 (custom_pets)
                     File customPetDir = new File(context.getFilesDir(), "custom_pets");
-                    if (customPetDir.exists() && customPetDir.isDirectory()) {
+                    if (opts.includeCustomPets && customPetDir.exists() && customPetDir.isDirectory()) {
                         int[] petCount = new int[]{0};
-                        zipDirectoryRecursive(zos, customPetDir, customPetDir, "custom_pets", null, (cur) -> petCount[0]++);
+                        zipDirectoryRecursive(zos, customPetDir, customPetDir, "custom_pets", null, null, (cur) -> petCount[0]++);
                         totalCount += petCount[0];
                     }
 
@@ -276,21 +417,21 @@ public final class BackupManager {
     public static void importBackup(Context context, File zipFile,
                                     ProgressListener progressListener,
                                     RestoreCallback callback) {
-        new Thread(() -> {
-            if (zipFile == null || !zipFile.exists() || zipFile.length() < 100) {
-                MAIN_HANDLER.post(() -> callback.onResult(false, 0, "备份文件不存在或为空"));
-                return;
-            }
+        if (context == null || zipFile == null || !zipFile.exists()) {
+            if (callback != null) callback.onResult(false, 0, "备份文件无效或不存在");
+            return;
+        }
 
+        new Thread(() -> {
             try {
                 if (progressListener != null) {
-                    MAIN_HANDLER.post(() -> progressListener.onProgress(5, "正在验证备份包结构...", zipFile.getName()));
+                    MAIN_HANDLER.post(() -> progressListener.onProgress(5, "正在校验备份压缩包完整性...", zipFile.getName()));
                 }
 
-                // 检查是否为合法的 PiMet 备份包
                 boolean hasManifest = false;
                 boolean hasSharedPrefs = false;
                 boolean hasPiAgent = false;
+                boolean hasPiCwd = false;
 
                 try (ZipInputStream zis = new ZipInputStream(new BufferedInputStream(new FileInputStream(zipFile)))) {
                     ZipEntry entry;
@@ -299,11 +440,12 @@ public final class BackupManager {
                         if ("manifest.json".equals(name)) hasManifest = true;
                         if (name.startsWith("shared_prefs/")) hasSharedPrefs = true;
                         if (name.startsWith("pi_agent/")) hasPiAgent = true;
+                        if (name.startsWith("pi_cwd/")) hasPiCwd = true;
                         if (hasManifest || (hasSharedPrefs && hasPiAgent)) break;
                     }
                 }
 
-                if (!hasManifest && !hasSharedPrefs && !hasPiAgent) {
+                if (!hasManifest && !hasSharedPrefs && !hasPiAgent && !hasPiCwd) {
                     MAIN_HANDLER.post(() -> callback.onResult(false, 0, "所选压缩包不是有效的 PiMet 备份迁移包"));
                     return;
                 }
@@ -319,6 +461,9 @@ public final class BackupManager {
                 File rootfs = ProotManager.getRootfsDir(context);
                 File piAgentDir = new File(rootfs, "root/.pi/agent");
                 if (!piAgentDir.exists()) piAgentDir.mkdirs();
+
+                File piCwdDir = new File(rootfs, "root/pi-cwd");
+                if (!piCwdDir.exists()) piCwdDir.mkdirs();
 
                 File customPetDir = new File(context.getFilesDir(), "custom_pets");
 
@@ -343,6 +488,12 @@ public final class BackupManager {
                         } else if (name.startsWith("custom_pets/")) {
                             String rel = name.substring("custom_pets/".length());
                             destFile = new File(customPetDir, rel);
+                        } else if (name.startsWith("pi_cwd/")) {
+                            String rel = name.substring("pi_cwd/".length());
+                            destFile = new File(piCwdDir, rel);
+                        } else if (name.startsWith("custom_dirs/")) {
+                            String rel = name.substring("custom_dirs/".length());
+                            destFile = new File(rootfs, rel);
                         }
 
                         if (destFile != null) {
@@ -379,13 +530,16 @@ public final class BackupManager {
                     PiMetConfig.syncFromContainer(context);
                 } catch (Throwable ignored) {}
 
+                // 自愈补齐历史会话与项目工作区物理目录，彻底杜绝 Directory does not exist 错误
+                ensureReferencedProjectDirsExist(rootfs);
+
                 final int finalRestored = restoredCount;
                 if (progressListener != null) {
                     MAIN_HANDLER.post(() -> progressListener.onProgress(100, "✔ 全部数据已成功还原！", "总计恢复 " + finalRestored + " 个配置文件与数据"));
                 }
 
                 MAIN_HANDLER.post(() -> callback.onResult(true, finalRestored,
-                        "✔ 成功无损恢复 " + finalRestored + " 项配置、聊天记录、子代理与插件生态！"));
+                        "✔ 成功无损恢复 " + finalRestored + " 项配置、聊天记录、子代理、工作区与插件生态！"));
             } catch (Throwable t) {
                 Log.e(TAG, "importBackup failed", t);
                 if (progressListener != null) {
@@ -394,6 +548,94 @@ public final class BackupManager {
                 MAIN_HANDLER.post(() -> callback.onResult(false, 0, "导入恢复异常: " + t.getMessage()));
             }
         }).start();
+    }
+
+    /**
+     * 自愈补齐历史工程与工作区目录，确保 Pi-Web 无论是导入老包还是新包，
+     * 都绝不会因为物理目录缺失而报 Directory does not exist.
+     */
+    public static void ensureReferencedProjectDirsExist(File rootfs) {
+        if (rootfs == null || !rootfs.exists()) return;
+        try {
+            File piCwd = new File(rootfs, "root/pi-cwd");
+            if (!piCwd.exists()) piCwd.mkdirs();
+
+            File piAgentDir = new File(rootfs, "root/.pi/agent");
+            if (!piAgentDir.exists()) return;
+
+            // 1. 扫描 pi-web-session-state.json 中的 projectOrder
+            File stateFile = new File(piAgentDir, "pi-web-session-state.json");
+            if (stateFile.exists()) {
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(stateFile), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line).append('\n');
+                    }
+                }
+                JSONObject stateObj = new JSONObject(sb.toString());
+                if (stateObj.has("projectOrder")) {
+                    org.json.JSONArray order = stateObj.getJSONArray("projectOrder");
+                    for (int i = 0; i < order.length(); i++) {
+                        String projPath = order.getString(i);
+                        createDirIfRootPath(rootfs, projPath);
+                    }
+                }
+            }
+
+            // 2. 扫描 sessions 目录下的每个历史会话
+            File sessionsDir = new File(piAgentDir, "sessions");
+            if (sessionsDir.exists() && sessionsDir.isDirectory()) {
+                File[] sessionDirs = sessionsDir.listFiles();
+                if (sessionDirs != null) {
+                    for (File sDir : sessionDirs) {
+                        if (sDir.isDirectory()) {
+                            String dName = sDir.getName();
+                            if (dName.startsWith("--root-") && dName.endsWith("--")) {
+                                String inner = dName.substring(2, dName.length() - 2);
+                                File[] jsonls = sDir.listFiles((dir, name) -> name.endsWith(".jsonl"));
+                                boolean resolved = false;
+                                if (jsonls != null && jsonls.length > 0) {
+                                    for (File jf : jsonls) {
+                                        try (BufferedReader jbr = new BufferedReader(new InputStreamReader(new FileInputStream(jf), StandardCharsets.UTF_8))) {
+                                            String firstLine = jbr.readLine();
+                                            if (firstLine != null && firstLine.contains("\"cwd\":")) {
+                                                JSONObject jObj = new JSONObject(firstLine);
+                                                if (jObj.has("cwd")) {
+                                                    createDirIfRootPath(rootfs, jObj.getString("cwd"));
+                                                    resolved = true;
+                                                    break;
+                                                }
+                                            }
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+                                if (!resolved && inner.startsWith("root-pi-cwd-")) {
+                                    String sub = inner.substring("root-pi-cwd-".length());
+                                    File f = new File(piCwd, sub);
+                                    if (!f.exists()) f.mkdirs();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ensureReferencedProjectDirsExist error", t);
+        }
+    }
+
+    private static void createDirIfRootPath(File rootfs, String path) {
+        if (path == null) return;
+        path = path.trim();
+        if (path.startsWith("/root/")) {
+            String rel = path.substring("/root/".length());
+            File d = new File(rootfs, "root/" + rel);
+            if (!d.exists()) d.mkdirs();
+        } else if (path.equals("/root")) {
+            File d = new File(rootfs, "root");
+            if (!d.exists()) d.mkdirs();
+        }
     }
 
     /**
@@ -439,12 +681,17 @@ public final class BackupManager {
         zos.closeEntry();
     }
 
+    public interface FileFilterPredicate {
+        boolean shouldInclude(File file, String relativePath);
+    }
+
     private interface FileVisitCallback {
         void onFileVisited(File file);
     }
 
     private static void zipDirectoryRecursive(ZipOutputStream zos, File currentFile, File rootDir,
                                                String basePrefix, Set<String> skipNames,
+                                               FileFilterPredicate filter,
                                                FileVisitCallback callback) throws Exception {
         if (currentFile == null || !currentFile.exists()) return;
 
@@ -455,17 +702,24 @@ public final class BackupManager {
             }
         }
 
+        String rel = currentFile.getAbsolutePath().substring(rootDir.getAbsolutePath().length());
+        if (rel.startsWith(File.separator)) rel = rel.substring(1);
+        String relNorm = rel.replace(File.separatorChar, '/');
+
+        if (filter != null && !relNorm.isEmpty() && !filter.shouldInclude(currentFile, relNorm)) {
+            return;
+        }
+
         if (currentFile.isDirectory()) {
             File[] children = currentFile.listFiles();
             if (children != null) {
                 for (File child : children) {
-                    zipDirectoryRecursive(zos, child, rootDir, basePrefix, skipNames, callback);
+                    zipDirectoryRecursive(zos, child, rootDir, basePrefix, skipNames, filter, callback);
                 }
             }
         } else if (currentFile.isFile()) {
-            String rel = currentFile.getAbsolutePath().substring(rootDir.getAbsolutePath().length());
-            if (rel.startsWith(File.separator)) rel = rel.substring(1);
-            String entryPath = basePrefix + "/" + rel.replace(File.separatorChar, '/');
+            String pathPart = relNorm.isEmpty() ? currentFile.getName() : relNorm;
+            String entryPath = TextUtils.isEmpty(basePrefix) ? pathPart : (basePrefix + "/" + pathPart);
             writeZipEntry(zos, currentFile, entryPath);
             if (callback != null) callback.onFileVisited(currentFile);
         }
