@@ -234,7 +234,7 @@ public final class PiMetConfig {
     }
 
     public static boolean isTransLiveEnabled(Context context) {
-        return getPrefs(context).getBoolean(KEY_TRANS_LIVE, true);
+        return getPrefs(context).getBoolean(KEY_TRANS_LIVE, false);
     }
 
     public static void setTransLiveEnabled(Context context, boolean enabled) {

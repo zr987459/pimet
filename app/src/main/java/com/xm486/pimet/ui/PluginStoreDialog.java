@@ -247,34 +247,40 @@ public class PluginStoreDialog {
 
     public static void show(Context context, Runnable onInstallComplete) {
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        View dialogView = buildStoreView(context, onInstallComplete);
+        AlertDialog[] dialogRef = new AlertDialog[1];
+        View dialogView = buildStoreView(context, onInstallComplete, () -> {
+            if (dialogRef[0] != null) dialogRef[0].dismiss();
+        });
         builder.setView(dialogView);
 
         AlertDialog dialog = builder.create();
+        dialogRef[0] = dialog;
         if (dialog.getWindow() != null) {
             dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
         }
         dialog.show();
 
-        // 设定弹窗尺寸
+        // 设定弹窗尺寸，充分利用屏幕宽度，杜绝内容截断
         Window window = dialog.getWindow();
         if (window != null) {
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
             lp.copyFrom(window.getAttributes());
-            lp.width = WindowManager.LayoutParams.MATCH_PARENT;
-            lp.height = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.88f);
+            int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
+            lp.width = Math.min(screenWidth - dp(context, 16), (int) (screenWidth * 0.96f));
+            lp.height = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.90f);
+            lp.gravity = Gravity.CENTER;
             window.setAttributes(lp);
         }
     }
 
-    private static View buildStoreView(Context context, Runnable onInstallComplete) {
+    private static View buildStoreView(Context context, Runnable onInstallComplete, Runnable onDismiss) {
         int dp8 = dp(context, 8);
+        int dp10 = dp(context, 10);
         int dp12 = dp(context, 12);
-        int dp16 = dp(context, 16);
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp16, dp16, dp16, dp16);
+        root.setPadding(dp12, dp12, dp12, dp12);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xF0181A24);
@@ -282,7 +288,7 @@ public class PluginStoreDialog {
         bg.setStroke(dp(context, 1), 0x3360A5FA);
         root.setBackground(bg);
 
-        // ---- 顶栏：标题 + 副标题 ----
+        // ---- 顶栏：标题 + 副标题 + 关闭按钮 ----
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -292,25 +298,44 @@ public class PluginStoreDialog {
 
         TextView titleTv = new TextView(context);
         titleTv.setText("🏪 插件与生态商店");
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f);
         titleTv.setTextColor(0xFFF8FAFC);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
         titleBox.addView(titleTv);
 
         TextView subTitleTv = new TextView(context);
         subTitleTv.setText("精选官方扩展、MCP 服务中心及全球生态站点一键浏览与即时翻译");
-        subTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        subTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
         subTitleTv.setTextColor(0xFF94A3B8);
         subTitleTv.setPadding(0, dp(context, 2), 0, 0);
         titleBox.addView(subTitleTv);
 
         header.addView(titleBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView btnClose = new TextView(context);
+        btnClose.setText("✕");
+        btnClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+        btnClose.setTextColor(0xFF94A3B8);
+        btnClose.setGravity(Gravity.CENTER);
+        btnClose.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
+        GradientDrawable closeBg = new GradientDrawable();
+        closeBg.setColor(0x22475569);
+        closeBg.setCornerRadius(dp(context, 12));
+        btnClose.setBackground(closeBg);
+        btnClose.setOnClickListener(v -> {
+            if (onDismiss != null) onDismiss.run();
+        });
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+                dp(context, 28), dp(context, 28));
+        closeLp.leftMargin = dp(context, 8);
+        header.addView(btnClose, closeLp);
+
         root.addView(header);
 
         // ---- 分页选项卡 (Tab 切换) ----
         LinearLayout tabRow = new LinearLayout(context);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
-        tabRow.setPadding(0, dp12, 0, dp8);
+        tabRow.setPadding(0, dp10, 0, dp8);
 
         TextView tabCurated = createTabButton(context, "🌟 精选生态市场", true);
         TextView tabWebsites = createTabButton(context, "🌐 热门生态网站", false);
@@ -417,40 +442,63 @@ public class PluginStoreDialog {
         cardLp.bottomMargin = dp8;
         card.setLayoutParams(cardLp);
 
-        // 首行：标题 + Badge 标签 + 动作按钮
-        LinearLayout row1 = new LinearLayout(context);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.setGravity(Gravity.CENTER_VERTICAL);
+        // 头部：左侧自适应标题与元信息区 (weight 1)，右侧紧凑操作按钮
+        LinearLayout headerRow = new LinearLayout(context);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        LinearLayout titleCol = new LinearLayout(context);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tcLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tcLp.rightMargin = dp8;
+        titleCol.setLayoutParams(tcLp);
+
+        // 标题 (粗体，自适应换行，最多2行)
         TextView titleTv = new TextView(context);
         titleTv.setText(item.title);
         titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
         titleTv.setTextColor(0xFFF1F5F9);
         titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-        row1.addView(titleTv);
+        titleTv.setMaxLines(2);
+        titleTv.setEllipsize(TextUtils.TruncateAt.END);
+        titleCol.addView(titleTv);
+
+        // 元信息行：徽章 + 包名/ID
+        LinearLayout metaRow = new LinearLayout(context);
+        metaRow.setOrientation(LinearLayout.HORIZONTAL);
+        metaRow.setGravity(Gravity.CENTER_VERTICAL);
+        metaRow.setPadding(0, dp(context, 3), 0, 0);
 
         TextView badgeTv = new TextView(context);
         badgeTv.setText(item.badge);
-        badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+        badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
         badgeTv.setTextColor(0xFF38BDF8);
-        badgeTv.setPadding(dp(context, 6), dp(context, 2), dp(context, 6), dp(context, 2));
+        badgeTv.setPadding(dp(context, 5), dp(context, 1), dp(context, 5), dp(context, 1));
         GradientDrawable bBg = new GradientDrawable();
         bBg.setColor(0x220284C7);
-        bBg.setCornerRadius(dp(context, 6));
+        bBg.setCornerRadius(dp(context, 4));
         badgeTv.setBackground(bBg);
-        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        bLp.leftMargin = dp(context, 6);
-        row1.addView(badgeTv, bLp);
+        metaRow.addView(badgeTv);
 
-        View spacer = new View(context);
-        row1.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        TextView idTv = new TextView(context);
+        idTv.setText(item.id);
+        idTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+        idTv.setTextColor(0xFF64748B);
+        idTv.setSingleLine(true);
+        idTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        idTv.setPadding(dp(context, 6), 0, 0, 0);
+        metaRow.addView(idTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        titleCol.addView(metaRow);
+        headerRow.addView(titleCol);
+
+        // 操作按钮 (固定紧凑尺寸，始终靠右，绝不挤压溢出)
         Button actionBtn = new Button(context);
         actionBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        actionBtn.setTypeface(Typeface.DEFAULT_BOLD);
         actionBtn.setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4));
-        actionBtn.setMinHeight(0);
-        actionBtn.setMinWidth(0);
+        actionBtn.setMinHeight(dp(context, 28));
+        actionBtn.setMinWidth(dp(context, 66));
         actionBtn.setIncludeFontPadding(false);
 
         if (installed) {
@@ -497,16 +545,16 @@ public class PluginStoreDialog {
             });
         }
 
-        row1.addView(actionBtn);
-        card.addView(row1);
+        headerRow.addView(actionBtn);
+        card.addView(headerRow);
 
-        // 描述
+        // 描述 (完整展示，不截断)
         TextView descTv = new TextView(context);
         descTv.setText(item.desc);
         descTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         descTv.setTextColor(0xFF94A3B8);
         descTv.setLineSpacing(dp(context, 2), 1.15f);
-        descTv.setPadding(0, dp(context, 4), 0, 0);
+        descTv.setPadding(0, dp(context, 6), 0, 0);
         card.addView(descTv);
 
         return card;
@@ -550,11 +598,11 @@ public class PluginStoreDialog {
             card.setBackground(cardBg);
 
             LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             cardLp.bottomMargin = dp8;
             card.setLayoutParams(cardLp);
 
-            // 标题 + 标签
+            // 标题 + 徽章
             LinearLayout rowTitle = new LinearLayout(context);
             rowTitle.setOrientation(LinearLayout.HORIZONTAL);
             rowTitle.setGravity(Gravity.CENTER_VERTICAL);
@@ -564,16 +612,18 @@ public class PluginStoreDialog {
             titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
             titleTv.setTextColor(0xFFF1F5F9);
             titleTv.setTypeface(Typeface.DEFAULT_BOLD);
-            rowTitle.addView(titleTv);
+            titleTv.setMaxLines(2);
+            titleTv.setEllipsize(TextUtils.TruncateAt.END);
+            rowTitle.addView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             TextView badgeTv = new TextView(context);
             badgeTv.setText(site.badge);
-            badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+            badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
             badgeTv.setTextColor(0xFF38BDF8);
-            badgeTv.setPadding(dp(context, 6), dp(context, 2), dp(context, 6), dp(context, 2));
+            badgeTv.setPadding(dp(context, 5), dp(context, 1), dp(context, 5), dp(context, 1));
             GradientDrawable bBg = new GradientDrawable();
             bBg.setColor(0x220284C7);
-            bBg.setCornerRadius(dp(context, 6));
+            bBg.setCornerRadius(dp(context, 4));
             badgeTv.setBackground(bBg);
             LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -584,8 +634,10 @@ public class PluginStoreDialog {
             // URL
             TextView urlTv = new TextView(context);
             urlTv.setText(site.url);
-            urlTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            urlTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
             urlTv.setTextColor(0xFF38BDF8);
+            urlTv.setSingleLine(true);
+            urlTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
             urlTv.setPadding(0, dp(context, 2), 0, dp(context, 3));
             card.addView(urlTv);
 
@@ -603,12 +655,12 @@ public class PluginStoreDialog {
             btnRow.setPadding(0, dp(context, 8), 0, 0);
 
             Button btnInApp = new Button(context);
-            btnInApp.setText("📱 应用内浏览 (支持即时翻译)");
-            btnInApp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            btnInApp.setText("📱 应用内浏览 (含翻译)");
+            btnInApp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             btnInApp.setTextColor(0xFFFFFFFF);
-            btnInApp.setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4));
-            btnInApp.setMinHeight(0);
-            btnInApp.setMinWidth(0);
+            btnInApp.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
+            btnInApp.setMinHeight(dp(context, 32));
+            btnInApp.setIncludeFontPadding(false);
             GradientDrawable inAppBg = new GradientDrawable();
             inAppBg.setColor(0xFF2563EB);
             inAppBg.setCornerRadius(dp(context, 8));
@@ -623,23 +675,21 @@ public class PluginStoreDialog {
                     Toast.makeText(context, "打开失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
-            btnRow.addView(btnInApp);
+            LinearLayout.LayoutParams inAppLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.35f);
+            inAppLp.rightMargin = dp(context, 6);
+            btnRow.addView(btnInApp, inAppLp);
 
             Button btnExternal = new Button(context);
             btnExternal.setText("🌐 外部打开");
-            btnExternal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            btnExternal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             btnExternal.setTextColor(0xFFCBD5E1);
             btnExternal.setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4));
-            btnExternal.setMinHeight(0);
-            btnExternal.setMinWidth(0);
+            btnExternal.setMinHeight(dp(context, 32));
+            btnExternal.setIncludeFontPadding(false);
             GradientDrawable extBg = new GradientDrawable();
             extBg.setColor(0x22475569);
             extBg.setCornerRadius(dp(context, 8));
             btnExternal.setBackground(extBg);
-            LinearLayout.LayoutParams extLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            extLp.leftMargin = dp(context, 8);
-            btnExternal.setLayoutParams(extLp);
             btnExternal.setOnClickListener(v -> {
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(site.url));
@@ -648,7 +698,8 @@ public class PluginStoreDialog {
                     Toast.makeText(context, "打开浏览器失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
-            btnRow.addView(btnExternal);
+            LinearLayout.LayoutParams extLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            btnRow.addView(btnExternal, extLp);
 
             card.addView(btnRow);
             container.addView(card);

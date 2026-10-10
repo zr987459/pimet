@@ -142,15 +142,80 @@ public class WebTranslationManager {
     }
 
     /**
-     * 免配置极速多通道翻译 (包含 Google 官方 Chrome 扩展通道与 MyMemory 双重容灾)
+     * 免配置极速多通道翻译 (包含 Google GTX 官方通道、Google Dict Chrome 扩展通道与 MyMemory 三重容灾)
      */
-    public static List<String> translateWithFreeChannel(List<String> texts) throws Exception {
+    public static List<String> translateWithFreeChannel(List<String> texts) {
+        if (texts == null || texts.isEmpty()) return new ArrayList<>();
         try {
-            return translateWithGoogleDictChrome(texts);
-        } catch (Throwable t) {
-            Log.w(TAG, "Google Chrome translation channel error, trying MyMemory: " + t.getMessage());
-            return translateWithMyMemory(texts);
+            return translateWithGoogleGtx(texts);
+        } catch (Throwable t1) {
+            Log.w(TAG, "Google GTX translation channel error, trying Google Dict: " + t1.getMessage());
+            try {
+                return translateWithGoogleDictChrome(texts);
+            } catch (Throwable t2) {
+                Log.w(TAG, "Google Chrome translation channel error, trying MyMemory: " + t2.getMessage());
+                try {
+                    return translateWithMyMemory(texts);
+                } catch (Throwable t3) {
+                    Log.w(TAG, "All translation channels failed, returning original texts: " + t3.getMessage());
+                    return new ArrayList<>(texts);
+                }
+            }
         }
+    }
+
+    /**
+     * Google GTX 极速多行整批翻译通道 (延迟极低，毫秒级返回)
+     */
+    private static List<String> translateWithGoogleGtx(List<String> texts) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < texts.size(); i++) {
+            if (i > 0) sb.append("\n");
+            sb.append(texts.get(i).replace("\r", " ").replace("\n", " "));
+        }
+        String encoded = URLEncoder.encode(sb.toString(), "UTF-8");
+        String urlStr = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=" + encoded;
+
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(4000);
+        conn.setReadTimeout(4500);
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+        int code = conn.getResponseCode();
+        if (code != 200) {
+            conn.disconnect();
+            throw new Exception("HTTP " + code + ": " + conn.getResponseMessage());
+        }
+
+        String jsonResp = readStream(conn.getInputStream());
+        conn.disconnect();
+
+        JSONArray root = new JSONArray(jsonResp);
+        if (root.length() == 0 || root.isNull(0)) {
+            throw new Exception("Empty Google GTX response");
+        }
+
+        JSONArray items = root.getJSONArray(0);
+        StringBuilder transSb = new StringBuilder();
+        for (int i = 0; i < items.length(); i++) {
+            JSONArray pair = items.optJSONArray(i);
+            if (pair != null && pair.length() > 0 && !pair.isNull(0)) {
+                transSb.append(pair.getString(0));
+            }
+        }
+
+        String[] lines = transSb.toString().split("\n", -1);
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < texts.size(); i++) {
+            if (i < lines.length && !TextUtils.isEmpty(lines[i].trim())) {
+                result.add(lines[i]);
+            } else {
+                result.add(texts.get(i));
+            }
+        }
+        return result;
     }
 
     /**
@@ -172,8 +237,8 @@ public class WebTranslationManager {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(10000);
+        conn.setConnectTimeout(3500);
+        conn.setReadTimeout(4000);
         conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
         int code = conn.getResponseCode();
@@ -224,12 +289,12 @@ public class WebTranslationManager {
             }
             try {
                 String encoded = URLEncoder.encode(text, "UTF-8");
-                String urlStr = "https://api.mymemory.translated.net/get?q=" + encoded + "&langpair=auto|zh-CN";
+                String urlStr = "https://api.mymemory.translated.net/get?q=" + encoded + "&langpair=en|zh-CN";
                 URL url = new URL(urlStr);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
-                conn.setConnectTimeout(6000);
-                conn.setReadTimeout(6000);
+                conn.setConnectTimeout(2500);
+                conn.setReadTimeout(2500);
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)");
 
                 if (conn.getResponseCode() == 200) {
@@ -447,13 +512,16 @@ public class WebTranslationManager {
 
         return "(function() {\n" +
                 "  try {\n" +
-                "    if (window.__pimet_is_translating) return;\n" +
+                "    if (window.__pimet_is_translating) {\n" +
+                "      console.log('PiMet: Translation already in progress');\n" +
+                "      return;\n" +
+                "    }\n" +
                 "    window.__pimet_is_translating = true;\n" +
                 "    window.__pimet_is_translated = true;\n" +
                 "    window.__pimet_mode = '" + mode + "';\n" +
                 "    window.__pimet_live = " + live + ";\n" +
-                "    window.__pimet_batches = window.__pimet_batches || {};\n" +
-                "    window.__pimet_all_nodes = window.__pimet_all_nodes || [];\n" +
+                "    window.__pimet_batches = {};\n" +
+                "    window.__pimet_all_nodes = [];\n" +
                 "    window.__pimet_seq = window.__pimet_seq || 0;\n" +
                 "    window.__pimet_total = 0;\n" +
                 "    window.__pimet_done = 0;\n" +
@@ -481,13 +549,23 @@ public class WebTranslationManager {
                 "            cap.innerHTML = '<span>🌐</span> <span>译文就绪 · 点此设置</span>';\n" +
                 "          }\n" +
                 "        }, 3500);\n" +
+                "      } else {\n" +
+                "        cap.style.opacity = '1.0';\n" +
                 "      }\n" +
                 "    }\n" +
                 "\n" +
                 "    createOrUpdateCapsule('正在扫描网页文本...', false);\n" +
                 "\n" +
-                "    // 忽略标签集合\n" +
+                "    // 忽略标签与类名集合 (避免翻译终端、代码高亮与内部状态组件)\n" +
                 "    var IGNORE_TAGS = {'SCRIPT':1, 'STYLE':1, 'NOSCRIPT':1, 'CODE':1, 'PRE':1, 'SVG':1, 'CANVAS':1, 'IFRAME':1, 'TEXTAREA':1, 'INPUT':1, 'OPTION':1};\n" +
+                "\n" +
+                "    function isIgnored(parent) {\n" +
+                "      if (!parent) return true;\n" +
+                "      if (IGNORE_TAGS[parent.tagName.toUpperCase()]) return true;\n" +
+                "      if (parent.closest && (parent.closest('#pimet-trans-capsule') || parent.closest('.pimet-bilingual-trans') || parent.closest('.xterm, .terminal, .monaco-editor, .ace_editor, pre, code, [data-pimet-trans]'))) return true;\n" +
+                "      if (parent.hasAttribute && parent.hasAttribute('data-pimet-trans')) return true;\n" +
+                "      return false;\n" +
+                "    }\n" +
                 "\n" +
                 "    // 收集待翻译节点\n" +
                 "    function collectTextNodes(root) {\n" +
@@ -498,10 +576,8 @@ public class WebTranslationManager {
                 "          var val = node.nodeValue.trim();\n" +
                 "          if (val.length < 2) return NodeFilter.FILTER_REJECT;\n" +
                 "          var parent = node.parentElement;\n" +
-                "          if (!parent) return NodeFilter.FILTER_REJECT;\n" +
-                "          if (IGNORE_TAGS[parent.tagName.toUpperCase()]) return NodeFilter.FILTER_REJECT;\n" +
-                "          if (parent.closest && (parent.closest('#pimet-trans-capsule') || parent.closest('.pimet-bilingual-trans'))) return NodeFilter.FILTER_REJECT;\n" +
-                "          if (node.__pimet_orig !== undefined) return NodeFilter.FILTER_REJECT;\n" +
+                "          if (isIgnored(parent)) return NodeFilter.FILTER_REJECT;\n" +
+                "          if (node.__pimet_orig !== undefined || node.__pimet_done) return NodeFilter.FILTER_REJECT;\n" +
                 "          // 检查是否包含英文/日文/韩文/外文字符\n" +
                 "          if (!/[a-zA-Z\\u00C0-\\u024F\\u3040-\\u30FF\\uAC00-\\uD7AF]/.test(val)) return NodeFilter.FILTER_REJECT;\n" +
                 "          return NodeFilter.FILTER_ACCEPT;\n" +
@@ -546,11 +622,26 @@ public class WebTranslationManager {
                 "\n" +
                 "    createOrUpdateCapsule('翻译中 (0/' + window.__pimet_total + ')', false);\n" +
                 "\n" +
+                "    // 全局防假死 Watchdog：20 秒超时后强制解除翻译中锁定状态\n" +
+                "    if (window.__pimet_watchdog) clearTimeout(window.__pimet_watchdog);\n" +
+                "    window.__pimet_watchdog = setTimeout(function() {\n" +
+                "      if (window.__pimet_is_translating) {\n" +
+                "        window.__pimet_is_translating = false;\n" +
+                "        createOrUpdateCapsule('翻译完成 (' + window.__pimet_done + '/' + window.__pimet_total + ')', true);\n" +
+                "      }\n" +
+                "    }, 20000);\n" +
+                "\n" +
                 "    // 接收原生 Android 桥接返回结果\n" +
                 "    window.__pimet_receive_batch = function(batchId, transJsonStr, isError) {\n" +
+                "      if (!window.__pimet_is_translated) return;\n" +
                 "      var chunk = window.__pimet_batches[batchId];\n" +
                 "      delete window.__pimet_batches[batchId];\n" +
                 "      if (!chunk || chunk.length === 0) return;\n" +
+                "\n" +
+                "      // 暂停 Observer 防止自身 DOM 修改导致循环触发\n" +
+                "      if (window.__pimet_observer) {\n" +
+                "        window.__pimet_observer.disconnect();\n" +
+                "      }\n" +
                 "\n" +
                 "      var transArr = [];\n" +
                 "      if (!isError && transJsonStr) {\n" +
@@ -559,6 +650,10 @@ public class WebTranslationManager {
                 "\n" +
                 "      for (var k = 0; k < chunk.length; k++) {\n" +
                 "        var node = chunk[k];\n" +
+                "        node.__pimet_done = true;\n" +
+                "        if (node.parentElement) {\n" +
+                "          node.parentElement.setAttribute('data-pimet-trans', '1');\n" +
+                "        }\n" +
                 "        var trans = (k < transArr.length) ? transArr[k] : '';\n" +
                 "        if (trans && trans.trim()) {\n" +
                 "          node.__pimet_trans = trans;\n" +
@@ -584,19 +679,35 @@ public class WebTranslationManager {
                 "      if (isComplete) {\n" +
                 "        window.__pimet_is_translating = false;\n" +
                 "        createOrUpdateCapsule('翻译完成 (' + window.__pimet_done + '/' + window.__pimet_total + ')', true);\n" +
+                "        if (window.__pimet_watchdog) {\n" +
+                "          clearTimeout(window.__pimet_watchdog);\n" +
+                "          window.__pimet_watchdog = null;\n" +
+                "        }\n" +
                 "        if (window.PiMetTranslator && window.PiMetTranslator.onStateChanged) {\n" +
                 "          window.PiMetTranslator.onStateChanged(true, window.__pimet_done, window.__pimet_total);\n" +
                 "        }\n" +
                 "      } else {\n" +
                 "        createOrUpdateCapsule('翻译中 (' + window.__pimet_done + '/' + window.__pimet_total + ')', false);\n" +
                 "      }\n" +
+                "\n" +
+                "      // 恢复 Observer 监听 (仅在开启 live 且未在翻译中时生效)\n" +
+                "      if (window.__pimet_live && window.__pimet_observer && !window.__pimet_is_translating) {\n" +
+                "        window.__pimet_observer.observe(document.body, { childList: true, subtree: true });\n" +
+                "      }\n" +
                 "    };\n" +
                 "\n" +
                 "    // 原文秒级一键还原接口\n" +
                 "    window.__pimet_restore = function() {\n" +
+                "      window.__pimet_is_translated = false;\n" +
+                "      window.__pimet_is_translating = false;\n" +
+                "      window.__pimet_batches = {};\n" +
                 "      if (window.__pimet_observer) {\n" +
                 "        window.__pimet_observer.disconnect();\n" +
                 "        window.__pimet_observer = null;\n" +
+                "      }\n" +
+                "      if (window.__pimet_watchdog) {\n" +
+                "        clearTimeout(window.__pimet_watchdog);\n" +
+                "        window.__pimet_watchdog = null;\n" +
                 "      }\n" +
                 "      var all = window.__pimet_all_nodes || [];\n" +
                 "      for (var m = 0; m < all.length; m++) {\n" +
@@ -604,15 +715,18 @@ public class WebTranslationManager {
                 "        if (item.__pimet_orig !== undefined) {\n" +
                 "          item.nodeValue = item.__pimet_orig;\n" +
                 "          delete item.__pimet_orig;\n" +
+                "          delete item.__pimet_done;\n" +
                 "        }\n" +
                 "        if (item.__pimet_sub && item.__pimet_sub.parentNode) {\n" +
                 "          item.__pimet_sub.parentNode.removeChild(item.__pimet_sub);\n" +
                 "          delete item.__pimet_sub;\n" +
                 "        }\n" +
                 "      }\n" +
+                "      var markedParents = document.querySelectorAll('[data-pimet-trans]');\n" +
+                "      for (var p = 0; p < markedParents.length; p++) {\n" +
+                "        markedParents[p].removeAttribute('data-pimet-trans');\n" +
+                "      }\n" +
                 "      window.__pimet_all_nodes = [];\n" +
-                "      window.__pimet_is_translated = false;\n" +
-                "      window.__pimet_is_translating = false;\n" +
                 "      var cap = document.getElementById('pimet-trans-capsule');\n" +
                 "      if (cap) cap.remove();\n" +
                 "      if (window.PiMetTranslator && window.PiMetTranslator.onStateChanged) {\n" +
@@ -620,15 +734,20 @@ public class WebTranslationManager {
                 "      }\n" +
                 "    };\n" +
                 "\n" +
-                "    // 动态新增 DOM 监听 (Live Mutation Observer)\n" +
+                "    // 动态新增 DOM 监听 (Live Mutation Observer，受配额与防重入严格保护)\n" +
                 "    if (window.__pimet_live && !window.__pimet_observer && window.MutationObserver) {\n" +
                 "      var timer = null;\n" +
+                "      var liveRuns = 0;\n" +
+                "      var MAX_LIVE_RUNS = 3;\n" +
                 "      window.__pimet_observer = new MutationObserver(function(mutations) {\n" +
-                "        if (window.__pimet_is_translating || !window.__pimet_is_translated) return;\n" +
+                "        if (window.__pimet_is_translating || !window.__pimet_is_translated || liveRuns >= MAX_LIVE_RUNS) return;\n" +
                 "        clearTimeout(timer);\n" +
                 "        timer = setTimeout(function() {\n" +
+                "          if (window.__pimet_is_translating || !window.__pimet_is_translated || liveRuns >= MAX_LIVE_RUNS) return;\n" +
                 "          var newNodes = collectTextNodes(document.body);\n" +
                 "          if (newNodes.length > 0) {\n" +
+                "            liveRuns++;\n" +
+                "            window.__pimet_is_translating = true;\n" +
                 "            window.__pimet_total += newNodes.length;\n" +
                 "            for (var a = 0; a < newNodes.length; a += BATCH_SIZE) {\n" +
                 "              var cChunk = newNodes.slice(a, a + BATCH_SIZE);\n" +
@@ -646,7 +765,7 @@ public class WebTranslationManager {
                 "              }\n" +
                 "            }\n" +
                 "          }\n" +
-                "        }, 450);\n" +
+                "        }, 1200);\n" +
                 "      });\n" +
                 "      window.__pimet_observer.observe(document.body, { childList: true, subtree: true });\n" +
                 "    }\n" +
@@ -667,10 +786,12 @@ public class WebTranslationManager {
             if (isTranslated) {
                 // 已翻译 -> 还原
                 webView.evaluateJavascript("if (window.__pimet_restore) window.__pimet_restore();", null);
+                android.widget.Toast.makeText(context, "已还原网页原文", android.widget.Toast.LENGTH_SHORT).show();
             } else {
                 // 未翻译 -> 注入并启动
                 String script = buildInjectionScript(context);
                 webView.evaluateJavascript(script, null);
+                android.widget.Toast.makeText(context, "正在翻译网页...", android.widget.Toast.LENGTH_SHORT).show();
             }
         });
     }
