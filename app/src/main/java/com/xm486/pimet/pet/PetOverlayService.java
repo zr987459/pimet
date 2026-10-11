@@ -437,7 +437,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         bubbleView = new TextView(this);
         bubbleView.setGravity(Gravity.CENTER);
         bubbleView.setTextColor(0xFFF1F5F9);
-        bubbleView.setMaxLines(5);
+        bubbleView.setMaxLines(10);
         bubbleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         bubbleView.setLineSpacing(dp(2), 1.15f);
         applyBubbleDimensions();
@@ -448,13 +448,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         bubbleView.setBackground(bg);
         bubbleView.setVisibility(View.GONE);
         bubbleView.setOnClickListener(v -> {
-            if (lastProactiveMsg != null && !lastProactiveMsg.trim().isEmpty()) {
-                String promptText = lastProactiveMsg;
-                lastProactiveMsg = null;
-                onProactiveBubbleClicked(promptText);
-            } else {
-                openTargetConsole();
-            }
+            openTargetConsole();
         });
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
@@ -754,7 +748,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         TextView b = bubbleView;
         if (b == null) return;
         if (!b.isShown()) {
-            b.setMaxLines(5);
+            b.setMaxLines(10);
             b.setEllipsize(android.text.TextUtils.TruncateAt.END);
             int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
             b.setMaxWidth(dp(bw));

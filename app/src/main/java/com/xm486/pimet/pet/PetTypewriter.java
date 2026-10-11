@@ -40,10 +40,11 @@ public class PetTypewriter implements Runnable {
         if (index >= length) return;
 
         if (index == 0) {
-            // 首帧：限制气泡尺寸，避免长回复把悬浮窗顶出屏幕
-            bubble.setMaxLines(5);
+            // 首帧：支持充裕的多行文本展开（至多10行），允许气泡跟随配置自适应宽度
+            bubble.setMaxLines(10);
             bubble.setEllipsize(TextUtils.TruncateAt.END);
-            bubble.setMaxWidth(service.dp(210));
+            int bw = PetRegistry.getIntPref(service, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
+            bubble.setMaxWidth(service.dp(Math.max(220, bw)));
             service.cancelBubbleHide();
             // 取消上一次隐藏动画，防止其 withEndAction 把新气泡重新设成 GONE
             bubble.animate().cancel();

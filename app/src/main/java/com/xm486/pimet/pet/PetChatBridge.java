@@ -631,15 +631,11 @@ public class PetChatBridge {
                 .replaceAll("\\n{3,}", "\n\n").trim();
 
         if (cleaned.isEmpty()) {
-            return Collections.singletonList("任务完成啦！🐾\n点击气泡查看详情");
+            return Collections.singletonList("执行完成啦！🐾");
         }
 
-        // 实时聊天内容太长时折叠成「任务完成啦！」，避免巨幅文本刷屏，用户点击气泡可直接打开网页看详情
-        if (cleaned.length() > 85) {
-            String shortSnippet = cleaned.length() > 32 ? cleaned.substring(0, 32) + "…" : cleaned;
-            return Collections.singletonList(shortSnippet + "\n\n🎉 任务完成！点击气泡查看详情");
-        }
-
+        // 不再截断文本，也不再追加「点击气泡查看详情」这类误导用户的多余文字，
+        // 而是将完整内容通过自然分段平滑显示在气泡中
         java.util.List<String> segs = segment(cleaned);
         String note = buildNote(src); // 基于原始 raw 判断过程，追加在正文之后
         if (note != null) segs.add(note);
