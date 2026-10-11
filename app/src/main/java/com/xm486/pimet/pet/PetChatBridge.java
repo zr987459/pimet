@@ -817,6 +817,10 @@ public class PetChatBridge {
                     conn.setRequestProperty("Content-Type", "application/json");
                     JSONObject req = new JSONObject();
                     req.put("type", "prompt");
+                    if (isInterject) {
+                        // 主工作区处于运行/思考/流式输出中时，插话消息指定为 steer 插话引导排队
+                        req.put("streamingBehavior", "steer");
+                    }
                     String piWebMsg;
                     if (isInterject || isPhoneControl) {
                         piWebMsg = message;

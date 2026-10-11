@@ -354,22 +354,7 @@ public final class PluginManager {
             }
             sp.edit().putStringSet("disabled_plugins", disabledSet).apply();
 
-            // 1. 如果是文件路径并且是单文件扩展/脚本/子代理，支持动态更名 .disabled
-            if (item.path != null) {
-                File f = new File(item.path);
-                if (f.exists()) {
-                    if (!enable && !f.getName().endsWith(".disabled")) {
-                        File disabledFile = new File(f.getParentFile(), f.getName() + ".disabled");
-                        f.renameTo(disabledFile);
-                    } else if (enable && f.getName().endsWith(".disabled")) {
-                        String normalName = f.getName().substring(0, f.getName().length() - ".disabled".length());
-                        File normalFile = new File(f.getParentFile(), normalName);
-                        f.renameTo(normalFile);
-                    }
-                }
-            }
-
-            // 2. 如果是 MCP 服务，更新 mcp.json 中的 disabled 标识
+            // 1. 如果是 MCP 服务，仅更新 mcp.json 中的 disabled 标识，绝不能更名 mcp.json 文件
             if (item.type == PluginItem.TYPE_MCP) {
                 File rootfs = ProotManager.getRootfsDir(context);
                 File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
@@ -385,6 +370,19 @@ public final class PluginManager {
                                 writeFile(mcpFile, root.toString(2));
                             }
                         }
+                    }
+                }
+            } else if (item.path != null) {
+                // 2. 如果是单文件扩展/脚本/子代理，支持动态更名 .disabled (排除 mcp.json)
+                File f = new File(item.path);
+                if (f.exists() && !f.getName().equals("mcp.json")) {
+                    if (!enable && !f.getName().endsWith(".disabled")) {
+                        File disabledFile = new File(f.getParentFile(), f.getName() + ".disabled");
+                        f.renameTo(disabledFile);
+                    } else if (enable && f.getName().endsWith(".disabled")) {
+                        String normalName = f.getName().substring(0, f.getName().length() - ".disabled".length());
+                        File normalFile = new File(f.getParentFile(), normalName);
+                        f.renameTo(normalFile);
                     }
                 }
             }
