@@ -613,7 +613,7 @@ public final class PetMemoryManager {
     }
 
     /**
-     * 确保容器中存在标准子代理定义文件 ~/.pi/agent/agents/pet-companion.md
+     * 确保容器中存在必要的专属助手配置 (如 phone-operator.md)，彻底清理残留的旧版 pet-companion 子代理
      */
     public static void ensurePetSubagentInstalled(Context context) {
         try {
@@ -623,25 +623,21 @@ public final class PetMemoryManager {
             File agentsDir = new File(rootfs, "root/.pi/agent/agents");
             if (!agentsDir.exists()) agentsDir.mkdirs();
 
-            // 迁移旧路径 subagents -> agents
-            File oldSubagent = new File(rootfs, "root/.pi/agent/subagents/pet-companion.md");
-            File agentFile = new File(agentsDir, "pet-companion.md");
-
-            if (!agentFile.exists()) {
-                if (oldSubagent.exists()) {
-                    try {
-                        byte[] bytes = new byte[(int) oldSubagent.length()];
-                        try (FileInputStream fis = new FileInputStream(oldSubagent)) {
-                            fis.read(bytes);
-                        }
-                        try (FileOutputStream fos = new FileOutputStream(agentFile)) {
-                            fos.write(bytes);
-                        }
-                    } catch (Throwable ignored) {}
+            // 清理旧残留 subagents 与 pet-companion.md (现已升级为纯前端独立感知与支线问答机制)
+            File oldSubagentDir = new File(rootfs, "root/.pi/agent/subagents");
+            if (oldSubagentDir.exists()) {
+                File[] sf = oldSubagentDir.listFiles();
+                if (sf != null) {
+                    for (File f : sf) f.delete();
                 }
+                oldSubagentDir.delete();
+            }
+            File agentFile = new File(agentsDir, "pet-companion.md");
+            if (agentFile.exists()) {
+                agentFile.delete();
             }
 
-            // 确保 phone-operator.md 安装
+            // 确保 phone-operator.md 安装 (专用于感叹号 ! 开头的手机屏幕自动化控制)
             File phoneOperatorFile = new File(agentsDir, "phone-operator.md");
             if (!phoneOperatorFile.exists()) {
                 String phonePrompt =
@@ -669,38 +665,6 @@ public final class PetMemoryManager {
                 try (FileOutputStream fos = new FileOutputStream(phoneOperatorFile)) {
                     fos.write(phonePrompt.getBytes(StandardCharsets.UTF_8));
                 }
-            }
-
-            if (!agentFile.exists()) {
-                String prompt =
-                        "---\n" +
-                        "name: pet-companion\n" +
-                        "description: 动态桌宠专属伴侣，具备生动的角色性格、物理动作控制、进度感知与独立记忆能力\n" +
-                        "tools: control_desktop_pet, control_app_ui, phone_control, bash, read\n" +
-                        "skills: true\n" +
-                        "extensions: true\n" +
-                        "thinking: low\n" +
-                        "maxTurns: 10\n" +
-                        "inheritContext: true\n" +
-                        "background: false\n" +
-                        "---\n\n" +
-                        "## 角色定位\n" +
-                        "你是常驻在 Android 桌面上的随身桌宠伙伴「小元」，是主人的贴心智能伴侣与系统管家。\n" +
-                        "你拥有独立的记忆（读取与维护 `/root/.pi/agent/pet_memory.json`），能感知当前系统的编译、部署和运行进度，并能通过 `control_desktop_pet` 实时改变自己在屏幕上的动作和气泡！\n" +
-                        "你还拥有操作手机的超能力（通过 `phone_control` 工具读取手机屏幕、模拟点击目标按钮、滑动和输入文字）！\n\n" +
-                        "## 行为准则\n" +
-                        "1. 当主人询问当前任务、服务进度、后台进程或“现在什么进度”时：\n" +
-                        "   - 系统上下文中已为你实时注入「主代理工作区」、「主代理当前处理任务」与「主代理最新进展/答复」！\n" +
-                        "   - 你必须以此为主体，清晰、生动、准确地向主人汇报主代理的真实开发任务与进展（例如主代理正在改什么功能、解决了什么问题），禁止只复读电量与网络状态；\n" +
-                        "2. 当主人询问具体的编码细节、报错原因或最近修改的代码时，可借助 read 或 bash 读取工作区代码（如 `/root/pi-cwd/`、`/root/pimet` 下代码、git status/diff）或 `/root/.pi/agent/sessions/` 历史日志，为主人详细讲解；\n" +
-                        "3. 当主人要求操作手机、打开某个界面、点击按钮或查看手机屏幕时，调用 `phone_control` 工具分步完成操作；\n" +
-                        "4. 在回答时配合动作控制：庆祝用 jumping，打招呼用 waving，开心跳舞用 dancing；\n" +
-                        "5. 遇到重要备忘与约定，主动持久化记录到专属记忆库中；\n" +
-                        "6. 气泡文字请控制在 15 字以内，详细回答直接在对话流中展示。\n";
-                try (FileOutputStream fos = new FileOutputStream(agentFile)) {
-                    fos.write(prompt.getBytes(StandardCharsets.UTF_8));
-                }
-                Log.i(TAG, "Installed pet-companion.md successfully in ~/.pi/agent/agents/.");
             }
         } catch (Throwable t) {
             Log.e(TAG, "ensurePetSubagentInstalled failed", t);

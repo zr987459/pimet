@@ -301,16 +301,16 @@ public class PetParamsDialog {
         box.setLayoutParams(lp);
 
         TextView title = new TextView(context);
-        title.setText("⚡ 主工作区插话与专属独立专区");
+        title.setText("💬 pi-btw 支线后台问答与专属聊天专区");
         title.setTextColor(0xFF38BDF8);
         title.setTextSize(11f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(title);
 
         TextView tip = new TextView(context);
-        tip.setText("已启用智能双轨交互模式：\n" +
-                "• 💬 正常说话：自动开启桌宠独立聊天专区，拥有独立记忆，不打扰主代理\n" +
-                "• ⚡ . 或 。 开头：直接对主工作区当前活跃会话插话、下达指令或查询任务进度");
+        tip.setText("已接入全隔离后台支线问答引擎：\n" +
+                "• 💬 正常说话：桌宠专属空间对话（拥有独立好感度与性格记忆）\n" +
+                "• ⚡ . 或 。 开头：【pi-btw 支线后台问答】深度嗅探主工作区上下文并独立解答，主进程代码与长任务完全不受任何影响！");
         tip.setTextColor(0xFF94A3B8);
         tip.setTextSize(9f);
         tip.setPadding(0, dp(2), 0, dp(4));
@@ -320,90 +320,32 @@ public class PetParamsDialog {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
-        Button clearPetChatBtn = buildMiniBtn("🧹 清空桌宠聊天专区", 0x22475569, 0x44475569, 0xFFCBD5E1, v -> {
+        Button clearPetChatBtn = buildMiniBtn("🧹 重置问答与聊天专区", 0x22475569, 0x44475569, 0xFFCBD5E1, v -> {
             ChatConfig config = ChatConfig.load(context);
             config.piwebSessionId = "";
             config.save(context);
-            Toast.makeText(context, "已重置桌宠独立聊天专区，下次对话将开启全新空间", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "已重置后台问答会话，下次提问将开启全新空间", Toast.LENGTH_SHORT).show();
         });
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
         btnLp.rightMargin = dp(4);
         row.addView(clearPetChatBtn, btnLp);
 
-        Button testInterjectBtn = buildMiniBtn("🔍 探测主工作区会话", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+        Button testInterjectBtn = buildMiniBtn("🔍 嗅探主工作区上下文", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
             String activeId = PetMemoryManager.getActiveMainSessionId(context);
             if (activeId != null && !activeId.isEmpty()) {
                 PetMemoryManager.MainSessionInfo info = PetMemoryManager.getMainSessionInfo(context);
                 String cwd = info != null && !info.cwd.isEmpty() ? info.cwd : "默认工作区";
-                Toast.makeText(context, "🟢 检测到主工作区活跃会话: " + activeId.substring(0, Math.min(8, activeId.length())) + "... (" + cwd + ")", Toast.LENGTH_LONG).show();
+                String task = info != null && !info.lastUserTask.isEmpty() ? info.lastUserTask : "无";
+                Toast.makeText(context, "🟢 嗅探到主工作区 (" + cwd + ")\n任务: " + task, Toast.LENGTH_LONG).show();
             } else {
-                Toast.makeText(context, "🟡 暂无活跃主工作区会话，在 Web 端发一句话即可自动绑定", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "🟡 暂无活跃主工作区上下文，在 Web 端发一句话即可自动绑定", Toast.LENGTH_SHORT).show();
             }
         });
         LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, dp(28), 1f);
         row.addView(testInterjectBtn, btnLp2);
         box.addView(row);
 
-        // 插话排队模式切换行 (顺延追加 vs 实时导向)
-        ChatConfig chatCfg = ChatConfig.load(context);
-        LinearLayout behaviorRow = new LinearLayout(context);
-        behaviorRow.setOrientation(LinearLayout.HORIZONTAL);
-        behaviorRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams bRowLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(28));
-        bRowLp.topMargin = dp(4);
-        behaviorRow.setLayoutParams(bRowLp);
-
-        Button btnFollowUp = new Button(context);
-        Button btnSteer = new Button(context);
-
-        Runnable refreshBehaviorBtns = () -> {
-            boolean isFollow = !"steer".equals(chatCfg.interjectBehavior);
-            btnFollowUp.setText(isFollow ? "✔ 顺延追加 (不打断)" : "顺延追加 (不打断)");
-            btnFollowUp.setTextSize(9.5f);
-            btnFollowUp.setTextColor(isFollow ? 0xFFFFFFFF : 0xFF94A3B8);
-            btnFollowUp.setPadding(0, 0, 0, 0);
-            GradientDrawable gdF = new GradientDrawable();
-            gdF.setColor(isFollow ? 0xFF0284C7 : 0x221E293B);
-            gdF.setCornerRadius(dp(4));
-            gdF.setStroke(dp(1), isFollow ? 0xFF38BDF8 : 0x44475569);
-            btnFollowUp.setBackground(gdF);
-
-            btnSteer.setText(!isFollow ? "✔ 实时导向 (立即介入)" : "实时导向 (立即介入)");
-            btnSteer.setTextSize(9.5f);
-            btnSteer.setTextColor(!isFollow ? 0xFFFFFFFF : 0xFF94A3B8);
-            btnSteer.setPadding(0, 0, 0, 0);
-            GradientDrawable gdS = new GradientDrawable();
-            gdS.setColor(!isFollow ? 0xFFF59E0B : 0x221E293B);
-            gdS.setCornerRadius(dp(4));
-            gdS.setStroke(dp(1), !isFollow ? 0xFFFBBF24 : 0x44475569);
-            btnSteer.setBackground(gdS);
-        };
-
-        btnFollowUp.setOnClickListener(v -> {
-            chatCfg.interjectBehavior = "followUp";
-            chatCfg.save(context);
-            refreshBehaviorBtns.run();
-            Toast.makeText(context, "已设为「顺延追加」：插话内容将在当前任务输出完成后排队执行，绝不打断当前对话", Toast.LENGTH_SHORT).show();
-        });
-
-        btnSteer.setOnClickListener(v -> {
-            chatCfg.interjectBehavior = "steer";
-            chatCfg.save(context);
-            refreshBehaviorBtns.run();
-            Toast.makeText(context, "已设为「实时导向」：将在当前单步工具/思考结束后立即介入并更新方向", Toast.LENGTH_SHORT).show();
-        });
-
-        refreshBehaviorBtns.run();
-
-        LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        fLp.rightMargin = dp(4);
-        behaviorRow.addView(btnFollowUp, fLp);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        behaviorRow.addView(btnSteer, sLp);
-        box.addView(behaviorRow);
-
-        Button guideBtn = buildMiniBtn("📖 查看双轨插话与全功能使用指南", 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
+        Button guideBtn = buildMiniBtn("📖 查看双轨交互与全功能使用指南", 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
             new com.xm486.pimet.ui.HelpGuideDialog(context).show();
         });
         LinearLayout.LayoutParams guideLp = new LinearLayout.LayoutParams(

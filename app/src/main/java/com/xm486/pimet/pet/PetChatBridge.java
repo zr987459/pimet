@@ -134,7 +134,7 @@ public class PetChatBridge {
         handler.post(() -> {
             EditText input = service.getChatInput();
             if (input != null) {
-                input.setHint("💬 (. 开头为主工作区插话，正常说话为桌宠聊天)…");
+                input.setHint("💬 (. 支线后台问答/查进度，普通说话为桌宠闲聊)…");
             }
         });
     }
@@ -178,12 +178,12 @@ public class PetChatBridge {
             }
             if ("#help".equalsIgnoreCase(input) || "#?".equals(input) || "帮助".equals(input)) {
                 showReply("💡 常用指令指南:\n" +
-                        "• . 或 。 开头: 对【主工作区活跃会话插话】与查询真实进度\n" +
+                        "• . 或 。 开头: 【pi-btw 支线后台问答】深度嗅探主工作区上下文，完全不干扰主进程代码运行\n" +
                         "• 正常说话: 桌宠专属独立聊天专区 (拥有独立记忆，不打扰主代理)\n" +
                         "• ! 或 ！ 开头: 专用于【控制手机屏幕】(自动路由手机操作代理)\n" +
                         "• #guide: 打开全功能图文操作手册\n" +
                         "• #phone: 手机自动化命令指南\n" +
-                        "• #reset: 重置桌宠独立聊天专区\n" +
+                        "• #reset: 重置后台问答与专属聊天会话\n" +
                         "• #piweb / #operit / #api: 切换模式");
                 return true;
             }
@@ -201,7 +201,7 @@ public class PetChatBridge {
 
     private boolean handleAgentCommand(String input) {
         if (!input.startsWith("#agent")) return false;
-        showReply("💡 桌宠已升级为「双轨插话模式」：\n• 正常说话：自动开启桌宠独立聊天专区\n• . 或 。 开头：直接对主工作区插话/查进度\n无需再繁琐手动配置子代理路由！");
+        showReply("💡 桌宠已升级为「pi-btw 支线后台问答」模式：\n• 正常说话：桌宠专属空间对话\n• . 或 。 开头：后台嗅探主工作区上下文并独立解答，完全不中断主进程！\n旧版子代理配置已自动清理。");
         return true;
     }
 
@@ -777,7 +777,10 @@ public class PetChatBridge {
 
     /**
      * pi-web 对话接口：
-     * 1. 支持双轨模式：. 开头为主工作区活跃会话插话 (isInterject)，正常说话为专属独立聊天专区 (config.piwebSessionId)；
+     * 1. 支持双轨模式：
+     *    - isInterject (以 . 或 。 开头)：pi-btw 支线后台问答。嗅探主工作区最新上下文，在桌宠专属通道中独立回答，100% 绝不向主进程投递消息，彻底杜绝打断主会话！
+     *    - 正常说话：桌宠专属独立聊天专区 (config.piwebSessionId)；
+     *    - 手机控制：独立手机控制会话 (config.piwebPhoneSessionId)。
      * 2. 会话不存在或失效时，经 /api/agent/new 自动创建会话；
      * 3. 订阅 SSE 事件流收集 assistant 消息直至完成。
      */
@@ -786,17 +789,11 @@ public class PetChatBridge {
         HttpURLConnection conn = null;
         try {
             // 会话分流解析：
-            // 手机控制 -> 独立手机会话；插话 -> 主工作区活跃会话；正常说话 -> 桌宠专属独立聊天专区
+            // 手机控制 -> 独立手机会话；正常说话 & 支线问答 -> 均走桌宠独立会话空间，完全不碰主工作区会话 ID！
             String sessionId = null;
             if (!forceNew) {
                 if (isPhoneControl) {
                     sessionId = config.piwebPhoneSessionId;
-                } else if (isInterject) {
-                    sessionId = PetMemoryManager.getActiveMainSessionId(service);
-                    if (sessionId == null || sessionId.trim().isEmpty()) {
-                        return Collections.singletonList("⚠️ 未检测到主工作区活跃会话！\n" +
-                                "请先在底栏「工作台」(Web 端) 发送一句话开启任务，桌宠即可自动嗅探到该会话并支持随时插话！");
-                    }
                 } else {
                     sessionId = config.piwebSessionId;
                 }
@@ -817,22 +814,25 @@ public class PetChatBridge {
                     conn.setRequestProperty("Content-Type", "application/json");
                     JSONObject req = new JSONObject();
                     req.put("type", "prompt");
-                    if (isInterject) {
-                        // 插话排队策略：默认 followUp (排队追加到当前任务之后，绝不粗暴打断现有对话)
-                        String behavior = (config.interjectBehavior != null && !config.interjectBehavior.trim().isEmpty())
-                                ? config.interjectBehavior.trim() : "followUp";
-                        req.put("streamingBehavior", behavior);
-                    }
+
                     String piWebMsg;
-                    if (isInterject || isPhoneControl) {
+                    if (isPhoneControl) {
                         piWebMsg = message;
+                    } else if (isInterject) {
+                        // pi-btw 支线后台问答：注入主工作区实时上下文，独立推理解答
+                        String ctxSummary = PetMemoryManager.getSystemProgressReport(service);
+                        piWebMsg = "【pi-btw 支线后台问答 · 主人从桌宠向你提问】\n" +
+                                "以下是主工作区当前最新工程状态与任务进展：\n" +
+                                ctxSummary + "\n\n" +
+                                "主人提问: " + message + "\n\n" +
+                                "请根据上述主工作区上下文简明、准确地为主人解答（回答控制在 3 句话以内，条理清晰）。";
                     } else {
                         String customPrompt = config.piWebPrompt != null && !config.piWebPrompt.trim().isEmpty()
                                 ? config.piWebPrompt.trim()
                                 : "【系统设定】你是常驻在手机屏幕上的动态桌宠伴侣。性格活泼、软萌体贴。请以桌宠伴侣语气与主人交谈，回答控制在1-3句以内（50字内），多用表情符号，简明可爱。";
                         piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
                     }
-                    if (PetMemoryManager.isProgressQuery(message)) {
+                    if (!isInterject && PetMemoryManager.isProgressQuery(message)) {
                         piWebMsg = piWebMsg + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
                     }
                     req.put("message", piWebMsg);
@@ -844,7 +844,7 @@ public class PetChatBridge {
                         if (isPhoneControl) {
                             config.piwebPhoneSessionId = "";
                             config.save(service);
-                        } else if (!isInterject) {
+                        } else {
                             config.piwebSessionId = "";
                             config.save(service);
                         }
@@ -878,12 +878,19 @@ public class PetChatBridge {
                         : "【系统设定】你是常驻在手机屏幕上的动态桌宠伴侣。性格活泼、软萌体贴。请以桌宠伴侣语气与主人交谈，回答控制在1-3句以内（50字内），多用表情符号，简明可爱。";
 
                 String piWebMsg;
-                if (isInterject || isPhoneControl) {
+                if (isPhoneControl) {
                     piWebMsg = message;
+                } else if (isInterject) {
+                    String ctxSummary = PetMemoryManager.getSystemProgressReport(service);
+                    piWebMsg = "【pi-btw 支线后台问答 · 主人从桌宠向你提问】\n" +
+                            "以下是主工作区当前最新工程状态与任务进展：\n" +
+                            ctxSummary + "\n\n" +
+                            "主人提问: " + message + "\n\n" +
+                            "请根据上述主工作区上下文简明、准确地为主人解答（回答控制在 3 句话以内，条理清晰）。";
                 } else {
                     piWebMsg = "〔系统角色预设: " + customPrompt + "〕\n\n" + message;
                 }
-                if (PetMemoryManager.isProgressQuery(message)) {
+                if (!isInterject && PetMemoryManager.isProgressQuery(message)) {
                     piWebMsg = piWebMsg + "\n[系统上下文: " + PetMemoryManager.getSystemProgressReport(service) + "]";
                 }
                 req.put("message", piWebMsg);
@@ -900,7 +907,7 @@ public class PetChatBridge {
                     if (isPhoneControl) {
                         config.piwebPhoneSessionId = sessionId;
                         config.save(service);
-                    } else if (!isInterject) {
+                    } else {
                         config.piwebSessionId = sessionId;
                         config.save(service);
                     }
@@ -970,12 +977,12 @@ public class PetChatBridge {
             String full = textDelta.toString().trim();
             if (full.isEmpty()) {
                 if (isInterject) {
-                    return Collections.singletonList("⚡ 已成功向主工作区插话，主代理已接收指令！");
+                    return Collections.singletonList("⚡ [pi-btw 支线问答] 已完成解答。");
                 }
                 return Collections.singletonList("pi-web 执行完毕。");
             }
             if (isInterject) {
-                full = "⚡ [主工作区插话响应]\n" + full;
+                full = "💬 [pi-btw 支线答复]\n" + full;
             }
             return cleanWithNote(full);
         } catch (Throwable t) {
