@@ -103,8 +103,8 @@ public class PetParamsDialog {
             LinearLayout listLayout = new LinearLayout(context);
             listLayout.setOrientation(LinearLayout.VERTICAL);
 
-            // 0. 关联子代理配置（自定义子代理名称与快捷选取）
-            listLayout.addView(createSubAgentSection());
+            // 0. 主工作区插话与独立专区设置
+            listLayout.addView(createInterjectSection());
 
             // 0.1 手机自动化 (无障碍服务) 授权卡片
             listLayout.addView(createAutomationSection());
@@ -283,7 +283,7 @@ public class PetParamsDialog {
         }
     }
 
-    private View createSubAgentSection() {
+    private View createInterjectSection() {
         LinearLayout box = new LinearLayout(context);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(8), dp(6), dp(8), dp(6));
@@ -301,160 +301,48 @@ public class PetParamsDialog {
         box.setLayoutParams(lp);
 
         TextView title = new TextView(context);
-        title.setText("🤖 关联子代理 (SubAgent)");
+        title.setText("⚡ 主工作区插话与专属独立专区");
         title.setTextColor(0xFF38BDF8);
         title.setTextSize(11f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(title);
 
         TextView tip = new TextView(context);
-        tip.setText("自定义要绑定的子代理名字。桌宠输入 . 开头或询问进程/代码将自动路由至此：");
+        tip.setText("已启用智能双轨交互模式：\n" +
+                "• 💬 正常说话：自动开启桌宠独立聊天专区，拥有独立记忆，不打扰主代理\n" +
+                "• ⚡ . 或 。 开头：直接对主工作区当前活跃会话插话、下达指令或查询任务进度");
         tip.setTextColor(0xFF94A3B8);
         tip.setTextSize(9f);
-        tip.setPadding(0, dp(1), 0, dp(4));
+        tip.setPadding(0, dp(2), 0, dp(4));
         box.addView(tip);
 
-        ChatConfig config = ChatConfig.load(context);
+        LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
 
-        // 输入与保存行
-        LinearLayout editRow = new LinearLayout(context);
-        editRow.setOrientation(LinearLayout.HORIZONTAL);
-        editRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        EditText etAgent = new EditText(context);
-        etAgent.setText(config.targetSubAgent != null ? config.targetSubAgent : "");
-        etAgent.setHint("子代理名，如 pet-companion");
-        etAgent.setHintTextColor(0xFF64748B);
-        etAgent.setTextColor(0xFFF1F5F9);
-        etAgent.setTextSize(11f);
-        etAgent.setSingleLine(true);
-        etAgent.setPadding(dp(8), dp(4), dp(8), dp(4));
-
-        GradientDrawable etBg = new GradientDrawable();
-        etBg.setColor(0x220F172A);
-        etBg.setCornerRadius(dp(4));
-        etBg.setStroke(dp(1), 0x4464748B);
-        etAgent.setBackground(etBg);
-
-        LinearLayout.LayoutParams etLp = new LinearLayout.LayoutParams(0, dp(30), 1f);
-        editRow.addView(etAgent, etLp);
-
-        Button saveAgentBtn = buildMiniBtn("💾 保存", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
-            String newName = etAgent.getText().toString().trim();
-            config.targetSubAgent = newName;
+        Button clearPetChatBtn = buildMiniBtn("🧹 清空桌宠聊天专区", 0x22475569, 0x44475569, 0xFFCBD5E1, v -> {
+            ChatConfig config = ChatConfig.load(context);
+            config.piwebSessionId = "";
             config.save(context);
-            if (service != null && service.getChatBridge() != null) {
-                service.getChatBridge().updateInputHint();
+            Toast.makeText(context, "已重置桌宠独立聊天专区，下次对话将开启全新空间", Toast.LENGTH_SHORT).show();
+        });
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        btnLp.rightMargin = dp(4);
+        row.addView(clearPetChatBtn, btnLp);
+
+        Button testInterjectBtn = buildMiniBtn("🔍 探测主工作区会话", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+            String activeId = PetMemoryManager.getActiveMainSessionId(context);
+            if (activeId != null && !activeId.isEmpty()) {
+                PetMemoryManager.MainSessionInfo info = PetMemoryManager.getMainSessionInfo(context);
+                String cwd = info != null && !info.cwd.isEmpty() ? info.cwd : "默认工作区";
+                Toast.makeText(context, "🟢 检测到主工作区活跃会话: " + activeId.substring(0, Math.min(8, activeId.length())) + "... (" + cwd + ")", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(context, "🟡 暂无活跃主工作区会话，在 Web 端发一句话即可自动绑定", Toast.LENGTH_SHORT).show();
             }
-            Toast.makeText(context, TextUtils.isEmpty(newName) ? "已恢复为普通伴侣 (未绑定子代理)" : "已绑定子代理: @" + newName, Toast.LENGTH_SHORT).show();
         });
-        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(dp(54), dp(30));
-        btnLp.leftMargin = dp(6);
-        editRow.addView(saveAgentBtn, btnLp);
-        box.addView(editRow);
-
-        // 快捷标签横滑容器 (列出已存在的全部子代理)
-        HorizontalScrollView chipScroll = new HorizontalScrollView(context);
-        chipScroll.setHorizontalScrollBarEnabled(false);
-        chipScroll.setPadding(0, dp(4), 0, 0);
-
-        LinearLayout chipRow = new LinearLayout(context);
-        chipRow.setOrientation(LinearLayout.HORIZONTAL);
-
-        List<String> agentList = new ArrayList<>();
-        agentList.add("pet-companion");
-        try {
-            List<com.xm486.pimet.subagent.SubAgentInfo> all = com.xm486.pimet.subagent.SubAgentManager.listAllAgents(context);
-            for (com.xm486.pimet.subagent.SubAgentInfo info : all) {
-                if (info != null && !TextUtils.isEmpty(info.id) && !agentList.contains(info.id)) {
-                    agentList.add(info.id);
-                }
-            }
-        } catch (Throwable ignored) {}
-
-        for (String id : agentList) {
-            Button chip = buildMiniBtn(id, 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
-                etAgent.setText(id);
-                config.targetSubAgent = id;
-                config.save(context);
-                if (service != null && service.getChatBridge() != null) {
-                    service.getChatBridge().updateInputHint();
-                }
-                Toast.makeText(context, "已绑定子代理: @" + id, Toast.LENGTH_SHORT).show();
-            });
-            LinearLayout.LayoutParams cLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(24));
-            cLp.rightMargin = dp(4);
-            chipRow.addView(chip, cLp);
-        }
-
-        Button offChip = buildMiniBtn("🚫 关闭", 0x22EF4444, 0x44EF4444, 0xFFFCA5A5, v -> {
-            etAgent.setText("");
-            config.targetSubAgent = "";
-            config.save(context);
-            if (service != null && service.getChatBridge() != null) {
-                service.getChatBridge().updateInputHint();
-            }
-            Toast.makeText(context, "已关闭子代理路由 (恢复为普通伴侣)", Toast.LENGTH_SHORT).show();
-        });
-        LinearLayout.LayoutParams offLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(24));
-        chipRow.addView(offChip, offLp);
-
-        chipScroll.addView(chipRow);
-        box.addView(chipScroll);
-
-        // 会话模式切换 (智能感知隔离 vs 工作区直通)
-        TextView modeTitle = new TextView(context);
-        modeTitle.setText("🔗 会话连接机制");
-        modeTitle.setTextColor(0xFF38BDF8);
-        modeTitle.setTextSize(10f);
-        modeTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        modeTitle.setPadding(0, dp(6), 0, dp(2));
-        box.addView(modeTitle);
-
-        LinearLayout modeRow = new LinearLayout(context);
-        modeRow.setOrientation(LinearLayout.HORIZONTAL);
-        modeRow.setGravity(Gravity.CENTER_VERTICAL);
-
-        Button isolatedBtn = new Button(context);
-        Button directBtn = new Button(context);
-
-        Runnable updateModeStyles = () -> {
-            boolean direct = config.directAttachWorkspace;
-            setupToggleBtn(isolatedBtn, !direct, "🛡️ 智能感知隔离 (推荐)");
-            setupToggleBtn(directBtn, direct, "🔗 工作区会话直通");
-        };
-
-        isolatedBtn.setOnClickListener(v -> {
-            config.directAttachWorkspace = false;
-            config.save(context);
-            updateModeStyles.run();
-            Toast.makeText(context, "已开启「智能感知隔离」：独立专属会话，自动嗅探主工作区最新进展", Toast.LENGTH_SHORT).show();
-        });
-
-        directBtn.setOnClickListener(v -> {
-            config.directAttachWorkspace = true;
-            config.save(context);
-            updateModeStyles.run();
-            Toast.makeText(context, "已开启「工作区会话直通」：直接挂载当前活跃会话，与主代理共享上下文", Toast.LENGTH_SHORT).show();
-        });
-
-        updateModeStyles.run();
-
-        LinearLayout.LayoutParams mBtnLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        mBtnLp.rightMargin = dp(4);
-        modeRow.addView(isolatedBtn, mBtnLp);
-        LinearLayout.LayoutParams mBtnLp2 = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        modeRow.addView(directBtn, mBtnLp2);
-        box.addView(modeRow);
-
-        TextView modeHint = new TextView(context);
-        modeHint.setText("• 智能隔离：独立专属会话，不污染主对话，自动注入主代理最新任务与答复\n• 工作区直通：直接复用 Web 端主活跃会话，与编程 Agent 处于完全相同的上下文流");
-        modeHint.setTextColor(0xFF64748B);
-        modeHint.setTextSize(8.5f);
-        modeHint.setPadding(0, dp(3), 0, dp(2));
-        box.addView(modeHint);
+        LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        row.addView(testInterjectBtn, btnLp2);
+        box.addView(row);
 
         return box;
     }
@@ -543,20 +431,6 @@ public class PetParamsDialog {
 
         row.addView(sb);
         return row;
-    }
-
-    private void setupToggleBtn(Button b, boolean active, String text) {
-        b.setText(text);
-        b.setTextSize(9.5f);
-        b.setTextColor(active ? 0xFFFFFFFF : 0xFF94A3B8);
-        b.setPadding(dp(4), 0, dp(4), 0);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(active ? 0xFF0284C7 : 0x221E293B);
-        gd.setCornerRadius(dp(4));
-        gd.setStroke(dp(1), active ? 0xFF38BDF8 : 0x44475569);
-        b.setBackground(gd);
     }
 
     private Button buildMiniBtn(String text, int bgNormal, int bgPressed, int textColor, View.OnClickListener clk) {
