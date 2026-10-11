@@ -122,9 +122,7 @@ public final class PetMemoryManager {
                 }
             }
 
-            if (bestPath == null) return null;
-            File sessionFile = new File(bestPath);
-            if (!sessionFile.exists()) return null;
+            if (bestId == null || bestId.isEmpty()) return null;
 
             MainSessionInfo res = new MainSessionInfo();
             res.sessionId = bestId;
@@ -132,42 +130,53 @@ public final class PetMemoryManager {
             res.cwd = bestCwd;
             res.messageCount = bestCount;
 
-            long len = sessionFile.length();
-            long readSize = Math.min(len, 2097152L); // 尾部读取至多 2MB
-            byte[] buf = new byte[(int) readSize];
-            try (RandomAccessFile raf = new RandomAccessFile(sessionFile, "r")) {
-                raf.seek(len - readSize);
-                raf.readFully(buf);
+            File sessionFile = null;
+            if (bestPath != null) {
+                sessionFile = new File(bestPath);
+                if (!sessionFile.exists() && rootfs != null) {
+                    String rel = bestPath.startsWith("/") ? bestPath.substring(1) : bestPath;
+                    sessionFile = new File(rootfs, rel);
+                }
             }
-            String tail = new String(buf, StandardCharsets.UTF_8);
-            String[] lines = tail.split("\n");
-            for (int i = lines.length - 1; i >= 0; i--) {
-                String line = lines[i].trim();
-                if (line.isEmpty()) continue;
-                try {
-                    JSONObject obj = new JSONObject(line);
-                    if ("message".equals(obj.optString("type"))) {
-                        JSONObject msg = obj.optJSONObject("message");
-                        if (msg != null) {
-                            String role = msg.optString("role");
-                            String text = extractContentText(msg.opt("content"));
-                            if (text != null && !text.trim().isEmpty()) {
-                                text = text.trim().replace("\r", " ").replace("\n", " ");
-                                while (text.contains("  ")) text = text.replace("  ", " ");
-                                if ("user".equals(role) && res.lastUserTask.isEmpty()) {
-                                    if (!text.startsWith("[SYSTEM REMINDER")) {
-                                        if (text.length() > 140) text = text.substring(0, 140) + "…";
-                                        res.lastUserTask = text;
+
+            if (sessionFile != null && sessionFile.exists()) {
+                long len = sessionFile.length();
+                long readSize = Math.min(len, 2097152L); // 尾部读取至多 2MB
+                byte[] buf = new byte[(int) readSize];
+                try (RandomAccessFile raf = new RandomAccessFile(sessionFile, "r")) {
+                    raf.seek(len - readSize);
+                    raf.readFully(buf);
+                } catch (Throwable ignored) {}
+                String tail = new String(buf, StandardCharsets.UTF_8);
+                String[] lines = tail.split("\n");
+                for (int i = lines.length - 1; i >= 0; i--) {
+                    String line = lines[i].trim();
+                    if (line.isEmpty()) continue;
+                    try {
+                        JSONObject obj = new JSONObject(line);
+                        if ("message".equals(obj.optString("type"))) {
+                            JSONObject msg = obj.optJSONObject("message");
+                            if (msg != null) {
+                                String role = msg.optString("role");
+                                String text = extractContentText(msg.opt("content"));
+                                if (text != null && !text.trim().isEmpty()) {
+                                    text = text.trim().replace("\r", " ").replace("\n", " ");
+                                    while (text.contains("  ")) text = text.replace("  ", " ");
+                                    if ("user".equals(role) && res.lastUserTask.isEmpty()) {
+                                        if (!text.startsWith("[SYSTEM REMINDER")) {
+                                            if (text.length() > 140) text = text.substring(0, 140) + "…";
+                                            res.lastUserTask = text;
+                                        }
+                                    } else if ("assistant".equals(role) && res.lastAgentResponse.isEmpty()) {
+                                        if (text.length() > 160) text = text.substring(0, 160) + "…";
+                                        res.lastAgentResponse = text;
                                     }
-                                } else if ("assistant".equals(role) && res.lastAgentResponse.isEmpty()) {
-                                    if (text.length() > 160) text = text.substring(0, 160) + "…";
-                                    res.lastAgentResponse = text;
                                 }
                             }
                         }
-                    }
-                } catch (Throwable ignored) {}
-                if (!res.lastUserTask.isEmpty() && !res.lastAgentResponse.isEmpty()) break;
+                    } catch (Throwable ignored) {}
+                    if (!res.lastUserTask.isEmpty() && !res.lastAgentResponse.isEmpty()) break;
+                }
             }
 
             if (!res.cwd.isEmpty()) {
@@ -185,8 +194,39 @@ public final class PetMemoryManager {
 
     /**
      * 获取主工作区当前活跃的会话 ID
+     * 1. 优先实时查询 /api/agent/running 当前正在运行/思考的会话
+     * 2. 次选扫描 pi-web-session-index.json 最新修改的非桌宠工程会话
      */
     public static String getActiveMainSessionId(Context context) {
+        // 1. 优先尝试从正在运行的活跃 Agent 列表获取 (/api/agent/running)
+        try {
+            int port = PetRegistry.getPiWebPort(context);
+            URL url = new URL("http://127.0.0.1:" + port + "/api/agent/running");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(800);
+            conn.setReadTimeout(1200);
+            if (conn.getResponseCode() == 200) {
+                StringBuilder sb = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = br.readLine()) != null) sb.append(l);
+                }
+                JSONObject obj = new JSONObject(sb.toString());
+                JSONArray arr = obj.optJSONArray("runningSessionIds");
+                String mySessionId = ChatConfig.load(context).piwebSessionId;
+                if (arr != null && arr.length() > 0) {
+                    for (int i = 0; i < arr.length(); i++) {
+                        String id = arr.optString(i, "");
+                        if (!id.isEmpty() && !id.equals(mySessionId)) {
+                            return id;
+                        }
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Throwable ignored) {}
+
+        // 2. 深度扫描 pi-web-session-index.json
         MainSessionInfo info = getMainSessionInfo(context);
         return info != null ? info.sessionId : null;
     }

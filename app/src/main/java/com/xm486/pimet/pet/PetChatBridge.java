@@ -342,10 +342,12 @@ public class PetChatBridge {
                         }
                     }
                     if (segments == null) {
-                        if (ChatConfig.MODE_OPERIT.equals(config.mode)) {
+                        if (isInterject) {
+                            segments = sendViaPiWeb(config, cleanInput, forceNew, false, true);
+                        } else if (ChatConfig.MODE_OPERIT.equals(config.mode)) {
                             segments = sendViaOperit(config, cleanInput, forceNew);
                         } else if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
-                            segments = sendViaPiWeb(config, cleanInput, forceNew, isPhoneControl, isInterject);
+                            segments = sendViaPiWeb(config, cleanInput, forceNew, isPhoneControl, false);
                         } else if (ChatConfig.MODE_CLAWBENCH.equals(config.mode)) {
                             segments = sendViaClawBench(config, cleanInput, forceNew);
                         } else {
@@ -792,7 +794,8 @@ public class PetChatBridge {
                 } else if (isInterject) {
                     sessionId = PetMemoryManager.getActiveMainSessionId(service);
                     if (sessionId == null || sessionId.trim().isEmpty()) {
-                        sessionId = config.piwebSessionId;
+                        return Collections.singletonList("⚠️ 未检测到主工作区活跃会话！\n" +
+                                "请先在底栏「工作台」(Web 端) 发送一句话开启任务，桌宠即可自动嗅探到该会话并支持随时插话！");
                     }
                 } else {
                     sessionId = config.piwebSessionId;
@@ -960,7 +963,13 @@ public class PetChatBridge {
 
             String full = textDelta.toString().trim();
             if (full.isEmpty()) {
+                if (isInterject) {
+                    return Collections.singletonList("⚡ 已成功向主工作区插话，主代理已接收指令！");
+                }
                 return Collections.singletonList("pi-web 执行完毕。");
+            }
+            if (isInterject) {
+                full = "⚡ [主工作区插话响应]\n" + full;
             }
             return cleanWithNote(full);
         } catch (Throwable t) {
