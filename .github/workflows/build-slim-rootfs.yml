@@ -1,0 +1,86 @@
+name: Build & Release Slim Rootfs Runtime
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-slim-rootfs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检查磁盘空间
+        run: df -h
+
+      - name: 下载并精简 arm64 底包
+        run: |
+          echo "==== 下载原版 arm64 底包 ===="
+          curl -L -o rootfs-arm64-orig.tar.gz https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz
+          mkdir -p /tmp/rootfs-arm64
+          echo "==== 解压中 ===="
+          sudo tar -xzf rootfs-arm64-orig.tar.gz -C /tmp/rootfs-arm64
+          rm -f rootfs-arm64-orig.tar.gz
+
+          echo "==== 清理非必要包与缓存 (剔除 @deepseek-ai/dsh 490MB 等) ===="
+          sudo rm -rf /tmp/rootfs-arm64/usr/local/lib/node_modules/@deepseek-ai
+          sudo rm -f /tmp/rootfs-arm64/usr/local/bin/dsh
+          sudo rm -rf /tmp/rootfs-arm64/root/.dsh
+          sudo rm -rf /tmp/rootfs-arm64/root/.npm/_cacache
+          sudo rm -rf /tmp/rootfs-arm64/root/.cache
+          sudo rm -rf /tmp/rootfs-arm64/tmp/*
+          sudo rm -rf /tmp/rootfs-arm64/var/cache/apt/archives/*
+          sudo rm -rf /tmp/rootfs-arm64/usr/share/doc/*
+          sudo rm -rf /tmp/rootfs-arm64/usr/share/man/*
+
+          echo "==== 重新打包精简版 rootfs.tar.gz ===="
+          cd /tmp/rootfs-arm64
+          sudo tar -czf $GITHUB_WORKSPACE/rootfs.tar.gz *
+          cd $GITHUB_WORKSPACE
+          sudo rm -rf /tmp/rootfs-arm64
+          ls -lh rootfs.tar.gz
+
+      - name: 下载并精简 x86_64 底包
+        run: |
+          echo "==== 下载原版 x86_64 底包 ===="
+          curl -L -o rootfs-x86_64-orig.tar.gz https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz
+          mkdir -p /tmp/rootfs-x86_64
+          echo "==== 解压中 ===="
+          sudo tar -xzf rootfs-x86_64-orig.tar.gz -C /tmp/rootfs-x86_64
+          rm -f rootfs-x86_64-orig.tar.gz
+
+          echo "==== 清理非必要包与缓存 ===="
+          sudo rm -rf /tmp/rootfs-x86_64/usr/local/lib/node_modules/@deepseek-ai
+          sudo rm -f /tmp/rootfs-x86_64/usr/local/bin/dsh
+          sudo rm -rf /tmp/rootfs-x86_64/root/.dsh
+          sudo rm -rf /tmp/rootfs-x86_64/root/.npm/_cacache
+          sudo rm -rf /tmp/rootfs-x86_64/root/.cache
+          sudo rm -rf /tmp/rootfs-x86_64/tmp/*
+          sudo rm -rf /tmp/rootfs-x86_64/var/cache/apt/archives/*
+          sudo rm -rf /tmp/rootfs-x86_64/usr/share/doc/*
+          sudo rm -rf /tmp/rootfs-x86_64/usr/share/man/*
+
+          echo "==== 重新打包精简版 rootfs-x86_64.tar.gz ===="
+          cd /tmp/rootfs-x86_64
+          sudo tar -czf $GITHUB_WORKSPACE/rootfs-x86_64.tar.gz *
+          cd $GITHUB_WORKSPACE
+          sudo rm -rf /tmp/rootfs-x86_64
+          ls -lh rootfs-x86_64.tar.gz
+
+      - name: 发布精简版底包到 Release (runtime-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: runtime-latest
+          name: PiMet Slim Runtime (精简纯净运行底座)
+          body: |
+            PiMet 官方纯净精简底座 (Slim Rootfs Runtime)
+            - 彻底剔除 @deepseek-ai/dsh (节省 490MB 空间)
+            - 清空 npm 依赖缓存、文档手册及临时垃圾文件
+            - 保留干净的 Linux 容器、Node.js 24.x、Git、Bash 及 Pi 核心运行环境
+          files: |
+            rootfs.tar.gz
+            rootfs-x86_64.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

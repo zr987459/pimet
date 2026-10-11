@@ -43,19 +43,23 @@ public final class ProotManager {
 
     public static final int PI_WEB_PORT = 30141;
 
-    // 官方与镜像 Rootfs 线路
+    // 官方与镜像 Rootfs 线路 (优先从用户自己的 zr987459/pimet 纯净精简 Release 下载，支持多条 CDN 极速镜像)
     private static final String[] ROOTFS_URLS_ARM64 = {
-            "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
-            "https://ghproxy.net/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
-            "https://mirror.ghproxy.com/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz",
-            "https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz"
+            "https://ghfast.top/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz",
+            "https://ghproxy.net/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz",
+            "https://mirror.ghproxy.com/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz",
+            "https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz",
+            // 兜底备用线路
+            "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz"
     };
 
     private static final String[] ROOTFS_URLS_X86_64 = {
-            "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
-            "https://ghproxy.net/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
-            "https://mirror.ghproxy.com/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
-            "https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz"
+            "https://ghfast.top/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            "https://ghproxy.net/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            "https://mirror.ghproxy.com/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            "https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs-x86_64.tar.gz",
+            // 兜底备用线路
+            "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs-x86_64.tar.gz"
     };
 
     public interface InstallCallback {
