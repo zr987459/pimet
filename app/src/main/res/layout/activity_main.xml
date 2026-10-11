@@ -3267,7 +3267,7 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="2dp"
-                                    android:text="当前版本: v1.6.1"
+                                    android:text="当前版本: v1.6.2"
                                     android:textColor="#8B949E"
                                     android:textSize="11sp" />
                             </LinearLayout>
@@ -3306,7 +3306,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="致敬开源灵感: DSHA (DSH-APP/DSHA) · DSH-Folk · Pi-Web · Pi Coding Agent"
+                        android:text="致敬开源灵感: Pi-Web · Pi Coding Agent"
                         android:textColor="#58A6FF"
                         android:textSize="11sp" />
                 </LinearLayout>

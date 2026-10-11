@@ -65,8 +65,8 @@ public final class PiMetConfig {
     public static final String NPM_MIRROR_TAOBAO = "https://registry.npmmirror.com";
     public static final String NPM_MIRROR_OFFICIAL = "https://registry.npmjs.org";
 
-    public static final String ROOTFS_GHFAST = "https://ghfast.top/https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz";
-    public static final String ROOTFS_OFFICIAL = "https://github.com/IPF-Sinon/DSH-Folk/releases/download/runtime-latest/rootfs.tar.gz";
+    public static final String ROOTFS_GHFAST = "https://ghfast.top/https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz";
+    public static final String ROOTFS_OFFICIAL = "https://github.com/zr987459/pimet/releases/download/runtime-latest/rootfs.tar.gz";
 
     // 服务商常量
     public static final String PROVIDER_DEEPSEEK = "deepseek";
