@@ -80,7 +80,6 @@ public class ChatConfig {
     public boolean directAttachWorkspace = false;
     /** Pi-Web 专属桌宠会话 ID，绝不串入或复用用户的当前编码会话 */
     public String piwebSessionId = "";
-        piwebPhoneSessionId = "";
     /** Pi-Web 专用于手机自动化操作的独立会话 ID */
     public String piwebPhoneSessionId = "";
     public String clawbenchToken = "";
