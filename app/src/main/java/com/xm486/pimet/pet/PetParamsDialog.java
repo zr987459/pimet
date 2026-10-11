@@ -344,6 +344,14 @@ public class PetParamsDialog {
         row.addView(testInterjectBtn, btnLp2);
         box.addView(row);
 
+        Button guideBtn = buildMiniBtn("📖 查看双轨插话与全功能使用指南", 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
+            new com.xm486.pimet.ui.HelpGuideDialog(context).show();
+        });
+        LinearLayout.LayoutParams guideLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(28));
+        guideLp.topMargin = dp(4);
+        box.addView(guideBtn, guideLp);
+
         return box;
     }
 

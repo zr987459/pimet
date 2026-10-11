@@ -423,6 +423,63 @@
                     </LinearLayout>
                 </LinearLayout>
 
+                <!-- 新手指南与操作说明入口卡片 -->
+                <LinearLayout
+                    android:id="@+id/btnLaunchHelpGuide"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_card_modern"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="11dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="📖"
+                        android:textSize="20sp" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="新手使用与操作指南"
+                            android:textColor="#F0F6FC"
+                            android:textSize="13.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="桌宠插话、手机控制、工作台与常见问题全解析"
+                            android:textColor="#8B949E"
+                            android:textSize="10.5sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_status_badge"
+                        android:paddingStart="6dp"
+                        android:paddingTop="3dp"
+                        android:paddingEnd="6dp"
+                        android:paddingBottom="3dp"
+                        android:text="速查 ›"
+                        android:textColor="#58A6FF"
+                        android:textSize="10.5sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
                 <!-- 实时守护日志控制台 (Live Service Log) -->
                 <LinearLayout
                     android:id="@+id/cardLaunchLogConsole"
@@ -1371,6 +1428,59 @@
 
                         <TextView
                             android:id="@+id/menuArrowAbout"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="#8B949E"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+
+                    <!-- 7. 使用指南与操作说明 -->
+                    <LinearLayout
+                        android:id="@+id/menuItemHelp"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="#161B22"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="10dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📖"
+                            android:textSize="16sp" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/menuTitleHelp"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="使用指南与操作手册"
+                                android:textColor="#F0F6FC"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="1dp"
+                                android:text="桌宠双轨插话、手机控制、工作台与常见问题"
+                                android:textColor="#8B949E"
+                                android:textSize="10.5sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/menuArrowHelp"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="›"
@@ -3156,7 +3266,7 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="2dp"
-                                    android:text="当前版本: v1.5.3"
+                                    android:text="当前版本: v1.5.4"
                                     android:textColor="#8B949E"
                                     android:textSize="11sp" />
                             </LinearLayout>

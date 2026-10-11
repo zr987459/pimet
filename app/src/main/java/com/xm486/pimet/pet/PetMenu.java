@@ -383,10 +383,23 @@ public class PetMenu {
                     Log.e("PetMenu", "open PetParamsDialog failed", t);
                 }
             });
-            actionRow.addView(setBtn, new LinearLayout.LayoutParams(0, dp(26), 1.1f));
+            actionRow.addView(setBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
+
+            View spaceGuide = new View(context);
+            actionRow.addView(spaceGuide, new LinearLayout.LayoutParams(dp(4), 1));
+
+            TextView guideBtn = buildCompactActionBtn("📖 指南", 0x220284C7, 0x550284C7, 0xFF7DD3FC, v -> {
+                dismiss();
+                try {
+                    new com.xm486.pimet.ui.HelpGuideDialog(context).show();
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "open HelpGuideDialog failed", t);
+                }
+            });
+            actionRow.addView(guideBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
 
             View space3 = new View(context);
-            actionRow.addView(space3, new LinearLayout.LayoutParams(dp(6), 1));
+            actionRow.addView(space3, new LinearLayout.LayoutParams(dp(4), 1));
 
             TextView stopBtn = buildCompactActionBtn("🔴 关闭", 0x22EF4444, 0x55EF4444, 0xFFFCA5A5, v -> {
                 dismiss();

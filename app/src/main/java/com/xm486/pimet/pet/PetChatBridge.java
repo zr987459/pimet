@@ -171,11 +171,17 @@ public class PetChatBridge {
                         "💡 该会话独立隔离，专属加载手机自动化工具与 @phone-operator 代理！");
                 return true;
             }
+            if ("#guide".equalsIgnoreCase(input) || "#指南".equals(input) || "#手册".equals(input)) {
+                handler.post(() -> new com.xm486.pimet.ui.HelpGuideDialog(service).show());
+                showReply("已为你弹出完整操作指南手册 📖");
+                return true;
+            }
             if ("#help".equalsIgnoreCase(input) || "#?".equals(input) || "帮助".equals(input)) {
                 showReply("💡 常用指令指南:\n" +
                         "• . 或 。 开头: 对【主工作区活跃会话插话】与查询真实进度\n" +
                         "• 正常说话: 桌宠专属独立聊天专区 (拥有独立记忆，不打扰主代理)\n" +
                         "• ! 或 ！ 开头: 专用于【控制手机屏幕】(自动路由手机操作代理)\n" +
+                        "• #guide: 打开全功能图文操作手册\n" +
                         "• #phone: 手机自动化命令指南\n" +
                         "• #reset: 重置桌宠独立聊天专区\n" +
                         "• #piweb / #operit / #api: 切换模式");

@@ -256,6 +256,8 @@ public class MainActivity extends AppCompatActivity {
     private TextView menuTitleAbout;
     private TextView menuArrowAbout;
 
+    private View menuItemHelp;
+
     // 界面外观与设计风格组件 (Theme)
     private View menuItemTheme;
     private TextView menuTitleTheme;
@@ -542,6 +544,8 @@ public class MainActivity extends AppCompatActivity {
         menuTitleAbout = findViewById(R.id.menuTitleAbout);
         menuArrowAbout = findViewById(R.id.menuArrowAbout);
 
+        menuItemHelp = findViewById(R.id.menuItemHelp);
+
         menuItemTheme = findViewById(R.id.menuItemTheme);
         menuTitleTheme = findViewById(R.id.menuTitleTheme);
         menuArrowTheme = findViewById(R.id.menuArrowTheme);
@@ -601,6 +605,7 @@ public class MainActivity extends AppCompatActivity {
         if (menuItemPrivileges != null) menuItemPrivileges.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_PRIVILEGES));
         if (menuItemStorage != null) menuItemStorage.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_STORAGE));
         if (menuItemAbout != null) menuItemAbout.setOnClickListener(v -> openSettingsSubWindow(SETTINGS_CAT_ABOUT));
+        if (menuItemHelp != null) menuItemHelp.setOnClickListener(v -> new com.xm486.pimet.ui.HelpGuideDialog(this).show());
 
         if (btnSettingsExportBackup != null) btnSettingsExportBackup.setOnClickListener(v -> {
             new com.xm486.pimet.ui.FileBrowserDialog(this).showBackupMigrationDialog();
@@ -2280,6 +2285,11 @@ public class MainActivity extends AppCompatActivity {
 
         if (btnLaunchPetToggle != null) {
             btnLaunchPetToggle.setOnClickListener(v -> togglePetFromLaunch());
+        }
+
+        View btnLaunchHelpGuide = findViewById(R.id.btnLaunchHelpGuide);
+        if (btnLaunchHelpGuide != null) {
+            btnLaunchHelpGuide.setOnClickListener(v -> new com.xm486.pimet.ui.HelpGuideDialog(this).show());
         }
 
         if (btnLaunchLogDetail != null) {
