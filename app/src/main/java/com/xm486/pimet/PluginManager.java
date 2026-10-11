@@ -426,6 +426,8 @@ public final class PluginManager {
             return false;
         }
     }
+
+    private static void scanSkillsRecursive(File dir, List<PluginItem> list, Set<String> addedPaths, String parentPkg) {
         File[] files = dir.listFiles();
         if (files == null) return;
         for (File f : files) {
