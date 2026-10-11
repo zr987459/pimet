@@ -467,6 +467,7 @@
                     </LinearLayout>
 
                     <TextView
+                        android:id="@+id/btnLaunchHelpGuideBadge"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:background="@drawable/bg_status_badge"
@@ -3266,7 +3267,7 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="2dp"
-                                    android:text="当前版本: v1.5.4"
+                                    android:text="当前版本: v1.5.5"
                                     android:textColor="#8B949E"
                                     android:textSize="11sp" />
                             </LinearLayout>

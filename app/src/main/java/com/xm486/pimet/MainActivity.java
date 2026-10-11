@@ -4693,6 +4693,18 @@ public class MainActivity extends AppCompatActivity {
         badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
         header.addView(badge);
 
+        TextView stateBadge = new TextView(this);
+        stateBadge.setText(item.enabled ? "已启用" : "已停用");
+        stateBadge.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
+        stateBadge.setTextSize(10.5f);
+        stateBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
+        stateBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sbLp.leftMargin = dpToPx(6);
+        stateBadge.setLayoutParams(sbLp);
+        header.addView(stateBadge);
+
         if (item.version != null && !item.version.isEmpty()) {
             TextView vBadge = new TextView(this);
             if (item.hasUpdate && item.latestVersion != null && !item.latestVersion.isEmpty()) {
@@ -4740,6 +4752,29 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         aLp.topMargin = dpToPx(8);
         actions.setLayoutParams(aLp);
+
+        // 0. 启停开关 (方便用户随时启用或停用插件)
+        TextView btnToggle = new TextView(this);
+        btnToggle.setText(item.enabled ? "🟢 启停: 开" : "⏸ 启停: 关");
+        btnToggle.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E));
+        btnToggle.setTextSize(11.5f);
+        btnToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        btnToggle.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
+        btnToggle.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnToggle.setOnClickListener(v -> {
+            boolean nextState = !item.enabled;
+            boolean ok = PluginManager.setPluginEnabled(this, item, nextState);
+            if (ok) {
+                Toast.makeText(this, (nextState ? "✔ 已启用: " : "⏸ 已停用: ") + item.name, Toast.LENGTH_SHORT).show();
+                refreshPluginsList(currentPluginCategory);
+            } else {
+                Toast.makeText(this, "切换状态失败", Toast.LENGTH_SHORT).show();
+            }
+        });
+        actions.addView(btnToggle);
+
+        View spacingToggle = new View(this);
+        actions.addView(spacingToggle, new LinearLayout.LayoutParams(dpToPx(6), 1));
 
         // 1. ⚙️ 配置/查看按钮
         TextView btnConfig = new TextView(this);

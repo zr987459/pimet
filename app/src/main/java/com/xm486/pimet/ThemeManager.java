@@ -500,7 +500,7 @@ public class ThemeManager {
                 // 状态角标与徽章 (包含端口Badge、桌宠开关Badge、文件管理Badge等)
                 if (idName.endsWith("Badge") || idName.startsWith("badge")
                         || idName.equals("launchPortBadge") || idName.equals("launchPetStateBadge")
-                        || idName.equals("btnLaunchFileBadge")) {
+                        || idName.equals("btnLaunchFileBadge") || idName.equals("btnLaunchHelpGuideBadge")) {
                     v.setBackground(createBadgeDrawable(ctx, palette, 6f));
                     return;
                 }
@@ -540,7 +540,8 @@ public class ThemeManager {
                 // 卡片容器 (包含首页状态卡、双指标卡、文件管理卡片、桌宠开关卡片、日志控制台等)
                 if (idName.startsWith("card") || idName.endsWith("Card")
                         || idName.equals("piWebOfflineCard") || idName.equals("floatingPetChatCard")
-                        || idName.equals("btnLaunchFileManager") || idName.equals("btnLaunchPetToggle")) {
+                        || idName.equals("btnLaunchFileManager") || idName.equals("btnLaunchPetToggle")
+                        || idName.equals("btnLaunchHelpGuide")) {
                     v.setBackground(createCardDrawable(ctx, palette, 14f));
                     return;
                 }

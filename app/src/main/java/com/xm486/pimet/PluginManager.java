@@ -1,6 +1,7 @@
 package com.xm486.pimet;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.util.Log;
 
 import com.xm486.pimet.proot.ProotManager;
@@ -17,6 +18,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -44,6 +46,7 @@ public final class PluginManager {
         public String latestVersion = "";
         public boolean hasUpdate = false;
         public String chineseDesc = "";
+        public boolean enabled = true;
 
         public PluginItem(int type, String name, String path, String description) {
             this(type, name, path, description, name);
@@ -288,6 +291,7 @@ public final class PluginManager {
 
         // 自动注入中文注释与描述
         for (PluginItem item : list) {
+            item.enabled = isPluginEnabled(context, item);
             if (item.chineseDesc == null || item.chineseDesc.isEmpty()) {
                 item.chineseDesc = getChineseAnnotation(item.name, item.description, item.type);
             }
@@ -296,7 +300,132 @@ public final class PluginManager {
         return list;
     }
 
-    private static void scanSkillsRecursive(File dir, List<PluginItem> list, Set<String> addedPaths, String parentPkg) {
+    /**
+     * 判断插件当前是否处于启用状态
+     */
+    public static boolean isPluginEnabled(Context context, PluginItem item) {
+        if (item == null) return false;
+        if (item.path != null && (item.path.endsWith(".disabled") || item.path.endsWith(".off"))) {
+            return false;
+        }
+        if (item.type == PluginItem.TYPE_MCP) {
+            try {
+                File rootfs = ProotManager.getRootfsDir(context);
+                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+                if (mcpFile.exists()) {
+                    String jsonStr = readFile(mcpFile);
+                    if (jsonStr != null) {
+                        JSONObject root = new JSONObject(jsonStr);
+                        JSONObject servers = root.optJSONObject("mcpServers");
+                        if (servers != null && servers.has(item.name)) {
+                            JSONObject sObj = servers.optJSONObject(item.name);
+                            if (sObj != null && sObj.optBoolean("disabled", false)) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        try {
+            SharedPreferences sp = context.getSharedPreferences("pimet_plugins_state", Context.MODE_PRIVATE);
+            Set<String> disabledSet = sp.getStringSet("disabled_plugins", Collections.emptySet());
+            if (disabledSet != null && (disabledSet.contains(item.name) || (item.rawPkgName != null && disabledSet.contains(item.rawPkgName)))) {
+                return false;
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
+    /**
+     * 启停插件（无损热切换，无需删除用户数据与文件）
+     */
+    public static boolean setPluginEnabled(Context context, PluginItem item, boolean enable) {
+        if (item == null) return false;
+        try {
+            SharedPreferences sp = context.getSharedPreferences("pimet_plugins_state", Context.MODE_PRIVATE);
+            Set<String> disabledSet = new HashSet<>(sp.getStringSet("disabled_plugins", Collections.emptySet()));
+            if (enable) {
+                disabledSet.remove(item.name);
+                if (item.rawPkgName != null) disabledSet.remove(item.rawPkgName);
+            } else {
+                disabledSet.add(item.name);
+                if (item.rawPkgName != null) disabledSet.add(item.rawPkgName);
+            }
+            sp.edit().putStringSet("disabled_plugins", disabledSet).apply();
+
+            // 1. 如果是文件路径并且是单文件扩展/脚本/子代理，支持动态更名 .disabled
+            if (item.path != null) {
+                File f = new File(item.path);
+                if (f.exists()) {
+                    if (!enable && !f.getName().endsWith(".disabled")) {
+                        File disabledFile = new File(f.getParentFile(), f.getName() + ".disabled");
+                        f.renameTo(disabledFile);
+                    } else if (enable && f.getName().endsWith(".disabled")) {
+                        String normalName = f.getName().substring(0, f.getName().length() - ".disabled".length());
+                        File normalFile = new File(f.getParentFile(), normalName);
+                        f.renameTo(normalFile);
+                    }
+                }
+            }
+
+            // 2. 如果是 MCP 服务，更新 mcp.json 中的 disabled 标识
+            if (item.type == PluginItem.TYPE_MCP) {
+                File rootfs = ProotManager.getRootfsDir(context);
+                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+                if (mcpFile.exists()) {
+                    String jsonStr = readFile(mcpFile);
+                    if (jsonStr != null) {
+                        JSONObject root = new JSONObject(jsonStr);
+                        JSONObject servers = root.optJSONObject("mcpServers");
+                        if (servers != null && servers.has(item.name)) {
+                            JSONObject sObj = servers.optJSONObject(item.name);
+                            if (sObj != null) {
+                                sObj.put("disabled", !enable);
+                                saveFile(mcpFile, root.toString(2));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. 如果在 settings.json 的 extensions 中有声明
+            File rootfs = ProotManager.getRootfsDir(context);
+            File settingsFile = new File(rootfs, "root/.pi/agent/settings.json");
+            if (settingsFile.exists()) {
+                String sContent = readFile(settingsFile);
+                if (sContent != null) {
+                    JSONObject sObj = new JSONObject(sContent);
+                    JSONArray extArr = sObj.optJSONArray("extensions");
+                    if (extArr != null) {
+                        boolean modified = false;
+                        for (int i = 0; i < extArr.length(); i++) {
+                            String entry = extArr.optString(i, "");
+                            String cleanEntry = entry.startsWith("-") ? entry.substring(1) : entry;
+                            if (cleanEntry.equals(item.name) || cleanEntry.endsWith("/" + item.name)) {
+                                if (!enable && !entry.startsWith("-")) {
+                                    extArr.put(i, "-" + cleanEntry);
+                                    modified = true;
+                                } else if (enable && entry.startsWith("-")) {
+                                    extArr.put(i, cleanEntry);
+                                    modified = true;
+                                }
+                            }
+                        }
+                        if (modified) {
+                            saveFile(settingsFile, sObj.toString(2));
+                        }
+                    }
+                }
+            }
+
+            item.enabled = enable;
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "setPluginEnabled error: " + item.name, t);
+            return false;
+        }
+    }
         File[] files = dir.listFiles();
         if (files == null) return;
         for (File f : files) {
