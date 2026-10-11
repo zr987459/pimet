@@ -49,6 +49,7 @@ public class ChatConfig {
     public static final String KEY_MAX_TOKENS = "chat_max_tokens";
     public static final String KEY_CONTEXT_ROUNDS = "chat_context_rounds";
     public static final String KEY_TIMEOUT = "chat_timeout_seconds";
+    public static final String KEY_INTERJECT_BEHAVIOR = "chat_interject_behavior";
 
     private static final String LEGACY_DIR =
             "/storage/emulated/0/Android/data/com.xm486.pimet/files";
@@ -82,6 +83,8 @@ public class ChatConfig {
     public int maxTokens = 150;
     public int contextRounds = 4;
     public int timeoutSeconds = 30;
+    /** 插话排队策略：followUp (顺延追加，绝不打断当前对话)，steer (本轮思考/工具调用结束后立即导向) */
+    public String interjectBehavior = "followUp";
 
     /** 当前模式显示名（状态卡 / 设置页徽章用） */
     public String modeLabel() {
@@ -138,6 +141,7 @@ public class ChatConfig {
         config.piwebPhoneSessionId = sp.getString(KEY_PIWEB_PHONE_SESSION_ID, "");
         config.clawbenchToken = sp.getString(KEY_CLAWBENCH_TOKEN, PetRegistry.getClawbenchToken(context));
         config.apiProvider = sp.getString(KEY_API_PROVIDER, "custom");
+        config.interjectBehavior = sp.getString(KEY_INTERJECT_BEHAVIOR, "followUp");
         return config;
     }
 
@@ -165,6 +169,7 @@ public class ChatConfig {
         e.putInt(KEY_MAX_TOKENS, maxTokens);
         e.putInt(KEY_CONTEXT_ROUNDS, contextRounds);
         e.putInt(KEY_TIMEOUT, timeoutSeconds);
+        e.putString(KEY_INTERJECT_BEHAVIOR, interjectBehavior);
         e.apply();
         if (clawbenchToken != null && !clawbenchToken.isEmpty()) {
             PetRegistry.setClawbenchToken(context, clawbenchToken);

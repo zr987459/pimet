@@ -344,6 +344,65 @@ public class PetParamsDialog {
         row.addView(testInterjectBtn, btnLp2);
         box.addView(row);
 
+        // 插话排队模式切换行 (顺延追加 vs 实时导向)
+        ChatConfig chatCfg = ChatConfig.load(context);
+        LinearLayout behaviorRow = new LinearLayout(context);
+        behaviorRow.setOrientation(LinearLayout.HORIZONTAL);
+        behaviorRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams bRowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(28));
+        bRowLp.topMargin = dp(4);
+        behaviorRow.setLayoutParams(bRowLp);
+
+        Button btnFollowUp = new Button(context);
+        Button btnSteer = new Button(context);
+
+        Runnable refreshBehaviorBtns = () -> {
+            boolean isFollow = !"steer".equals(chatCfg.interjectBehavior);
+            btnFollowUp.setText(isFollow ? "✔ 顺延追加 (不打断)" : "顺延追加 (不打断)");
+            btnFollowUp.setTextSize(9.5f);
+            btnFollowUp.setTextColor(isFollow ? 0xFFFFFFFF : 0xFF94A3B8);
+            btnFollowUp.setPadding(0, 0, 0, 0);
+            GradientDrawable gdF = new GradientDrawable();
+            gdF.setColor(isFollow ? 0xFF0284C7 : 0x221E293B);
+            gdF.setCornerRadius(dp(4));
+            gdF.setStroke(dp(1), isFollow ? 0xFF38BDF8 : 0x44475569);
+            btnFollowUp.setBackground(gdF);
+
+            btnSteer.setText(!isFollow ? "✔ 实时导向 (立即介入)" : "实时导向 (立即介入)");
+            btnSteer.setTextSize(9.5f);
+            btnSteer.setTextColor(!isFollow ? 0xFFFFFFFF : 0xFF94A3B8);
+            btnSteer.setPadding(0, 0, 0, 0);
+            GradientDrawable gdS = new GradientDrawable();
+            gdS.setColor(!isFollow ? 0xFFF59E0B : 0x221E293B);
+            gdS.setCornerRadius(dp(4));
+            gdS.setStroke(dp(1), !isFollow ? 0xFFFBBF24 : 0x44475569);
+            btnSteer.setBackground(gdS);
+        };
+
+        btnFollowUp.setOnClickListener(v -> {
+            chatCfg.interjectBehavior = "followUp";
+            chatCfg.save(context);
+            refreshBehaviorBtns.run();
+            Toast.makeText(context, "已设为「顺延追加」：插话内容将在当前任务输出完成后排队执行，绝不打断当前对话", Toast.LENGTH_SHORT).show();
+        });
+
+        btnSteer.setOnClickListener(v -> {
+            chatCfg.interjectBehavior = "steer";
+            chatCfg.save(context);
+            refreshBehaviorBtns.run();
+            Toast.makeText(context, "已设为「实时导向」：将在当前单步工具/思考结束后立即介入并更新方向", Toast.LENGTH_SHORT).show();
+        });
+
+        refreshBehaviorBtns.run();
+
+        LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        fLp.rightMargin = dp(4);
+        behaviorRow.addView(btnFollowUp, fLp);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
+        behaviorRow.addView(btnSteer, sLp);
+        box.addView(behaviorRow);
+
         Button guideBtn = buildMiniBtn("📖 查看双轨插话与全功能使用指南", 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
             new com.xm486.pimet.ui.HelpGuideDialog(context).show();
         });

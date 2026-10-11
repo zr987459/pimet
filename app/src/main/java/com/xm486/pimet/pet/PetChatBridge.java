@@ -818,8 +818,10 @@ public class PetChatBridge {
                     JSONObject req = new JSONObject();
                     req.put("type", "prompt");
                     if (isInterject) {
-                        // 主工作区处于运行/思考/流式输出中时，插话消息指定为 steer 插话引导排队
-                        req.put("streamingBehavior", "steer");
+                        // 插话排队策略：默认 followUp (排队追加到当前任务之后，绝不粗暴打断现有对话)
+                        String behavior = (config.interjectBehavior != null && !config.interjectBehavior.trim().isEmpty())
+                                ? config.interjectBehavior.trim() : "followUp";
+                        req.put("streamingBehavior", behavior);
                     }
                     String piWebMsg;
                     if (isInterject || isPhoneControl) {
