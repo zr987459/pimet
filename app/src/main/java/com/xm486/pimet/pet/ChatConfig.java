@@ -39,6 +39,7 @@ public class ChatConfig {
     public static final String KEY_API_PROMPT = "chat_api_prompt";
     public static final String KEY_PIWEB_PROMPT = "chat_piweb_prompt";
     public static final String KEY_PIWEB_SESSION_ID = "chat_piweb_session_id";
+    public static final String KEY_PIWEB_PHONE_SESSION_ID = "chat_piweb_phone_session_id";
     public static final String KEY_CLAWBENCH_TOKEN = "chat_clawbench_token";
     public static final String KEY_API_PROVIDER = "chat_api_provider";
     public static final String KEY_OPERIT_TEMPLATE = "chat_operit_template";
@@ -79,6 +80,9 @@ public class ChatConfig {
     public boolean directAttachWorkspace = false;
     /** Pi-Web 专属桌宠会话 ID，绝不串入或复用用户的当前编码会话 */
     public String piwebSessionId = "";
+        piwebPhoneSessionId = "";
+    /** Pi-Web 专用于手机自动化操作的独立会话 ID */
+    public String piwebPhoneSessionId = "";
     public String clawbenchToken = "";
     public String apiProvider = "custom";
     public float temperature = 0.7f;
@@ -140,6 +144,7 @@ public class ChatConfig {
         config.targetSubAgent = sp.getString(KEY_TARGET_SUB_AGENT, "pet-companion");
         config.directAttachWorkspace = sp.getBoolean(KEY_DIRECT_ATTACH_WORKSPACE, false);
         config.piwebSessionId = sp.getString(KEY_PIWEB_SESSION_ID, "");
+        config.piwebPhoneSessionId = sp.getString(KEY_PIWEB_PHONE_SESSION_ID, "");
         config.clawbenchToken = sp.getString(KEY_CLAWBENCH_TOKEN, PetRegistry.getClawbenchToken(context));
         config.apiProvider = sp.getString(KEY_API_PROVIDER, "custom");
         return config;
@@ -164,6 +169,7 @@ public class ChatConfig {
         e.putString(KEY_TARGET_SUB_AGENT, targetSubAgent);
         e.putBoolean(KEY_DIRECT_ATTACH_WORKSPACE, directAttachWorkspace);
         e.putString(KEY_PIWEB_SESSION_ID, piwebSessionId);
+        e.putString(KEY_PIWEB_PHONE_SESSION_ID, piwebPhoneSessionId);
         e.putString(KEY_CLAWBENCH_TOKEN, clawbenchToken);
         e.putString(KEY_API_PROVIDER, apiProvider);
         e.putFloat(KEY_TEMPERATURE, temperature);
@@ -181,6 +187,7 @@ public class ChatConfig {
         operitChatId = "";
         operitChatOwned = false;
         piwebSessionId = "";
+        piwebPhoneSessionId = "";
         SharedPreferences.Editor e = PetRegistry.getPrefs(context).edit();
         e.remove(KEY_OPERIT_CHAT_ID);
         e.remove(KEY_OPERIT_CHAT_OWNED);

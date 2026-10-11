@@ -462,6 +462,7 @@ public final class PetMemoryManager {
      */
     public static List<String> getPresetTopics(Context context) {
         List<String> list = new ArrayList<>();
+        list.add("📱 ! 看看当前屏幕上有啥内容");
         list.add("🛠️ 检查系统端口与容器健康状态");
         list.add("🔍 帮我审查最近的代码与项目进展");
         list.add("☕ 伸个懒腰，喝口水，陪我摸会儿鱼~");
@@ -595,6 +596,36 @@ public final class PetMemoryManager {
                             fos.write(bytes);
                         }
                     } catch (Throwable ignored) {}
+                }
+            }
+
+            // 确保 phone-operator.md 安装
+            File phoneOperatorFile = new File(agentsDir, "phone-operator.md");
+            if (!phoneOperatorFile.exists()) {
+                String phonePrompt =
+                        "---\n" +
+                        "name: phone-operator\n" +
+                        "description: Android 手机自动化专属控制代理，具备全窗口穿透读屏、智能语义节点溯源点击、滑动翻页、输入与系统按键能力\n" +
+                        "tools: phone_control, control_desktop_pet, bash, read\n" +
+                        "skills: true\n" +
+                        "extensions: true\n" +
+                        "thinking: off\n" +
+                        "maxTurns: 15\n" +
+                        "inheritContext: false\n" +
+                        "background: false\n" +
+                        "---\n\n" +
+                        "## 角色定位\n" +
+                        "你是专职操作 Android 手机的智能屏幕操作助手「屏幕领航员」。\n" +
+                        "你的使命是替主人精准、安全、可靠地执行手机界面的交互操作：包括读取屏幕界面、点击目标按钮、滑动翻页、填入文字以及返回/回桌面等系统导航。\n\n" +
+                        "## 工具使用准则与策略\n" +
+                        "1. 优先语义直达点击：尽量使用 phone_control(action=\"tap\", target=\"按钮文字或ViewID\")，底层无障碍会自动溯源可点击父框架实现 100% 精准触发；\n" +
+                        "2. 读屏分析：不确定目标时先调用 phone_control(action=\"inspect\") 查看结构化节点后再操作；\n" +
+                        "3. 滑动翻页：向下翻看内容用 phone_control(action=\"swipe\", direction=\"up\")；向上翻看用 direction=\"down\"；\n" +
+                        "4. 文字填写：调用 phone_control(action=\"input\", text=\"内容\", target=\"目标输入框\")；\n" +
+                        "5. 系统按键：home (回桌面)、back (返回)、recents (多任务后台)；\n" +
+                        "6. 回复风格：在桌宠界面请保持简短干练（25字以内直接汇报执行结果，例如：\"已为你点击【确认】\"）。\n";
+                try (FileOutputStream fos = new FileOutputStream(phoneOperatorFile)) {
+                    fos.write(phonePrompt.getBytes(StandardCharsets.UTF_8));
                 }
             }
 

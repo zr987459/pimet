@@ -136,7 +136,7 @@ public class PetChatBridge {
             if (input != null) {
                 ChatConfig config = ChatConfig.load(service);
                 String subAgent = !TextUtils.isEmpty(config.targetSubAgent) ? config.targetSubAgent : "pet-companion";
-                input.setHint("💬 向 " + config.modeLabel() + " 发送 (. 唤起 @" + subAgent + ")…");
+                input.setHint("💬 (! 控手机，. 唤起 @" + subAgent + ")…");
             }
         });
     }
@@ -162,10 +162,23 @@ public class PetChatBridge {
             if (switchMode(input, "#clawbench", ChatConfig.MODE_CLAWBENCH, "已切换为 ClawBench 对话模式")) return true;
             if (switchMode(input, "#cb", ChatConfig.MODE_CLAWBENCH, "已切换为 ClawBench 对话模式")) return true;
             if (switchMode(input, "#api", ChatConfig.MODE_CUSTOM_API, "已切换为自定义 API 模式")) return true;
+            if ("#phone".equalsIgnoreCase(input) || "#手机".equals(input) || "#control".equals(input)) {
+                showReply("📱 手机自动化专属控制模式:\n" +
+                        "在桌宠聊天框中以 ! (感叹号) 开头，即可直接开启【手机自动化独立会话】！\n\n" +
+                        "例如输入:\n" +
+                        "• ! 看看屏幕上有啥\n" +
+                        "• ! 点击确认\n" +
+                        "• ! 向下滑动\n" +
+                        "• ! 返回桌面\n\n" +
+                        "💡 该会话独立隔离，专属加载手机自动化工具与 @phone-operator 代理！");
+                return true;
+            }
             if ("#help".equalsIgnoreCase(input) || "#?".equals(input) || "帮助".equals(input)) {
                 showReply("💡 常用指令:\n" +
-                        "• . 或 。 开头: 快速唤起桌宠子代理\n" +
+                        "• ! 或 ！ 开头: 专用于【控制手机屏幕】(自动路由手机操作代理)\n" +
+                        "• . 或 。 开头: 快速唤起桌宠伴侣子代理\n" +
                         "• 询问进程/任务/编译: 自动路由子代理\n" +
+                        "• #phone: 手机自动化命令指南\n" +
                         "• #agent <名称>: 绑定子代理 (如 pet-companion)\n" +
                         "• #agent off: 关闭子代理自动路由\n" +
                         "• #reset: 重置专属会话\n" +
@@ -310,9 +323,19 @@ public class PetChatBridge {
                     });
                     ChatConfig config = ChatConfig.load(service);
 
+                    // 0. 手机自动化专属前缀触发：以 "!" 或 "！" 开头
+                    boolean isPhoneControl = false;
+                    if (cleanInput.startsWith("!") || cleanInput.startsWith("！")) {
+                        isPhoneControl = true;
+                        cleanInput = cleanInput.substring(1).trim();
+                        if (cleanInput.isEmpty()) {
+                            cleanInput = "检查并汇报当前屏幕内容与可操作按钮";
+                        }
+                    }
+
                     // 1. 快捷语法解析：以 "." 或 "。" 开头快速唤醒/切换到子代理
                     boolean dotTrigger = false;
-                    if (cleanInput.startsWith(".") || cleanInput.startsWith("。")) {
+                    if (!isPhoneControl && (cleanInput.startsWith(".") || cleanInput.startsWith("。"))) {
                         dotTrigger = true;
                         cleanInput = cleanInput.substring(1).trim();
                         if (cleanInput.isEmpty()) {
@@ -325,13 +348,19 @@ public class PetChatBridge {
 
                     // 3. 子代理前缀自动注入（Pi-Web 模式）：
                     if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
-                        String targetAgent = config.targetSubAgent != null ? config.targetSubAgent.trim() : "";
-                        if (targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
-                            targetAgent = "pet-companion";
-                        }
-                        if (!targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
+                        if (isPhoneControl) {
                             if (!cleanInput.startsWith("@")) {
-                                cleanInput = "@" + targetAgent + " " + cleanInput;
+                                cleanInput = "@phone-operator " + cleanInput;
+                            }
+                        } else {
+                            String targetAgent = config.targetSubAgent != null ? config.targetSubAgent.trim() : "";
+                            if (targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
+                                targetAgent = "pet-companion";
+                            }
+                            if (!targetAgent.isEmpty() && (dotTrigger || isProgressOrSystem)) {
+                                if (!cleanInput.startsWith("@")) {
+                                    cleanInput = "@" + targetAgent + " " + cleanInput;
+                                }
                             }
                         }
                     }
@@ -347,7 +376,7 @@ public class PetChatBridge {
                         if (ChatConfig.MODE_OPERIT.equals(config.mode)) {
                             segments = sendViaOperit(config, cleanInput, forceNew);
                         } else if (ChatConfig.MODE_PIWEB.equals(config.mode)) {
-                            segments = sendViaPiWeb(config, cleanInput, forceNew);
+                            segments = sendViaPiWeb(config, cleanInput, forceNew, isPhoneControl);
                         } else if (ChatConfig.MODE_CLAWBENCH.equals(config.mode)) {
                             segments = sendViaClawBench(config, cleanInput, forceNew);
                         } else {
@@ -781,14 +810,21 @@ public class PetChatBridge {
      * 2. 会话不存在或失效时，经 /api/agent/new 自动创建会话；
      * 3. 订阅 SSE 事件流收集 assistant 消息直至完成。
      */
-    private List<String> sendViaPiWeb(ChatConfig config, String message, boolean forceNew) {
+    private List<String> sendViaPiWeb(ChatConfig config, String message, boolean forceNew, boolean isPhoneControl) {
         int port = PetRegistry.getPiWebPort(service);
         HttpURLConnection conn = null;
         try {
-            // 独立专属会话 vs 工作区会话直通
-            String sessionId = forceNew ? null : (config.directAttachWorkspace
-                    ? PetMemoryManager.getActiveMainSessionId(service)
-                    : config.piwebSessionId);
+            // 手机自动化独立会话 vs 伴侣独立会话 vs 工作区会话直通
+            String sessionId = null;
+            if (!forceNew) {
+                if (isPhoneControl) {
+                    sessionId = config.piwebPhoneSessionId;
+                } else if (config.directAttachWorkspace) {
+                    sessionId = PetMemoryManager.getActiveMainSessionId(service);
+                } else {
+                    sessionId = config.piwebSessionId;
+                }
+            }
             if (sessionId != null && sessionId.trim().isEmpty()) {
                 sessionId = null;
             }
@@ -818,7 +854,10 @@ public class PetChatBridge {
                     if (code == 404) {
                         // 远端会话已失效/过期，重置并重新建立专属会话
                         sessionId = null;
-                        if (!config.directAttachWorkspace) {
+                        if (isPhoneControl) {
+                            config.piwebPhoneSessionId = "";
+                            config.save(service);
+                        } else if (!config.directAttachWorkspace) {
                             config.piwebSessionId = "";
                             config.save(service);
                         }
@@ -872,9 +911,14 @@ public class PetChatBridge {
                 String resp = readStream(conn.getInputStream());
                 JSONObject respObj = new JSONObject(resp);
                 sessionId = respObj.optString("sessionId", "");
-                if (!sessionId.isEmpty() && !config.directAttachWorkspace) {
-                    config.piwebSessionId = sessionId;
-                    config.save(service);
+                if (!sessionId.isEmpty()) {
+                    if (isPhoneControl) {
+                        config.piwebPhoneSessionId = sessionId;
+                        config.save(service);
+                    } else if (!config.directAttachWorkspace) {
+                        config.piwebSessionId = sessionId;
+                        config.save(service);
+                    }
                 }
                 conn.disconnect();
                 conn = null;
