@@ -382,7 +382,7 @@ public final class PluginManager {
                             JSONObject sObj = servers.optJSONObject(item.name);
                             if (sObj != null) {
                                 sObj.put("disabled", !enable);
-                                saveFile(mcpFile, root.toString(2));
+                                writeFile(mcpFile, root.toString(2));
                             }
                         }
                     }
@@ -413,7 +413,7 @@ public final class PluginManager {
                             }
                         }
                         if (modified) {
-                            saveFile(settingsFile, sObj.toString(2));
+                            writeFile(settingsFile, sObj.toString(2));
                         }
                     }
                 }
