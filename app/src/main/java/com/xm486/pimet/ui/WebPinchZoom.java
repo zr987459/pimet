@@ -31,8 +31,9 @@ import java.util.Locale;
  *   <li>放大（最高 300%）：页面按更窄的布局重新排版，文字与控件变大并自动换行，永远不会横向溢出屏幕，无需左右拖动。</li>
  * </ul>
  * <p>原生放大镜式缩放在本地页面被禁用（min = max = 当前比例、user-scalable=no），
- * 双指手势由 {@link ScaleGestureDetector} 接管；单指滚动/点击照常交给网页。
- * 媒体查询、vw/vh、fixed 定位都按新的布局视口计算，因此整页一致缩放。</p>
+ * 双指手势由 {@link ScaleGestureDetector} 接管；单指滚动/点击照常交给网页（单指事件流从不消费）。
+ * 缩放为 100% 时完全不改动页面。</p>
+ * <p>媒体查询、vw/vh、fixed 定位都按新的布局视口计算，因此整页一致缩放。</p>
  * <p>仅作用于本地服务页面 (127.0.0.1 / localhost)，外部网站保持其原生行为。</p>
  */
 public final class WebPinchZoom {
@@ -45,25 +46,45 @@ public final class WebPinchZoom {
         void onZoomChanged(int percent, boolean committed);
     }
 
+    /**
+     * 注入脚本：只追加/更新<b>我们自己的</b> viewport meta（id=__pimet_vp，置于 head 末尾，后出现者生效），
+     * 绝不删除或改写页面自带的 meta —— Pi-Web 基于 Next.js/React 19，head 里的 viewport meta 由 React 管理，
+     * 外部删除后 React 在切换会话/路由时卸载它会抛错（parentNode 为 null），导致页面交互与滚动失效。
+     * 页面原有的 viewport-fit / interactive-widget 等键原样保留；不再注入任何 CSS。
+     * pct=100 时恢复为页面原始 viewport（若从未改动过则什么都不做）。
+     */
     private static final String FIX_JS = "(function(){try{" +
             "if(!window.__pimetZoomFix){" +
-            " window.__pimetZoomFix=function(){" +
-            "  var C=window.__pimetZoomVp; if(!C) return;" +
-            "  var h=document.head||document.documentElement; if(!h) return;" +
-            "  var ms=document.querySelectorAll('meta[name=\"viewport\"]');" +
-            "  var m=ms.length?ms[0]:null;" +
-            "  for(var i=1;i<ms.length;i++){ if(ms[i].parentNode) ms[i].parentNode.removeChild(ms[i]); }" +
-            "  if(!m){ m=document.createElement('meta'); m.setAttribute('name','viewport'); h.appendChild(m); }" +
-            "  if(m.getAttribute('content')!==C) m.setAttribute('content',C);" +
-            "  if(!document.getElementById('__pimet_pinch_css')){" +
-            "    var s=document.createElement('style'); s.id='__pimet_pinch_css';" +
-            "    s.textContent='html,body{max-width:100%;overflow-x:clip;}';" +
-            "    h.appendChild(s);" +
-            "  }" +
+            " window.__pimetZoomFix=function(force){" +
+            "  var h=document.head; if(!h) return;" +
+            "  var mine=document.getElementById('__pimet_vp');" +
+            "  var ms=h.querySelectorAll('meta[name=\"viewport\"]');" +
+            "  var orig=null;" +
+            "  for(var i=0;i<ms.length;i++){ if(ms[i]!==mine) orig=ms[i]; }" +
+            "  var oc=orig?(orig.getAttribute('content')||''):'width=device-width, initial-scale=1';" +
+            "  var C=window.__pimetZoomVp;" +
+            "  if(!C){ if(!mine) return; C=oc; }" +
+            "  else { var keep=oc.split(',').map(function(x){return x.trim();}).filter(function(x){" +
+            "    var k=x.split('=')[0].trim().toLowerCase();" +
+            "    return k==='viewport-fit'||k==='interactive-widget'; });" +
+            "    if(keep.length) C=C+','+keep.join(','); }" +
+            "  if(!mine){ mine=document.createElement('meta'); mine.id='__pimet_vp'; mine.setAttribute('name','viewport'); }" +
+            "  if(mine.getAttribute('content')!==C) mine.setAttribute('content',C);" +
+            "  if(!mine.parentNode || ms[ms.length-1]!==mine || force){ if(mine.parentNode) mine.parentNode.removeChild(mine); h.appendChild(mine); }" +
             " };" +
             " if(window.MutationObserver && document.head){" +
-            "  new MutationObserver(function(){window.__pimetZoomFix();})" +
-            "   .observe(document.head,{childList:true,subtree:true,attributes:true,attributeFilter:['content']});" +
+            "  var n=0,t0=Date.now();" +
+            "  new MutationObserver(function(list){" +
+            "   var hit=false;" +
+            "   for(var i=0;i<list.length;i++){ var m=list[i];" +
+            "    if(m.type==='attributes'){ if(m.target.id!=='__pimet_vp' && m.target.getAttribute('name')==='viewport') hit=true; }" +
+            "    else { for(var j=0;j<m.addedNodes.length;j++){ var a=m.addedNodes[j];" +
+            "      if(a!==document.getElementById('__pimet_vp') && a.nodeName==='META' && a.getAttribute('name')==='viewport') hit=true; } }" +
+            "   }" +
+            "   if(!hit) return;" +
+            "   var now=Date.now(); if(now-t0>1000){t0=now;n=0;} if(++n>20) return;" +
+            "   window.__pimetZoomFix(true);" +
+            "  }).observe(document.head,{childList:true,subtree:true,attributes:true,attributeFilter:['content']});" +
             " }" +
             "}" +
             "window.__pimetZoomFix();" +
@@ -126,7 +147,10 @@ public final class WebPinchZoom {
         WebPinchZoom z = new WebPinchZoom(webView, listener);
         webView.setOnTouchListener((v, e) -> z.onTouch(e));
         webView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            if ((r - l) != (or - ol) && (r - l) > 0) apply(webView, webView.getUrl());
+            // 仅宽度变化（转屏/分屏）且非 100% 时重算；高度变化（键盘弹出）不触碰页面
+            if ((r - l) != (or - ol) && (r - l) > 0 && getZoom(webView.getContext()) != 100) {
+                apply(webView, webView.getUrl());
+            }
         });
         return z;
     }
@@ -176,6 +200,12 @@ public final class WebPinchZoom {
     }
 
     private static void applyPct(WebView webView, float pct) {
+        if (Math.round(pct) == 100) {
+            // 100%：完全不改动页面；仅当本页之前被缩放过时，恢复页面原始 viewport
+            webView.evaluateJavascript("if(window.__pimetZoomFix){window.__pimetZoomVp=null;"
+                    + "window.__pimetZoomFix();}", null);
+            return;
+        }
         float density = webView.getResources().getDisplayMetrics().density;
         int px = webView.getWidth();
         if (px <= 0) px = webView.getResources().getDisplayMetrics().widthPixels;
@@ -197,30 +227,45 @@ public final class WebPinchZoom {
 
     // ---------------- 手势 ----------------
 
+    /**
+     * 单指事件流一律原样交给 WebView（返回 false，绝不消费），网页及其内部滚动容器照常滑动。
+     * 只有第二根手指按下时才接管：先给网页发一个与其已知状态一致的单指 ACTION_CANCEL，
+     * 之后到全部手指抬起为止由缩放处理；下一次 ACTION_DOWN 总是重新交还网页。
+     */
     private boolean onTouch(MotionEvent e) {
-        if (!pinching && !isLocal(webView.getUrl())) return false;
-        detector.onTouchEvent(e);
         int a = e.getActionMasked();
-        if (!pinching && a == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 2) {
-            pinching = true;
-            liveZoom = getZoom(webView.getContext());
-            lastAppliedPct = Math.round(liveZoom);
-            // 取消网页里已开始的单指手势（滚动/长按），之后的事件全部由缩放接管
-            MotionEvent cancel = MotionEvent.obtain(e);
-            cancel.setAction(MotionEvent.ACTION_CANCEL);
-            webView.onTouchEvent(cancel);
-            cancel.recycle();
-            showIndicator(Math.round(liveZoom));
-            return true;
-        }
-        if (pinching) {
-            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+        if (a == MotionEvent.ACTION_DOWN) {
+            // 新手势开始：无论之前状态如何都复位，避免缩放状态残留吞掉后续滑动
+            if (pinching) {
                 pinching = false;
                 commit();
             }
-            return true;
+            if (isLocal(webView.getUrl())) detector.onTouchEvent(e);
+            return false;
         }
-        return false;
+        if (!pinching) {
+            if (!isLocal(webView.getUrl())) return false;
+            detector.onTouchEvent(e);
+            if (a == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 2) {
+                pinching = true;
+                liveZoom = getZoom(webView.getContext());
+                lastAppliedPct = Math.round(liveZoom);
+                // 取消网页里已开始的单指手势：只携带第一根手指，与网页已收到的事件流保持一致
+                MotionEvent cancel = MotionEvent.obtain(e.getDownTime(), e.getEventTime(),
+                        MotionEvent.ACTION_CANCEL, e.getX(0), e.getY(0), 0);
+                webView.onTouchEvent(cancel);
+                cancel.recycle();
+                showIndicator(Math.round(liveZoom));
+                return true;
+            }
+            return false;
+        }
+        detector.onTouchEvent(e);
+        if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+            pinching = false;
+            commit();
+        }
+        return true;
     }
 
     private void scheduleApply() {
