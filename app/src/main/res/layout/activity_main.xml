@@ -63,6 +63,8 @@
                             android:id="@+id/launchPortBadge"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:layout_marginStart="@dimen/space_sm"
+                            android:singleLine="true"
                             android:background="@drawable/bg_badge_info"
                             android:paddingStart="@dimen/space_sm"
                             android:paddingTop="@dimen/space_xs"
@@ -128,63 +130,84 @@
                             android:progressDrawable="@drawable/progress_launch" />
                     </LinearLayout>
 
-                    <!-- 启动前端口自定义快捷栏 -->
+                    <!-- 启动前端口自定义快捷栏（单行紧凑：图标 + 标签 + 输入 + 保存，提示置于下方一行） -->
                     <LinearLayout
                         android:id="@+id/cardLaunchPortQuickSet"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="@dimen/space_md"
                         android:background="@drawable/bg_sunken"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
+                        android:orientation="vertical"
                         android:paddingStart="@dimen/space_md"
                         android:paddingTop="@dimen/space_sm"
                         android:paddingEnd="@dimen/space_md"
                         android:paddingBottom="@dimen/space_sm">
 
-                        <TextView
-                            android:layout_width="wrap_content"
+                        <LinearLayout
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="🌐 启动端口:"
-                            android:textColor="#F0F6FC"
-                            android:textSize="@dimen/text_small"
-                            android:textStyle="bold" />
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
 
-                        <EditText
-                            android:id="@+id/launchPortInput"
-                            android:layout_width="72dp"
-                            android:layout_height="@dimen/control_height_compact"
-                            android:layout_marginStart="@dimen/space_sm"
-                            android:background="@drawable/bg_input_field"
-                            android:gravity="center"
-                            android:hint="30141"
-                            android:inputType="number"
-                            android:maxLength="5"
-                            android:text="30141"
-                            android:textColor="#58A6FF"
-                            android:textColorHint="#484F58"
-                            android:textSize="@dimen/text_body_small"
-                            android:textStyle="bold" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:ellipsize="end"
+                                android:maxLines="1"
+                                android:singleLine="true"
+                                android:text="🌐 启动端口"
+                                android:textColor="#F0F6FC"
+                                android:textSize="@dimen/text_small"
+                                android:textStyle="bold" />
 
-                        <TextView
-                            android:id="@+id/btnLaunchSavePort"
-                            android:layout_width="wrap_content"
-                            android:layout_height="@dimen/control_height_compact"
-                            android:layout_marginStart="@dimen/space_sm"
-                            android:background="@drawable/bg_btn_secondary"
-                            android:gravity="center"
-                            android:paddingStart="@dimen/space_md"
-                            android:paddingEnd="@dimen/space_md"
-                            android:text="保存"
-                            android:textColor="#C9D1D9"
-                            android:textSize="@dimen/text_caption" />
+                            <EditText
+                                android:id="@+id/launchPortInput"
+                                android:layout_width="0dp"
+                                android:layout_height="@dimen/control_height_compact"
+                                android:layout_marginStart="@dimen/space_sm"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_input_field"
+                                android:gravity="center"
+                                android:hint="30141"
+                                android:importantForAutofill="no"
+                                android:includeFontPadding="false"
+                                android:inputType="number"
+                                android:maxLength="5"
+                                android:minWidth="64dp"
+                                android:paddingStart="@dimen/space_sm"
+                                android:paddingTop="0dp"
+                                android:paddingEnd="@dimen/space_sm"
+                                android:paddingBottom="0dp"
+                                android:singleLine="true"
+                                android:text="30141"
+                                android:textColor="#58A6FF"
+                                android:textColorHint="#484F58"
+                                android:textSize="@dimen/text_body_small"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/btnLaunchSavePort"
+                                android:layout_width="wrap_content"
+                                android:layout_height="@dimen/control_height_compact"
+                                android:layout_marginStart="@dimen/space_sm"
+                                android:background="@drawable/bg_btn_secondary"
+                                android:gravity="center"
+                                android:minWidth="56dp"
+                                android:paddingStart="@dimen/space_md"
+                                android:paddingEnd="@dimen/space_md"
+                                android:singleLine="true"
+                                android:text="保存"
+                                android:textColor="#C9D1D9"
+                                android:textSize="@dimen/text_small" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/launchPortTipTv"
-                            android:layout_width="0dp"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="@dimen/space_sm"
-                            android:layout_weight="1"
+                            android:layout_marginTop="@dimen/space_xs"
+                            android:ellipsize="end"
+                            android:singleLine="true"
                             android:text="启动前可直接自定义"
                             android:textColor="#6E7681"
                             android:textSize="@dimen/text_caption" />
@@ -193,6 +216,10 @@
                     <!-- 大主按钮: 启动或进入工作台 -->
                     <TextView
                         android:id="@+id/btnLaunchMain"
+                        android:singleLine="true"
+                        android:ellipsize="end"
+                        android:paddingStart="@dimen/space_xs"
+                        android:paddingEnd="@dimen/space_xs"
                         android:layout_width="match_parent"
                         android:layout_height="@dimen/cta_height"
                         android:layout_marginTop="@dimen/space_lg"
@@ -212,6 +239,10 @@
 
                         <TextView
                             android:id="@+id/btnLaunchRestart"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:paddingStart="@dimen/space_xs"
+                            android:paddingEnd="@dimen/space_xs"
                             android:layout_width="0dp"
                             android:layout_height="38dp"
                             android:layout_marginEnd="@dimen/space_sm"
@@ -224,6 +255,10 @@
 
                         <TextView
                             android:id="@+id/btnLaunchStop"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:paddingStart="@dimen/space_xs"
+                            android:paddingEnd="@dimen/space_xs"
                             android:layout_width="0dp"
                             android:layout_height="38dp"
                             android:layout_marginStart="@dimen/space_xs"
@@ -237,6 +272,10 @@
 
                         <TextView
                             android:id="@+id/btnLaunchDeploy"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:paddingStart="@dimen/space_xs"
+                            android:paddingEnd="@dimen/space_xs"
                             android:layout_width="0dp"
                             android:layout_height="38dp"
                             android:layout_marginStart="@dimen/space_sm"

@@ -2376,11 +2376,14 @@ public class MainActivity extends AppCompatActivity {
         boolean enabled = running;
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         if (launchPetStatusTv != null) {
-            launchPetStatusTv.setText(enabled ? "状态: 已开启" : "状态: 已关闭");
+            launchPetStatusTv.setText(enabled ? "运行中" : "已关闭");
             launchPetStatusTv.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetStateBadge != null) {
             launchPetStateBadge.setText(enabled ? "已开" : "已关");
+            launchPetStateBadge.setBackground(enabled
+                    ? ThemeManager.createBadgeDrawable(this, palette, ThemeManager.RADIUS_SMALL)
+                    : ThemeManager.createSecondaryButtonDrawable(this, palette, ThemeManager.RADIUS_SMALL));
             launchPetStateBadge.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetIconTv != null) {
@@ -4127,6 +4130,11 @@ public class MainActivity extends AppCompatActivity {
 
         applySettingsCardsVisibility();
 
+        if (category == SETTINGS_CAT_THEME) {
+            // 首帧即按当前生效配色与选中项渲染外观选项，杜绝首次打开时的深色占位闪烁
+            updateThemeUIState();
+        }
+
         if (viewSettingsSubWindow != null) {
             viewSettingsSubWindow.setVisibility(View.VISIBLE);
         }
@@ -5388,7 +5396,7 @@ public class MainActivity extends AppCompatActivity {
             {"空气摩擦", PetRegistry.KEY_FRICTION, 0, 100, PetRegistry.DEFAULT_FRICTION, "%"},
             {"停稳阈值", PetRegistry.KEY_STOP_SPEED, 10, 200, PetRegistry.DEFAULT_STOP_SPEED, "px/s"},
             {"聊天框宽度", PetRegistry.KEY_CARD_WIDTH, 140, 360, PetRegistry.DEFAULT_CARD_WIDTH, "dp"},
-            {"设置框宽度", PetRegistry.KEY_MENU_WIDTH, 140, 320, PetRegistry.DEFAULT_MENU_WIDTH, "dp"},
+            {"设置框宽度", PetRegistry.KEY_MENU_WIDTH, 240, 320, PetRegistry.DEFAULT_MENU_WIDTH, "dp"},
             {"窗口紧凑度", PetRegistry.KEY_CARD_SCALE, 40, 120, PetRegistry.DEFAULT_CARD_SCALE, "%"},
     };
 
@@ -5479,6 +5487,10 @@ public class MainActivity extends AppCompatActivity {
                 badgeText += " (" + (effPalette.isDark ? "当前夜间" : "当前日间") + ")";
             }
             tvCurrentThemeBadge.setText(badgeText);
+            tvCurrentThemeBadge.setBackground(ThemeManager.createBadgeDrawable(this, effPalette, ThemeManager.RADIUS_PILL));
+            tvCurrentThemeBadge.setTextColor(effPalette.accent);
+            tvCurrentThemeBadge.setSingleLine(true);
+            tvCurrentThemeBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
         }
 
         updateThemeOptionRow(themeRowAuto, tvThemeTitleAuto, tvThemeCheckAuto, ThemeManager.THEME_AUTO.equals(currentPref), effPalette);
@@ -5612,6 +5624,10 @@ public class MainActivity extends AppCompatActivity {
         if (piWebWebView != null) {
             ThemeManager.syncThemeToWebView(piWebWebView, this);
         }
+
+        // 外观页选项卡与当前主题徽章：必须在整树递归着色之后按当前选择重绘，
+        // 否则首次进入外观页时会残留布局 XML 中的深色默认底与「深色 (Dark)」占位徽章。
+        updateThemeUIState();
     }
 
     @Override

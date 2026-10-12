@@ -524,6 +524,14 @@ public class ThemeManager {
                     tv.setTextColor(palette.textMuted);
                     return;
                 }
+                // 状态徽章 (端口 PORT / 桌宠开关 / 当前主题)：强调色浅底 + 强调色文字，所有主题均清晰可读
+                if (!idName.startsWith("btn") && (idName.endsWith("Badge") || idName.startsWith("badge"))) {
+                    tv.setBackground(createBadgeDrawable(ctx, palette, RADIUS_SMALL));
+                    if (!idName.equals("launchPetStateBadge")) {
+                        tv.setTextColor(palette.accent);
+                    }
+                    return;
+                }
                 // 普通次级按钮
                 if (idName.startsWith("btn") || idName.endsWith("Btn")) {
                     tv.setBackground(createSecondaryButtonDrawable(ctx, palette, RADIUS_CONTROL));

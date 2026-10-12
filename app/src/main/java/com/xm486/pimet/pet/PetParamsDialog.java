@@ -20,6 +20,8 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.xm486.pimet.ThemeManager;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,6 +35,7 @@ public class PetParamsDialog {
     private final PetOverlayService service;
     private final Runnable onChangeCallback;
     private AlertDialog dialog;
+    private ThemeManager.ThemePalette palette;
 
     public static void show(Context context, PetOverlayService service, Runnable onChangeCallback) {
         new PetParamsDialog(context, service, onChangeCallback).show();
@@ -60,6 +63,7 @@ public class PetParamsDialog {
         if (dialog != null && dialog.isShowing()) return;
 
         try {
+            palette = ThemeManager.getEffectivePalette(context);
             AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
 
             LinearLayout root = new LinearLayout(context);
@@ -73,8 +77,10 @@ public class PetParamsDialog {
 
             TextView title = new TextView(context);
             title.setText("⚙️ 桌宠详细参数调节");
-            title.setTextColor(0xFFE2E8F0);
-            title.setTextSize(12f);
+            title.setTextColor(palette.text);
+            title.setTextSize(14f);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
             title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
@@ -82,18 +88,20 @@ public class PetParamsDialog {
 
             TextView closeBtn = new TextView(context);
             closeBtn.setText("✕");
-            closeBtn.setTextColor(0xFF94A3B8);
-            closeBtn.setTextSize(13f);
-            closeBtn.setPadding(dp(4), dp(2), dp(4), dp(2));
+            closeBtn.setTextColor(palette.textMuted);
+            closeBtn.setTextSize(14f);
+            closeBtn.setGravity(Gravity.CENTER);
             closeBtn.setOnClickListener(v -> dismiss());
-            topBar.addView(closeBtn);
+            topBar.addView(closeBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
             root.addView(topBar);
 
             TextView hint = new TextView(context);
-            hint.setText("滑动即生效 · 记忆持久化 · 杜绝遮挡桌宠");
-            hint.setTextColor(0xFF64748B);
-            hint.setTextSize(9.5f);
-            hint.setPadding(0, dp(2), 0, dp(4));
+            hint.setText("滑动即生效 · 自动保存");
+            hint.setTextColor(palette.textMuted);
+            hint.setTextSize(12f);
+            hint.setSingleLine(true);
+            hint.setEllipsize(TextUtils.TruncateAt.END);
+            hint.setPadding(0, 0, 0, dp(8));
             root.addView(hint);
 
             // ---- 可滑动内容区 ----
@@ -181,7 +189,8 @@ public class PetParamsDialog {
             }));
 
             // 10. 长按菜单宽度: 120 ~ 240 dp (min 120)
-            listLayout.addView(createCompactSlider("📑 长按菜单面板宽", curMenuWidth, "dp", 120, 240, 120, (val) -> {
+            listLayout.addView(createCompactSlider("📑 长按菜单面板宽", Math.max(PetMenu.MIN_MENU_WIDTH, Math.min(PetMenu.MAX_MENU_WIDTH, curMenuWidth)), "dp",
+                    PetMenu.MIN_MENU_WIDTH, PetMenu.MAX_MENU_WIDTH, PetMenu.MIN_MENU_WIDTH, (val) -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_WIDTH, val);
                 if (onChangeCallback != null) onChangeCallback.run();
             }));
@@ -196,9 +205,10 @@ public class PetParamsDialog {
             // ---- 底部重置与完成按钮 ----
             LinearLayout btnRow = new LinearLayout(context);
             btnRow.setOrientation(LinearLayout.HORIZONTAL);
-            btnRow.setPadding(0, dp(8), 0, 0);
+            btnRow.setGravity(Gravity.CENTER_VERTICAL);
+            btnRow.setPadding(0, dp(12), 0, 0);
 
-            Button resetBtn = buildMiniBtn("↺ 重置默认", 0x22475569, 0x44475569, 0xFF94A3B8, v -> {
+            Button resetBtn = buildMiniBtn("↺ 重置默认", BTN_SECONDARY, v -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
                 PetRegistry.setIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
                 PetRegistry.setIntPref(context, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
@@ -224,11 +234,11 @@ public class PetParamsDialog {
             View spacer = new View(context);
             btnRow.addView(spacer, new LinearLayout.LayoutParams(dp(8), 1));
 
-            Button backBtn = buildMiniBtn("✔ 完成退出", 0xFF2563EB, 0xFF1D4ED8, 0xFFFFFFFF, v -> {
+            Button backBtn = buildMiniBtn("✔ 完成", BTN_PRIMARY, v -> {
                 dismiss();
                 if (onChangeCallback != null) onChangeCallback.run();
             });
-            btnRow.addView(backBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f));
+            btnRow.addView(backBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             root.addView(btnRow);
 
@@ -241,15 +251,22 @@ public class PetParamsDialog {
                     window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
                 }
                 window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                window.setDimAmount(0f);
 
+                // 不透明面板底色 + 发丝描边，杜绝首页内容透出
                 GradientDrawable bg = new GradientDrawable();
-                bg.setColor(0xF6181A24);
+                bg.setColor(palette.bgPanel);
                 bg.setCornerRadius(dp(12));
-                bg.setStroke(dp(1), 0x3360A5FA);
+                bg.setStroke(Math.max(1, dp(1)), palette.border);
                 window.setBackgroundDrawable(bg);
             }
 
             dialog.show();
+            if (window != null) {
+                WindowManager.LayoutParams a0 = window.getAttributes();
+                a0.alpha = 1f;
+                window.setAttributes(a0);
+            }
 
             // 定位在桌宠旁 (如果是在 OverlayService 悬浮模式下，绝不遮挡桌宠)
             PetOverlayService effectiveService = (service != null) ? service : PetOverlayService.getInstance();
@@ -257,7 +274,9 @@ public class PetParamsDialog {
                 WindowManager.LayoutParams attrs = window.getAttributes();
                 if (attrs != null) {
                     attrs.gravity = Gravity.TOP | Gravity.START;
-                    int winW = dp(Math.max(170, curMenuWidth + 24));
+                    int screenWdp = (int) (context.getResources().getDisplayMetrics().widthPixels
+                            / context.getResources().getDisplayMetrics().density);
+                    int winW = dp(Math.max(240, Math.min(300, screenWdp - 16)));
                     attrs.width = winW;
                     attrs.height = WindowManager.LayoutParams.WRAP_CONTENT;
 
@@ -283,54 +302,60 @@ public class PetParamsDialog {
         }
     }
 
-    private View createInterjectSection() {
+    private LinearLayout sectionBox() {
         LinearLayout box = new LinearLayout(context);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), dp(8), dp(8), dp(8));
-
+        box.setPadding(dp(12), dp(12), dp(12), dp(12));
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0x221E293B);
-        bg.setCornerRadius(dp(6));
-        bg.setStroke(dp(1), 0x33475569);
+        bg.setColor(palette.bg);
+        bg.setCornerRadius(dp(10));
+        bg.setStroke(Math.max(1, dp(1)), palette.border);
         box.setBackground(bg);
-
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(2);
         lp.bottomMargin = dp(8);
         box.setLayoutParams(lp);
+        return box;
+    }
 
+    private TextView sectionTitle(String text, int color) {
         TextView title = new TextView(context);
-        title.setText("💬 pi-btw 支线后台问答与专属聊天专区");
-        title.setTextColor(0xFF38BDF8);
-        title.setTextSize(11f);
-        title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
-        box.addView(title);
+        title.setText(text);
+        title.setTextColor(color);
+        title.setTextSize(13f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        return title;
+    }
 
+    private TextView bodyText(String text) {
         TextView tip = new TextView(context);
-        tip.setText("已接入全隔离后台支线问答引擎：\n" +
-                "• 💬 正常说话：桌宠专属空间对话（拥有独立好感度与性格记忆）\n" +
-                "• ⚡ . 或 。 开头：【pi-btw 支线后台问答】深度嗅探主工作区上下文并独立解答，主进程代码与长任务完全不受任何影响！");
-        tip.setTextColor(0xFF94A3B8);
-        tip.setTextSize(9f);
-        tip.setPadding(0, dp(2), 0, dp(4));
-        box.addView(tip);
+        tip.setText(text);
+        tip.setTextColor(palette.textMuted);
+        tip.setTextSize(12f);
+        tip.setLineSpacing(dp(2), 1f);
+        tip.setPadding(0, dp(4), 0, 0);
+        return tip;
+    }
 
-        LinearLayout row = new LinearLayout(context);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
+    private View createInterjectSection() {
+        LinearLayout box = sectionBox();
 
-        Button clearPetChatBtn = buildMiniBtn("🧹 重置问答与聊天专区", 0x22475569, 0x44475569, 0xFFCBD5E1, v -> {
+        box.addView(sectionTitle("💬 pi-btw 支线问答与聊天专区", palette.text));
+
+        box.addView(bodyText("已接入全隔离后台支线问答引擎：\n" +
+                "· 正常说话：桌宠专属空间对话（独立好感度与性格记忆）\n" +
+                "· 以 . 或 。 开头：pi-btw 支线后台问答，嗅探主工作区上下文独立解答，不影响主进程与长任务。"));
+
+        Button clearPetChatBtn = buildMiniBtn("🧹 重置会话", BTN_SECONDARY, v -> {
             ChatConfig config = ChatConfig.load(context);
             config.piwebSessionId = "";
             config.save(context);
             Toast.makeText(context, "已重置后台问答会话，下次提问将开启全新空间", Toast.LENGTH_SHORT).show();
         });
-        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        btnLp.rightMargin = dp(4);
-        row.addView(clearPetChatBtn, btnLp);
 
-        Button testInterjectBtn = buildMiniBtn("🔍 嗅探主工作区上下文", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+        Button testInterjectBtn = buildMiniBtn("🔍 嗅探上下文", BTN_SECONDARY, v -> {
             String activeId = PetMemoryManager.getActiveMainSessionId(context);
             if (activeId != null && !activeId.isEmpty()) {
                 PetMemoryManager.MainSessionInfo info = PetMemoryManager.getMainSessionInfo(context);
@@ -341,64 +366,67 @@ public class PetParamsDialog {
                 Toast.makeText(context, "🟡 暂无活跃主工作区上下文，在 Web 端发一句话即可自动绑定", Toast.LENGTH_SHORT).show();
             }
         });
-        LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, dp(28), 1f);
-        row.addView(testInterjectBtn, btnLp2);
-        box.addView(row);
+        if (testInterjectBtn != null) testInterjectBtn.setTextColor(palette.accent);
 
-        Button guideBtn = buildMiniBtn("📖 查看双轨交互与全功能使用指南", 0x2238BDF8, 0x4438BDF8, 0xFFBAE6FD, v -> {
+        LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams btnLp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        btnLp2.leftMargin = dp(8);
+        row.addView(clearPetChatBtn, btnLp);
+        row.addView(testInterjectBtn, btnLp2);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dp(12);
+        box.addView(row, rowLp);
+
+        Button guideBtn = buildMiniBtn("📖 使用指南", BTN_SECONDARY, v -> {
             new com.xm486.pimet.ui.HelpGuideDialog(context).show();
         });
         LinearLayout.LayoutParams guideLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(28));
-        guideLp.topMargin = dp(4);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        guideLp.topMargin = dp(8);
         box.addView(guideBtn, guideLp);
 
         return box;
     }
 
     private View createAutomationSection() {
-        LinearLayout box = new LinearLayout(context);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), dp(8), dp(8), dp(8));
+        LinearLayout box = sectionBox();
 
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0x221E293B);
-        bg.setCornerRadius(dp(6));
-        bg.setStroke(dp(1), 0x33475569);
-        box.setBackground(bg);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(2);
-        lp.bottomMargin = dp(8);
-        box.setLayoutParams(lp);
+        boolean isAutoRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
 
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
-        boolean isAutoRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
+        LinearLayout texts = new LinearLayout(context);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(sectionTitle("📱 手机自动化", palette.text));
+        TextView state = new TextView(context);
+        state.setText(isAutoRunning ? "已授权就绪" : "未开启无障碍");
+        state.setTextColor(isAutoRunning ? ThemeManager.statusSuccessColor(palette) : ThemeManager.statusWarningColor(palette));
+        state.setTextSize(12f);
+        state.setSingleLine(true);
+        state.setEllipsize(TextUtils.TruncateAt.END);
+        state.setPadding(0, dp(2), 0, 0);
+        texts.addView(state);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView title = new TextView(context);
-        title.setText("📱 手机自动化 (" + (isAutoRunning ? "🟢 已授权就绪" : "🟡 未开启无障碍") + ")");
-        title.setTextColor(isAutoRunning ? 0xFF4ADE80 : 0xFFFBBF24);
-        title.setTextSize(11f);
-        title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
-        row.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        Button authBtn = buildMiniBtn(isAutoRunning ? "⚙️ 系统设置" : "🚀 去开启", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
+        Button authBtn = buildMiniBtn(isAutoRunning ? "⚙️ 设置" : "🚀 去开启", isAutoRunning ? BTN_SECONDARY : BTN_PRIMARY, v -> {
             com.xm486.pimet.automation.PiMetAccessibilityService.openAccessibilitySettings(context);
             Toast.makeText(context, "请在已安装的服务中找到「PiMet 手机自动化服务」并开启", Toast.LENGTH_LONG).show();
         });
-        row.addView(authBtn, new LinearLayout.LayoutParams(dp(70), dp(26)));
+        LinearLayout.LayoutParams authLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        authLp.leftMargin = dp(8);
+        authBtn.setMinWidth(dp(88));
+        authBtn.setMinimumWidth(dp(88));
+        row.addView(authBtn, authLp);
         box.addView(row);
 
-        TextView tip = new TextView(context);
-        tip.setText("开启后桌宠与 AI 助手可使用 phone_control 工具实现全自动操作手机（免 OCR 读屏、点击、滑屏、填字等）。");
-        tip.setTextColor(0xFF94A3B8);
-        tip.setTextSize(9f);
-        tip.setPadding(0, dp(2), 0, 0);
-        box.addView(tip);
+        box.addView(bodyText("开启后桌宠与 AI 助手可通过 phone_control 自动操作手机（读屏、点击、滑屏、输入等）。"));
 
         return box;
     }
@@ -415,15 +443,23 @@ public class PetParamsDialog {
 
         TextView label = new TextView(context);
         label.setText(name + " · " + curVal + unit);
-        label.setTextColor(0xFFCBD5E1);
-        label.setTextSize(11f);
+        label.setTextColor(palette.text);
+        label.setTextSize(12f);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
         label.setPadding(0, 0, 0, 0);
         row.addView(label);
 
         SeekBar sb = new SeekBar(context);
         sb.setMax(maxVal - offset);
         sb.setProgress(Math.max(0, curVal - offset));
-        sb.setPadding(dp(4), dp(2), dp(4), dp(2));
+        sb.setPadding(dp(8), dp(6), dp(8), dp(6));
+        try {
+            android.content.res.ColorStateList acc = android.content.res.ColorStateList.valueOf(palette.accent);
+            sb.setProgressTintList(acc);
+            sb.setThumbTintList(acc);
+            sb.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.border));
+        } catch (Throwable ignored) {}
 
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -442,24 +478,35 @@ public class PetParamsDialog {
         return row;
     }
 
-    private Button buildMiniBtn(String text, int bgNormal, int bgPressed, int textColor, View.OnClickListener clk) {
+    private static final int BTN_SECONDARY = 0;
+    private static final int BTN_PRIMARY = 1;
+
+    /** 统一按钮：单行 + 末尾省略，最小高度 36dp，不全大写、无阴影。 */
+    private Button buildMiniBtn(String text, int style, View.OnClickListener clk) {
         Button btn = new Button(context);
         btn.setText(text);
-        btn.setTextSize(11f);
-        btn.setTextColor(textColor);
-        btn.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btn.setMinHeight(dp(28));
-        btn.setMinimumHeight(dp(28));
+        btn.setAllCaps(false);
+        btn.setTextSize(12f);
+        btn.setSingleLine(true);
+        btn.setEllipsize(TextUtils.TruncateAt.END);
+        btn.setGravity(Gravity.CENTER);
+        btn.setIncludeFontPadding(false);
+        btn.setPadding(dp(10), dp(6), dp(10), dp(6));
+        btn.setMinHeight(dp(36));
+        btn.setMinimumHeight(dp(36));
         btn.setMinWidth(0);
         btn.setMinimumWidth(0);
+        btn.setStateListAnimator(null);
 
-        GradientDrawable n = new GradientDrawable();
-        n.setColor(bgNormal);
-        n.setCornerRadius(dp(10));
-
-        GradientDrawable p = new GradientDrawable();
-        p.setColor(bgPressed);
-        p.setCornerRadius(dp(10));
+        boolean primary = style == BTN_PRIMARY;
+        btn.setTextColor(primary ? palette.accentContrast : palette.text);
+        GradientDrawable n = primary
+                ? ThemeManager.createPrimaryButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL)
+                : ThemeManager.createSecondaryButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+        GradientDrawable p = primary
+                ? ThemeManager.createPrimaryButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL)
+                : ThemeManager.createSelectedOptionDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+        if (primary) p.setColor(palette.accentHover);
 
         StateListDrawable sld = new StateListDrawable();
         sld.addState(new int[]{android.R.attr.state_pressed}, p);

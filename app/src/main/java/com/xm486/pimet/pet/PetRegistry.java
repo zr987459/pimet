@@ -364,7 +364,7 @@ public class PetRegistry {
     public static final int DEFAULT_BUBBLE_TEXT_SIZE = 12;
     public static final int DEFAULT_CARD_WIDTH = 200;
     public static final int DEFAULT_CARD_SCALE = 100;
-    public static final int DEFAULT_MENU_WIDTH = 160;
+    public static final int DEFAULT_MENU_WIDTH = 240;
     public static final int DEFAULT_RK_PORT = 8080;
     public static final int DEFAULT_CB_PORT = 20000;                            // ClawBench 默认端口
     public static final String DEFAULT_CB_TOKEN = "";
