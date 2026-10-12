@@ -490,6 +490,9 @@ public class PetMenu {
 
     private void switchTarget(String targetKey) {
         PetRegistry.setStringPref(context, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+        // 切到该监控绑定的桌宠（未绑定保持当前），并同步菜单里的角色名
+        PetRegistry.applyTargetPet(context, targetKey);
+        syncPetIndex();
         try {
             ChatConfig cfg = ChatConfig.load(context);
             if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
@@ -633,6 +636,18 @@ public class PetMenu {
         PetRegistry.setPetDir(context, chosen.dir);
         if (service != null) {
             service.changePet(chosen.dir);
+        }
+        updatePetNameLabel();
+    }
+
+    private void syncPetIndex() {
+        if (allPets == null) return;
+        String cur = PetRegistry.getPetDir(context);
+        for (int i = 0; i < allPets.size(); i++) {
+            if (allPets.get(i).dir.equals(cur)) {
+                currentPetIndex = i;
+                break;
+            }
         }
         updatePetNameLabel();
     }

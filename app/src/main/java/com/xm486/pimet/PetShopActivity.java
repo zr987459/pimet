@@ -542,10 +542,9 @@ public class PetShopActivity extends AppCompatActivity {
                     if (switchBtn != null) {
                         switchBtn.setVisibility(View.VISIBLE);
                         switchBtn.setOnClickListener(vv -> {
+                            // 只切换当前桌宠；监控绑定统一在「桌宠设置 → 监控绑定桌宠」里管理
                             PetRegistry.setPetDir(this, dirName[0]);
-                            ChatConfig cur = ChatConfig.load(this);
-                            PetRegistry.setPetDirForMode(this, cur.mode, dirName[0]);
-                            Toast.makeText(this, "已切换为 " + pet.displayName + "（已绑定为当前模式专属形象）", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, "已切换为 " + pet.displayName, Toast.LENGTH_SHORT).show();
                             finish();
                         });
                     }

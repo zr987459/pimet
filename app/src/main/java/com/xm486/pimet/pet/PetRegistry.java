@@ -315,6 +315,115 @@ public class PetRegistry {
         }
     }
 
+    // ---------------- 监控目标 ↔ 桌宠绑定 ----------------
+    // 沿用 pet_dir_mode_<key> 存储（监控目标键与 AI 模式键一致：piweb/operit/clawbench/custom_api，另加 rikkahub）。
+
+    /** 可绑定桌宠的监控目标：{目标键, 显示名} */
+    public static final String[][] BINDABLE_TARGETS = {
+            {"piweb", "pi-web"},
+            {"operit", "Operit"},
+            {"clawbench", "ClawBench"},
+            {"rikkahub", "RikkaHub"},
+            {"custom_api", "自定义 API"},
+    };
+
+    /** 目标绑定的桌宠目录；未绑定或该桌宠已不存在时返回 null。 */
+    public static String getBoundPet(Context context, String target) {
+        if (target == null || target.isEmpty()) return null;
+        String dir = getPrefs(context).getString(KEY_PET_DIR_PREFIX + target, null);
+        if (dir == null || dir.isEmpty() || !petExists(context, dir)) return null;
+        return dir;
+    }
+
+    /** 绑定 / 解绑（dir 为 null 或空 = 不绑定）。 */
+    public static void setBoundPet(Context context, String target, String dir) {
+        if (target == null || target.isEmpty()) return;
+        SharedPreferences.Editor e = getPrefs(context).edit();
+        if (dir == null || dir.isEmpty()) e.remove(KEY_PET_DIR_PREFIX + target);
+        else e.putString(KEY_PET_DIR_PREFIX + target, dir);
+        e.apply();
+    }
+
+    /** 桌宠是否仍可加载（外部导入目录含精灵图，或内置 assets 未被删除）。 */
+    public static boolean petExists(Context context, String dir) {
+        if (dir == null || dir.isEmpty()) return false;
+        try {
+            File ext = new File(getExternalPetsDir(context), dir);
+            if (new File(ext, "spritesheet.webp").isFile() || new File(ext, "spritesheet.png").isFile()) return true;
+        } catch (Throwable ignored) {}
+        if (getDeletedBuiltinPets(context).contains(dir)) return false;
+        try {
+            String[] files = context.getAssets().list(PETS_DIR + "/" + dir);
+            if (files != null) {
+                for (String f : files) {
+                    if ("spritesheet.webp".equals(f) || "spritesheet.png".equals(f)) return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * 切到某个监控目标时调用：该目标绑定了桌宠且与当前不同 → 切换当前桌宠（写 pet_dir，
+     * 悬浮桌宠/应用内桌宠通过偏好监听在主线程重载精灵图）。未绑定则保持当前桌宠不变。
+     * @return 实际切换到的目录；未切换返回 null
+     */
+    public static String applyTargetPet(Context context, String target) {
+        String dir = getBoundPet(context, target);
+        if (dir == null || dir.equals(getPetDir(context))) return null;
+        setPetDir(context, dir);
+        return dir;
+    }
+
+    /** 桌宠显示名（读取失败回退目录名）。 */
+    public static String getPetDisplayName(Context context, String dir) {
+        if (dir == null) return "";
+        try {
+            for (PetInfo p : loadPets(context)) {
+                if (dir.equals(p.dir)) return p.displayName != null && !p.displayName.isEmpty() ? p.displayName : dir;
+            }
+        } catch (Throwable ignored) {}
+        return dir;
+    }
+
+    /** 精灵图第一帧缩略图（后台线程调用）；失败返回 null。 */
+    public static android.graphics.Bitmap loadPetThumb(Context context, String dir, int targetPx) {
+        if (dir == null) return null;
+        final int cw = 192, ch = 208;
+        java.io.InputStream in = null;
+        try {
+            File ext = new File(getExternalPetsDir(context), dir);
+            File f = new File(ext, "spritesheet.webp");
+            if (!f.isFile()) f = new File(ext, "spritesheet.png");
+            if (f.isFile()) {
+                in = new java.io.FileInputStream(f);
+            } else {
+                try {
+                    in = context.getAssets().open(PETS_DIR + "/" + dir + "/spritesheet.webp");
+                } catch (Throwable e) {
+                    in = context.getAssets().open(PETS_DIR + "/" + dir + "/spritesheet.png");
+                }
+            }
+            int sample = 1;
+            while (ch / (sample * 2) >= targetPx) sample *= 2;
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inSampleSize = sample;
+            android.graphics.Bitmap frame = null;
+            try {
+                @SuppressWarnings("deprecation")
+                android.graphics.BitmapRegionDecoder rd = android.graphics.BitmapRegionDecoder.newInstance(in, false);
+                frame = rd.decodeRegion(new android.graphics.Rect(0, 0,
+                        Math.min(cw, rd.getWidth()), Math.min(ch, rd.getHeight())), o);
+                rd.recycle();
+            } catch (Throwable ignored) {}
+            return frame;
+        } catch (Throwable t) {
+            return null;
+        } finally {
+            if (in != null) try { in.close(); } catch (Throwable ignored) {}
+        }
+    }
+
     public static void setPetDir(Context context, String dir) {
         SharedPreferences sp = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
         sp.edit().putString(KEY_PET_DIR, dir).apply();

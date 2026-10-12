@@ -211,10 +211,8 @@ public class PetChatBridge {
             ChatConfig config = ChatConfig.load(service);
             config.mode = mode;
             config.save(service);
-            String modePet = PetRegistry.getPetDirForMode(service, mode);
-            if (!modePet.equals(PetRegistry.getPetDir(service))) {
-                PetRegistry.setPetDir(service, modePet);
-            }
+            // 切到该模式（= 同名监控目标）绑定的桌宠；未绑定保持当前桌宠
+            PetRegistry.applyTargetPet(service, mode);
             showReply(reply);
             service.onChatConfigChanged();
         } catch (Throwable t) {

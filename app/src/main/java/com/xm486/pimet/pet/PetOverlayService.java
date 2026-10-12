@@ -224,8 +224,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         chatBridge.attach();
         // 状态卡显示当前 AI 模式
         statusCard.setModeLabel(ChatConfig.load(this).modeLabel());
-        // 自动应用当前模式绑定的专属角色
-        applyModePet(ChatConfig.load(this).mode);
+        // 自动应用当前监控目标绑定的桌宠（未绑定则保持当前桌宠）
+        lastPetMode = ChatConfig.load(this).mode;
+        PetRegistry.applyTargetPet(this, getCurrentTarget());
         // 自动启动桌宠独立记忆与主动关怀定时器
         startProactiveChatter();
     }
@@ -338,7 +339,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void onSharedPreferenceChanged(android.content.SharedPreferences sp, String key) {
         if ("pet_dir".equals(key)) {
             String dir = sp.getString(key, null);
-            if (dir != null && petView != null) {
+            if (dir != null && petView != null && !dir.equals(petView.getPetDirName())) {
                 petView.setPetDir(dir);
             }
         } else if (PetRegistry.KEY_PET_SIZE.equals(key)) {
@@ -1309,6 +1310,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         ensureAllMonitorsRunning();
         // 瞬间以目标当前后台已缓存的最新快照刷新桌宠状态（零延迟秒切）
         recomputeState();
+        // 切换到该监控绑定的桌宠（写 pet_dir → 偏好监听在主线程重载精灵图；未绑定保持不变）
+        PetRegistry.applyTargetPet(this, target);
 
         String label = "Operit";
         if (PetRegistry.TARGET_PIWEB.equals(target)) label = "pi-web";
@@ -1566,19 +1569,25 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     /** 动态切换角色形象并持久化保存 */
     public void changePet(String petDir) {
         if (petDir == null || petDir.isEmpty()) return;
-        PetRegistry.setPetDir(this, petDir);
-        if (petView != null) {
+        if (!petDir.equals(PetRegistry.getPetDir(this))) {
+            // 写入 pet_dir 后由 onSharedPreferenceChanged 在主线程重载精灵图，避免重复解码
+            PetRegistry.setPetDir(this, petDir);
+        } else if (petView != null && !petDir.equals(petView.getPetDirName())) {
             petView.setPetDir(petDir);
         }
     }
 
-    /** 读取并切换至当前 AI 模式绑定的专属角色形象 */
+    private String lastPetMode;
+
+    /**
+     * AI 模式切换（#operit / #api 等）时联动该目标绑定的桌宠。
+     * 只在模式真正变化时生效，其它配置保存（改密钥等）不再把手动选的桌宠强行改回去。
+     */
     public void applyModePet(String mode) {
         if (mode == null || mode.isEmpty()) return;
-        String boundDir = PetRegistry.getPetDirForMode(this, mode);
-        if (boundDir != null && !boundDir.isEmpty()) {
-            changePet(boundDir);
-        }
+        if (mode.equals(lastPetMode)) return;
+        lastPetMode = mode;
+        PetRegistry.applyTargetPet(this, mode);
     }
 
     public PetChatBridge getChatBridge() {

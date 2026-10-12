@@ -1427,6 +1427,7 @@ public class MainActivity extends AppCompatActivity {
         // 点击切换监控与对话目标
         chip.setOnClickListener(v -> {
             PetRegistry.setStringPref(MainActivity.this, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+            PetRegistry.applyTargetPet(MainActivity.this, targetKey); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(MainActivity.this);
                 if (PetRegistry.TARGET_PIWEB.equals(targetKey)) cfg.mode = ChatConfig.MODE_PIWEB;
@@ -1909,6 +1910,7 @@ public class MainActivity extends AppCompatActivity {
         // 2. 快捷指令切换目标与模式
         if (q.equalsIgnoreCase("#piweb")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_PIWEB); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_PIWEB;
@@ -1919,6 +1921,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#operit")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_OPERIT);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_OPERIT); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_OPERIT;
@@ -1929,6 +1932,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#clawbench")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CLAWBENCH);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_CLAWBENCH); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_CLAWBENCH;
@@ -1939,6 +1943,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#api")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CUSTOM_API);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_CUSTOM_API); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_CUSTOM_API;

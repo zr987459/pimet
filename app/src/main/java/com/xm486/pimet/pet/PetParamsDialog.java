@@ -117,6 +117,9 @@ public class PetParamsDialog {
             // 0.1 手机自动化 (无障碍服务) 授权卡片
             listLayout.addView(createAutomationSection());
 
+            // 0.2 监控绑定桌宠
+            listLayout.addView(createBindingSection());
+
             int curPetSize = PetRegistry.getIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
             int curBubbleWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
             int curBubbleTextSize = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
@@ -428,6 +431,44 @@ public class PetParamsDialog {
 
         box.addView(bodyText("开启后桌宠与 AI 助手可通过 phone_control 自动操作手机（读屏、点击、滑屏、输入等）。"));
 
+        return box;
+    }
+
+    private View createBindingSection() {
+        LinearLayout box = sectionBox();
+        LinearLayout row = new LinearLayout(context);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout texts = new LinearLayout(context);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(sectionTitle("监控绑定桌宠", palette.text));
+        int n = 0;
+        for (String[] t : PetRegistry.BINDABLE_TARGETS) {
+            if (PetRegistry.getBoundPet(context, t[0]) != null) n++;
+        }
+        TextView state = new TextView(context);
+        state.setText(n > 0 ? "已绑定 " + n + " 个监控" : "未绑定");
+        state.setTextColor(n > 0 ? palette.accent : palette.textMuted);
+        state.setTextSize(12f);
+        state.setSingleLine(true);
+        state.setEllipsize(TextUtils.TruncateAt.END);
+        state.setPadding(0, dp(2), 0, 0);
+        texts.addView(state);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button setBtn = buildMiniBtn("设置", BTN_SECONDARY, v -> {
+            dismiss();
+            PetBindingDialog.show(context);
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = dp(8);
+        setBtn.setMinWidth(dp(72));
+        setBtn.setMinimumWidth(dp(72));
+        row.addView(setBtn, lp);
+        box.addView(row);
+        box.addView(bodyText("每个监控可绑一只桌宠，切到哪个监控就换成哪只；不绑定则保持当前桌宠。"));
         return box;
     }
 
