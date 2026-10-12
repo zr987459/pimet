@@ -713,11 +713,20 @@ public class FileBrowserDialog {
                 if (catCount[c] == 0) continue;
                 final int cat = c;
                 String sizeStr = (pending && catSize[c] == 0) ? "计算中…" : formatSize(catSize[c]) + (pending ? "+" : "");
-                categoryBar.addView(buildCategoryChip(CAT_ICONS[c] + " " + CAT_NAMES[c] + " · " + sizeStr,
+                TextView chip = buildCategoryChip(CAT_ICONS[c] + " " + CAT_NAMES[c] + " · " + sizeStr,
                         activeCategory == cat, v -> {
                             activeCategory = (activeCategory == cat) ? -1 : cat;
                             applyFilter();
-                        }));
+                        });
+                chip.setOnLongClickListener(v -> {
+                    exportCategory(cat);
+                    return true;
+                });
+                categoryBar.addView(chip);
+            }
+            if (activeCategory >= 0 && catCount[activeCategory] > 0) {
+                final int cat = activeCategory;
+                categoryBar.addView(buildCategoryChip("📤 导出此类", false, v -> exportCategory(cat)));
             }
         }
     }
@@ -839,6 +848,20 @@ public class FileBrowserDialog {
                 slp.leftMargin = dp(8);
                 row.addView(size, slp);
 
+                TextView export = new TextView(context);
+                export.setTag("export");
+                export.setText("📤");
+                export.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                export.setTextColor(pal.textMuted);
+                export.setGravity(Gravity.CENTER);
+                export.setFocusable(false);
+                export.setContentDescription("导出");
+                export.setTooltipText("导出");
+                export.setPadding(dp(6), dp(6), dp(6), dp(6));
+                LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(dp(32), dp(32));
+                elp.leftMargin = dp(4);
+                row.addView(export, elp);
+
                 TextView arrow = new TextView(context);
                 arrow.setTag("arrow");
                 arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
@@ -857,6 +880,8 @@ public class FileBrowserDialog {
             TextView meta = row.findViewWithTag("meta");
             TextView size = row.findViewWithTag("size");
             TextView arrow = row.findViewWithTag("arrow");
+            TextView export = row.findViewWithTag("export");
+            export.setOnClickListener(v -> exportItem(item));
 
             name.setText(item.name);
             String timeStr = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date(item.lastModified));
@@ -896,6 +921,306 @@ public class FileBrowserDialog {
 
             return row;
         }
+    }
+
+    // =========================================================================
+    // 单独导出：单个文件 / 文件夹 / 整个分类 → 手机存储（系统保存器）或分享
+    // =========================================================================
+
+    private static String mimeFor(String name) {
+        String ext = getFileExt(name);
+        if (ext.isEmpty()) return "application/octet-stream";
+        if (ext.equals("zip")) return "application/zip";
+        String m = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return m != null ? m : "application/octet-stream";
+    }
+
+    private static String safeName(String n) {
+        String s = n == null ? "export" : n.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (s.startsWith(".")) s = s.substring(1);
+        return s.isEmpty() ? "export" : s;
+    }
+
+    /** 统计待打包的总字节数（不跟随符号链接）。 */
+    private static long walkSize(File f, java.util.concurrent.atomic.AtomicBoolean cancel) {
+        if (cancel.get() || f == null || ProotManager.isSymbolicLink(f)) return 0;
+        if (!f.isDirectory()) return f.length();
+        long t = 0;
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) t += walkSize(k, cancel);
+        }
+        return t;
+    }
+
+    /** 导出入口：label 为显示名，sources 为要导出的文件/文件夹（分类导出时为多个）。 */
+    private void showExportOptions(String label, List<File> sources) {
+        if (sources == null || sources.isEmpty()) {
+            Toast.makeText(context, "没有可导出的项目", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final boolean singleFile = sources.size() == 1 && sources.get(0).isFile();
+        final String outName = singleFile ? sources.get(0).getName() : safeName(label) + ".zip";
+
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
+        root.setPadding(dp(16), dp(16), dp(16), dp(14));
+
+        TextView title = new TextView(context);
+        title.setText("📤 导出「" + label + "」");
+        title.setTextColor(pal.text);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        root.addView(title);
+
+        TextView sub = new TextView(context);
+        sub.setText((singleFile ? "导出为原文件：" : "打包为 zip：") + outName);
+        sub.setTextColor(pal.textMuted);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        sub.setPadding(0, dp(4), 0, dp(12));
+        root.addView(sub);
+
+        AlertDialog d = new com.xm486.pimet.ui.Icons.DialogBuilder(context).setView(root).create();
+
+        TextView btnSave = buildActionBtn("💾 保存到手机（选择位置）", 0, 0, v -> {
+            d.dismiss();
+            exportToDocument(outName, singleFile, sources);
+        });
+        btnSave.setGravity(Gravity.CENTER);
+        btnSave.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        root.addView(btnSave, l1);
+
+        TextView btnShare = buildActionBtn("📤 分享 / 发送", 0, 0, v -> {
+            d.dismiss();
+            exportAndShare(outName, singleFile, sources);
+        });
+        btnShare.setGravity(Gravity.CENTER);
+        btnShare.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams l2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        l2.topMargin = dp(8);
+        root.addView(btnShare, l2);
+
+        TextView btnCancel = buildActionBtn("取消", COLOR_MUTED_HINT_BG, 0, v -> d.dismiss());
+        btnCancel.setGravity(Gravity.CENTER);
+        btnCancel.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout.LayoutParams l3 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        l3.topMargin = dp(8);
+        root.addView(btnCancel, l3);
+
+        if (d.getWindow() != null) d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        d.show();
+    }
+
+    private void exportToDocument(String outName, boolean singleFile, List<File> sources) {
+        if (!(context instanceof com.xm486.pimet.MainActivity)) {
+            Toast.makeText(context, "当前页面不支持选择保存位置，已改为分享", Toast.LENGTH_SHORT).show();
+            exportAndShare(outName, singleFile, sources);
+            return;
+        }
+        String mime = singleFile ? mimeFor(outName) : "application/zip";
+        ((com.xm486.pimet.MainActivity) context).launchCreateDocument(outName, mime, uri -> {
+            if (uri == null) return; // 用户取消
+            runExport("📤 正在导出 " + outName, singleFile, sources, () -> {
+                java.io.OutputStream os = context.getContentResolver().openOutputStream(uri, "w");
+                if (os == null) throw new java.io.IOException("无法写入所选位置");
+                return os;
+            }, (bytes, skipped) -> {
+                Toast.makeText(context, "已导出到所选位置：" + outName + " · " + formatSize(bytes)
+                        + (skipped > 0 ? "（" + skipped + " 个无权限文件已跳过）" : ""), Toast.LENGTH_LONG).show();
+            }, () -> {
+                try {
+                    android.provider.DocumentsContract.deleteDocument(context.getContentResolver(), uri);
+                } catch (Throwable ignored) {}
+            });
+        });
+    }
+
+    private void exportAndShare(String outName, boolean singleFile, List<File> sources) {
+        if (singleFile) {
+            shareFile(sources.get(0), mimeFor(outName));
+            return;
+        }
+        File dir = new File(context.getCacheDir(), "export");
+        // 清理上次分享留下的临时包，避免缓存越积越大
+        File[] old = dir.listFiles();
+        if (old != null) for (File f : old) f.delete();
+        dir.mkdirs();
+        final File out = new File(dir, outName);
+        runExport("📦 正在打包 " + outName, false, sources, () -> new java.io.FileOutputStream(out),
+                (bytes, skipped) -> {
+                    if (skipped > 0) {
+                        Toast.makeText(context, skipped + " 个无权限文件已跳过", Toast.LENGTH_SHORT).show();
+                    }
+                    shareFile(out, "application/zip");
+                }, out::delete);
+    }
+
+    private void shareFile(File file, String mime) {
+        try {
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, context.getPackageName() + ".fileprovider", file);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType(mime);
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(share, "分享 " + file.getName() + "（" + formatSize(file.length()) + "）");
+            if (!(context instanceof android.app.Activity)) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(chooser);
+        } catch (Throwable t) {
+            Toast.makeText(context, "分享失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private interface StreamOpener { java.io.OutputStream open() throws Exception; }
+    private interface ExportDone { void done(long bytes, int skipped); }
+
+    /** 后台流式导出（单文件直接复制；文件夹/分类边读边写 zip），带进度与取消，不阻塞界面。 */
+    private void runExport(String title, boolean singleFile, List<File> sources, StreamOpener opener,
+                           ExportDone onDone, Runnable onAbortCleanup) {
+        final java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean(false);
+        ProgressDialogHolder holder = showBackupProgressDialog(title);
+        TextView btnCancel = buildActionBtn("取消", 0, COLOR_DANGER_HINT, v -> cancel.set(true));
+        btnCancel.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(12);
+        if (holder.tvDetail.getParent() instanceof LinearLayout) {
+            ((LinearLayout) holder.tvDetail.getParent()).addView(btnCancel, clp);
+        }
+
+        new Thread(() -> {
+            final long[] done = {0};
+            final int[] skipped = {0};
+            long total = 0;
+            for (File f : sources) total += walkSize(f, cancel);
+            final long fTotal = Math.max(1, total);
+            final long[] lastUi = {0};
+            Runnable progress = () -> {
+                long now = System.currentTimeMillis();
+                if (now - lastUi[0] < 150) return;
+                lastUi[0] = now;
+                final int pct = (int) Math.min(100, done[0] * 100 / fTotal);
+                final String detail = formatSize(done[0]) + " / " + formatSize(fTotal);
+                mainHandler.post(() -> {
+                    holder.progressBar.setProgress(pct);
+                    holder.tvStage.setText("已处理 " + pct + "%");
+                    holder.tvDetail.setText(detail);
+                });
+            };
+            String error = null;
+            try (java.io.OutputStream raw = opener.open();
+                 java.io.BufferedOutputStream os = new java.io.BufferedOutputStream(raw, 64 * 1024)) {
+                byte[] buf = new byte[64 * 1024];
+                if (singleFile) {
+                    try (FileInputStream in = new FileInputStream(sources.get(0))) {
+                        int n;
+                        while ((n = in.read(buf)) > 0) {
+                            if (cancel.get()) break;
+                            os.write(buf, 0, n);
+                            done[0] += n;
+                            progress.run();
+                        }
+                    }
+                } else {
+                    java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(os);
+                    zos.setLevel(java.util.zip.Deflater.BEST_SPEED);
+                    for (File src : sources) {
+                        if (cancel.get()) break;
+                        zipInto(zos, src, src.getName(), buf, cancel, done, skipped, progress);
+                    }
+                    zos.finish();
+                    zos.flush();
+                }
+                os.flush();
+            } catch (SecurityException se) {
+                error = "没有权限写入/读取：" + se.getMessage();
+            } catch (Throwable t) {
+                error = t.getMessage() != null ? t.getMessage() : t.toString();
+            }
+            final String fError = error;
+            final boolean cancelled = cancel.get();
+            mainHandler.post(() -> {
+                try { holder.dialog.dismiss(); } catch (Throwable ignored) {}
+                if (cancelled || fError != null) {
+                    if (onAbortCleanup != null) {
+                        try { onAbortCleanup.run(); } catch (Throwable ignored) {}
+                    }
+                    Toast.makeText(context, cancelled ? "已取消导出" : "导出失败: " + fError, Toast.LENGTH_LONG).show();
+                } else {
+                    onDone.done(done[0], skipped[0]);
+                }
+            });
+        }).start();
+    }
+
+    private void zipInto(java.util.zip.ZipOutputStream zos, File f, String entry, byte[] buf,
+                         java.util.concurrent.atomic.AtomicBoolean cancel, long[] done, int[] skipped,
+                         Runnable progress) throws java.io.IOException {
+        if (cancel.get() || ProotManager.isSymbolicLink(f)) return;
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids == null) {
+                skipped[0]++;
+                return;
+            }
+            if (kids.length == 0) {
+                zos.putNextEntry(new java.util.zip.ZipEntry(entry + "/"));
+                zos.closeEntry();
+                return;
+            }
+            for (File k : kids) {
+                if (cancel.get()) return;
+                zipInto(zos, k, entry + "/" + k.getName(), buf, cancel, done, skipped, progress);
+            }
+            return;
+        }
+        FileInputStream in;
+        try {
+            in = new FileInputStream(f);
+        } catch (Throwable t) {
+            skipped[0]++;
+            return;
+        }
+        try {
+            java.util.zip.ZipEntry ze = new java.util.zip.ZipEntry(entry);
+            ze.setTime(f.lastModified());
+            zos.putNextEntry(ze);
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                if (cancel.get()) break;
+                zos.write(buf, 0, n);
+                done[0] += n;
+                progress.run();
+            }
+            zos.closeEntry();
+        } finally {
+            try { in.close(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 导出当前目录下某一类别的全部项目。 */
+    private void exportCategory(int cat) {
+        List<File> files = new ArrayList<>();
+        for (FileItem it : allItems) {
+            if (it.category == cat && !it.isSymlink) files.add(it.file);
+        }
+        String dirName = currentDir != null ? currentDir.getName() : "";
+        showExportOptions((dirName.isEmpty() ? "" : dirName + "-") + CAT_NAMES[cat].replace("/", "-"), files);
+    }
+
+    private void exportItem(FileItem item) {
+        if (item == null) return;
+        File src = item.isSymlink && item.resolvedTarget != null ? item.resolvedTarget : item.file;
+        if (!src.canRead()) {
+            Toast.makeText(context, "无权限读取：" + item.name, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<File> one = new ArrayList<>();
+        one.add(src);
+        showExportOptions(item.name, one);
     }
 
     private static String getFileExt(String name) {
@@ -1007,10 +1332,24 @@ public class FileBrowserDialog {
             btnRow.addView(sp2, new LinearLayout.LayoutParams(dp(8), 1));
         }
 
+        TextView btnExport = buildActionBtn("📤 导出", 0, 0, v -> {
+            d.dismiss();
+            exportItem(item);
+        });
+        btnRow.addView(btnExport);
+        View spE = new View(context);
+        btnRow.addView(spE, new LinearLayout.LayoutParams(dp(8), 1));
+
         TextView btnClose = buildActionBtn("关闭", 0x2230363D, pal.textMuted, v -> d.dismiss());
         btnRow.addView(btnClose);
 
-        root.addView(btnRow);
+        // 按钮较多时可横向滑动，避免大字号下挤压换行
+        HorizontalScrollView btnScroll = new HorizontalScrollView(context);
+        btnScroll.setHorizontalScrollBarEnabled(false);
+        btnScroll.setFillViewport(true);
+        btnScroll.addView(btnRow, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(btnScroll);
+        if (d.getWindow() != null) d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
         d.show();
     }
 

@@ -4709,6 +4709,33 @@ public class MainActivity extends AppCompatActivity {
             if (resultCode == RESULT_OK && data != null) {
                 handleImportToContainer(data);
             }
+        } else if (requestCode == REQUEST_CODE_EXPORT_DOCUMENT) {
+            java.util.function.Consumer<Uri> cb = pendingExportCallback;
+            pendingExportCallback = null;
+            if (cb != null) {
+                cb.accept(resultCode == RESULT_OK && data != null ? data.getData() : null);
+            }
+        }
+    }
+
+    // ================= 文件浏览器：单独导出到手机存储 (系统文档选择器) =================
+    public static final int REQUEST_CODE_EXPORT_DOCUMENT = 2002;
+    private java.util.function.Consumer<Uri> pendingExportCallback;
+
+    /** 调起系统「保存到」选择器，用户选定位置后回调目标 Uri（取消回调 null）。 */
+    public boolean launchCreateDocument(String fileName, String mime, java.util.function.Consumer<Uri> callback) {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mime != null ? mime : "application/octet-stream");
+        intent.putExtra(Intent.EXTRA_TITLE, fileName);
+        try {
+            pendingExportCallback = callback;
+            startActivityForResult(intent, REQUEST_CODE_EXPORT_DOCUMENT);
+            return true;
+        } catch (Exception e) {
+            pendingExportCallback = null;
+            Toast.makeText(this, "未能调起系统文件保存器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            return false;
         }
     }
 
