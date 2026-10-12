@@ -64,7 +64,7 @@ public class PetParamsDialog {
 
             LinearLayout root = new LinearLayout(context);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(12), dp(10), dp(12), dp(10));
+            root.setPadding(dp(12), dp(12), dp(12), dp(12));
 
             // ---- 顶栏：标题 + 返回按钮 ----
             LinearLayout topBar = new LinearLayout(context);
@@ -74,8 +74,8 @@ public class PetParamsDialog {
             TextView title = new TextView(context);
             title.setText("⚙️ 桌宠详细参数调节");
             title.setTextColor(0xFFE2E8F0);
-            title.setTextSize(12.5f);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setTextSize(12f);
+            title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
             topBar.addView(title, titleLp);
@@ -93,7 +93,7 @@ public class PetParamsDialog {
             hint.setText("滑动即生效 · 记忆持久化 · 杜绝遮挡桌宠");
             hint.setTextColor(0xFF64748B);
             hint.setTextSize(9.5f);
-            hint.setPadding(0, dp(1), 0, dp(4));
+            hint.setPadding(0, dp(2), 0, dp(4));
             root.addView(hint);
 
             // ---- 可滑动内容区 ----
@@ -196,7 +196,7 @@ public class PetParamsDialog {
             // ---- 底部重置与完成按钮 ----
             LinearLayout btnRow = new LinearLayout(context);
             btnRow.setOrientation(LinearLayout.HORIZONTAL);
-            btnRow.setPadding(0, dp(6), 0, 0);
+            btnRow.setPadding(0, dp(8), 0, 0);
 
             Button resetBtn = buildMiniBtn("↺ 重置默认", 0x22475569, 0x44475569, 0xFF94A3B8, v -> {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
@@ -244,7 +244,7 @@ public class PetParamsDialog {
 
                 GradientDrawable bg = new GradientDrawable();
                 bg.setColor(0xF6181A24);
-                bg.setCornerRadius(dp(14));
+                bg.setCornerRadius(dp(12));
                 bg.setStroke(dp(1), 0x3360A5FA);
                 window.setBackgroundDrawable(bg);
             }
@@ -286,7 +286,7 @@ public class PetParamsDialog {
     private View createInterjectSection() {
         LinearLayout box = new LinearLayout(context);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), dp(6), dp(8), dp(6));
+        box.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0x221E293B);
@@ -297,14 +297,14 @@ public class PetParamsDialog {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(2);
-        lp.bottomMargin = dp(6);
+        lp.bottomMargin = dp(8);
         box.setLayoutParams(lp);
 
         TextView title = new TextView(context);
         title.setText("💬 pi-btw 支线后台问答与专属聊天专区");
         title.setTextColor(0xFF38BDF8);
         title.setTextSize(11f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         box.addView(title);
 
         TextView tip = new TextView(context);
@@ -359,7 +359,7 @@ public class PetParamsDialog {
     private View createAutomationSection() {
         LinearLayout box = new LinearLayout(context);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), dp(6), dp(8), dp(6));
+        box.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0x221E293B);
@@ -370,7 +370,7 @@ public class PetParamsDialog {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(2);
-        lp.bottomMargin = dp(6);
+        lp.bottomMargin = dp(8);
         box.setLayoutParams(lp);
 
         LinearLayout row = new LinearLayout(context);
@@ -383,7 +383,7 @@ public class PetParamsDialog {
         title.setText("📱 手机自动化 (" + (isAutoRunning ? "🟢 已授权就绪" : "🟡 未开启无障碍") + ")");
         title.setTextColor(isAutoRunning ? 0xFF4ADE80 : 0xFFFBBF24);
         title.setTextSize(11f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         row.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button authBtn = buildMiniBtn(isAutoRunning ? "⚙️ 系统设置" : "🚀 去开启", 0xFF0284C7, 0xFF0369A1, 0xFFFFFFFF, v -> {
@@ -411,12 +411,12 @@ public class PetParamsDialog {
                                      int minVal, int maxVal, int offset, OnSliderChange callback) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(3), 0, dp(3));
+        row.setPadding(0, dp(4), 0, dp(4));
 
         TextView label = new TextView(context);
         label.setText(name + " · " + curVal + unit);
         label.setTextColor(0xFFCBD5E1);
-        label.setTextSize(10f);
+        label.setTextSize(11f);
         label.setPadding(0, 0, 0, 0);
         row.addView(label);
 
@@ -445,9 +445,9 @@ public class PetParamsDialog {
     private Button buildMiniBtn(String text, int bgNormal, int bgPressed, int textColor, View.OnClickListener clk) {
         Button btn = new Button(context);
         btn.setText(text);
-        btn.setTextSize(10.5f);
+        btn.setTextSize(11f);
         btn.setTextColor(textColor);
-        btn.setPadding(dp(6), dp(4), dp(6), dp(4));
+        btn.setPadding(dp(8), dp(4), dp(8), dp(4));
         btn.setMinHeight(dp(28));
         btn.setMinimumHeight(dp(28));
         btn.setMinWidth(0);
@@ -455,11 +455,11 @@ public class PetParamsDialog {
 
         GradientDrawable n = new GradientDrawable();
         n.setColor(bgNormal);
-        n.setCornerRadius(dp(8));
+        n.setCornerRadius(dp(10));
 
         GradientDrawable p = new GradientDrawable();
         p.setColor(bgPressed);
-        p.setCornerRadius(dp(8));
+        p.setCornerRadius(dp(10));
 
         StateListDrawable sld = new StateListDrawable();
         sld.addState(new int[]{android.R.attr.state_pressed}, p);

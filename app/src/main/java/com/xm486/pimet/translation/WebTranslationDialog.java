@@ -43,8 +43,8 @@ public class WebTranslationDialog {
         // 标题与副标题
         TextView titleTv = new TextView(context);
         titleTv.setText("🌐 网页通用翻译配置");
-        titleTv.setTextSize(17f);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        titleTv.setTextSize(16f);
+        titleTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         titleTv.setTextColor(palette.text);
         root.addView(titleTv);
 
@@ -52,20 +52,20 @@ public class WebTranslationDialog {
         subTitleTv.setText("无缝支持内部工作台及任意外部网站，多引擎极速解析");
         subTitleTv.setTextSize(12f);
         subTitleTv.setTextColor(palette.textMuted);
-        subTitleTv.setPadding(0, dp(context, 3), 0, dp(context, 14));
+        subTitleTv.setPadding(0, dp(context, 4), 0, dp(context, 16));
         root.addView(subTitleTv);
 
         // 1. 翻译引擎选择区
         TextView secEngineTv = new TextView(context);
         secEngineTv.setText("1. 翻译引擎策略");
-        secEngineTv.setTextSize(13.5f);
-        secEngineTv.setTypeface(Typeface.DEFAULT_BOLD);
+        secEngineTv.setTextSize(14f);
+        secEngineTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         secEngineTv.setTextColor(palette.accent);
         root.addView(secEngineTv);
 
         RadioGroup engineGroup = new RadioGroup(context);
         engineGroup.setOrientation(LinearLayout.VERTICAL);
-        engineGroup.setPadding(0, dp(context, 6), 0, dp(context, 10));
+        engineGroup.setPadding(0, dp(context, 8), 0, dp(context, 12));
 
         String curEngine = PiMetConfig.getTransEngine(context);
 
@@ -99,7 +99,7 @@ public class WebTranslationDialog {
         // 2. 自定义 API 参数区域 (可折叠 / 条件显示)
         LinearLayout customApiContainer = new LinearLayout(context);
         customApiContainer.setOrientation(LinearLayout.VERTICAL);
-        customApiContainer.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 12));
+        customApiContainer.setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12));
         customApiContainer.setBackground(ThemeManager.createSunkenDrawable(context, palette, 10f));
         customApiContainer.setVisibility(rbCustom.isChecked() ? View.VISIBLE : View.GONE);
 
@@ -132,10 +132,10 @@ public class WebTranslationDialog {
         // 3. 译文呈现模式
         TextView secModeTv = new TextView(context);
         secModeTv.setText("2. 译文呈现方式");
-        secModeTv.setTextSize(13.5f);
-        secModeTv.setTypeface(Typeface.DEFAULT_BOLD);
+        secModeTv.setTextSize(14f);
+        secModeTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         secModeTv.setTextColor(palette.accent);
-        secModeTv.setPadding(0, dp(context, 12), 0, dp(context, 6));
+        secModeTv.setPadding(0, dp(context, 12), 0, dp(context, 8));
         root.addView(secModeTv);
 
         RadioGroup modeGroup = new RadioGroup(context);
@@ -161,15 +161,15 @@ public class WebTranslationDialog {
         // 4. 动态 DOM 监听
         CheckBox cbLive = new CheckBox(context);
         cbLive.setText("实时翻译后续动态加载内容 (SPA / 滚动加载 / 流式响应)");
-        cbLive.setTextSize(12.5f);
+        cbLive.setTextSize(12f);
         cbLive.setTextColor(palette.text);
         cbLive.setChecked(PiMetConfig.isTransLiveEnabled(context));
-        cbLive.setPadding(0, dp(context, 8), 0, dp(context, 14));
+        cbLive.setPadding(0, dp(context, 8), 0, dp(context, 16));
         root.addView(cbLive);
 
         // 5. 测试结果展示标签
         TextView testStatusTv = new TextView(context);
-        testStatusTv.setTextSize(11.5f);
+        testStatusTv.setTextSize(12f);
         testStatusTv.setTextColor(palette.textMuted);
         testStatusTv.setVisibility(View.GONE);
         testStatusTv.setPadding(0, 0, 0, dp(context, 8));
@@ -182,27 +182,27 @@ public class WebTranslationDialog {
 
         Button btnTest = new Button(context);
         btnTest.setText("🧪 测试引擎");
-        btnTest.setTextSize(12.5f);
+        btnTest.setTextSize(12f);
         btnTest.setBackground(ThemeManager.createSecondaryButtonDrawable(context, palette, 8f));
         btnTest.setTextColor(palette.accent);
         LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(0, dp(context, 40), 1f);
-        testLp.setMarginEnd(dp(context, 6));
+        testLp.setMarginEnd(dp(context, 8));
         btnTest.setLayoutParams(testLp);
         btnRow.addView(btnTest);
 
         Button btnRestore = new Button(context);
         btnRestore.setText("🔄 还原原文");
-        btnRestore.setTextSize(12.5f);
+        btnRestore.setTextSize(12f);
         btnRestore.setBackground(ThemeManager.createSecondaryButtonDrawable(context, palette, 8f));
         btnRestore.setTextColor(palette.textMuted);
         LinearLayout.LayoutParams restoreLp = new LinearLayout.LayoutParams(0, dp(context, 40), 1f);
-        restoreLp.setMarginEnd(dp(context, 6));
+        restoreLp.setMarginEnd(dp(context, 8));
         btnRestore.setLayoutParams(restoreLp);
         btnRow.addView(btnRestore);
 
         Button btnSave = new Button(context);
         btnSave.setText("💾 保存并翻译");
-        btnSave.setTextSize(12.5f);
+        btnSave.setTextSize(12f);
         btnSave.setBackground(ThemeManager.createPrimaryButtonDrawable(context, palette, 8f));
         btnSave.setTextColor(palette.accentContrast);
         LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(0, dp(context, 40), 1.2f);
@@ -286,7 +286,7 @@ public class WebTranslationDialog {
     private static RadioButton createRadioButton(Context ctx, ThemeManager.ThemePalette palette, String text) {
         RadioButton rb = new RadioButton(ctx);
         rb.setText(text);
-        rb.setTextSize(12.5f);
+        rb.setTextSize(12f);
         rb.setTextColor(palette.text);
         rb.setPadding(dp(ctx, 4), dp(ctx, 4), 0, dp(ctx, 4));
         return rb;
@@ -304,7 +304,7 @@ public class WebTranslationDialog {
         et.setPadding(padH, padV, padH, padV);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, dp(ctx, 6), 0, 0);
+        lp.setMargins(0, dp(ctx, 8), 0, 0);
         et.setLayoutParams(lp);
         return et;
     }

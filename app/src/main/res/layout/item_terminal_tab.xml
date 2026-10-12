@@ -3,12 +3,12 @@
     android:id="@+id/tabRoot"
     android:layout_width="wrap_content"
     android:layout_height="26dp"
-    android:layout_marginEnd="6dp"
+    android:layout_marginEnd="@dimen/space_sm"
     android:background="@drawable/bg_btn_secondary"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingStart="10dp"
-    android:paddingEnd="8dp">
+    android:paddingStart="@dimen/space_md"
+    android:paddingEnd="@dimen/space_sm">
 
     <TextView
         android:id="@+id/tabTitleTv"
@@ -16,15 +16,15 @@
         android:layout_height="wrap_content"
         android:text="窗口 1"
         android:textColor="#C9D1D9"
-        android:textSize="11sp" />
+        android:textSize="@dimen/text_caption" />
 
     <TextView
         android:id="@+id/tabCloseBtn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="6dp"
-        android:paddingStart="3dp"
-        android:paddingEnd="3dp"
+        android:layout_marginStart="@dimen/space_sm"
+        android:paddingStart="@dimen/space_xs"
+        android:paddingEnd="@dimen/space_xs"
         android:text="✕"
         android:textColor="#8B949E"
         android:textSize="10sp" />

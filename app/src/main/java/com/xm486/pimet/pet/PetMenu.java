@@ -82,7 +82,7 @@ public class PetMenu {
 
             LinearLayout root = new LinearLayout(context);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(9), dp(7), dp(9), dp(8));
+            root.setPadding(dp(8), dp(8), dp(8), dp(8));
 
             GradientDrawable rootBg = new GradientDrawable();
             rootBg.setColor(0xF6131722);
@@ -99,14 +99,14 @@ public class PetMenu {
             title.setText("🐾 桌宠控制");
             title.setTextColor(0xFFF1F5F9);
             title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             topBar.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
             TextView closeBtn = new TextView(context);
             closeBtn.setText("✕");
             closeBtn.setTextColor(0xFF94A3B8);
-            closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            closeBtn.setPadding(dp(6), dp(1), dp(3), dp(1));
+            closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            closeBtn.setPadding(dp(8), dp(2), dp(4), dp(2));
             closeBtn.setOnClickListener(v -> dismiss());
             topBar.addView(closeBtn);
             root.addView(topBar);
@@ -117,7 +117,7 @@ public class PetMenu {
             LinearLayout.LayoutParams divLp1 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
             divLp1.topMargin = dp(4);
-            divLp1.bottomMargin = dp(5);
+            divLp1.bottomMargin = dp(4);
             root.addView(div1, divLp1);
 
             // ---- 监控目标标签行 (点按一键切换监控AI · 长按直达Web界面) ----
@@ -127,7 +127,7 @@ public class PetMenu {
             targetHeader.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
             LinearLayout.LayoutParams thLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            thLp.bottomMargin = dp(3);
+            thLp.bottomMargin = dp(4);
             root.addView(targetHeader, thLp);
 
             targetButtons.clear();
@@ -161,7 +161,7 @@ public class PetMenu {
             targetRow2.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams tr2Lp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(22));
-            tr2Lp.topMargin = dp(3);
+            tr2Lp.topMargin = dp(4);
 
             TextView btnClaw = createTargetButton("ClawBench", PetRegistry.TARGET_CLAWBENCH, v -> {
                 switchTarget(PetRegistry.TARGET_CLAWBENCH);
@@ -194,8 +194,8 @@ public class PetMenu {
             divTarget.setBackgroundColor(0x22475569);
             LinearLayout.LayoutParams divLpTarget = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-            divLpTarget.topMargin = dp(5);
-            divLpTarget.bottomMargin = dp(5);
+            divLpTarget.topMargin = dp(4);
+            divLpTarget.bottomMargin = dp(4);
             root.addView(divTarget, divLpTarget);
 
             // ---- 角色切换横排：[◀] [角色名] [▶] ----
@@ -221,11 +221,11 @@ public class PetMenu {
             petNameTv = new TextView(context);
             updatePetNameLabel();
             petNameTv.setTextColor(0xFFE2E8F0);
-            petNameTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            petNameTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             petNameTv.setGravity(Gravity.CENTER);
             petNameTv.setMaxLines(1);
             petNameTv.setEllipsize(TextUtils.TruncateAt.END);
-            petNameTv.setTypeface(Typeface.DEFAULT_BOLD);
+            petNameTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(0, dp(22), 1f);
             nameLp.leftMargin = dp(4);
             nameLp.rightMargin = dp(4);
@@ -249,13 +249,13 @@ public class PetMenu {
             petSizeLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
             LinearLayout.LayoutParams pslLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            pslLp.topMargin = dp(5);
+            pslLp.topMargin = dp(4);
             root.addView(petSizeLabel, pslLp);
 
             SeekBar petSizeBar = new SeekBar(context);
             petSizeBar.setMax(108); // 32 ~ 140
             petSizeBar.setProgress(curPetSize - 32);
-            petSizeBar.setPadding(dp(2), dp(1), dp(2), dp(1));
+            petSizeBar.setPadding(dp(2), dp(2), dp(2), dp(2));
             petSizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -280,13 +280,13 @@ public class PetMenu {
             menuWidthLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
             LinearLayout.LayoutParams mwlLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            mwlLp.topMargin = dp(3);
+            mwlLp.topMargin = dp(4);
             root.addView(menuWidthLabel, mwlLp);
 
             SeekBar menuWidthBar = new SeekBar(context);
             menuWidthBar.setMax(120); // 120 ~ 240
             menuWidthBar.setProgress(initialMenuWidth - 120);
-            menuWidthBar.setPadding(dp(2), dp(1), dp(2), dp(1));
+            menuWidthBar.setPadding(dp(2), dp(2), dp(2), dp(2));
             menuWidthBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -313,7 +313,7 @@ public class PetMenu {
             LinearLayout.LayoutParams divLp2 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
             divLp2.topMargin = dp(4);
-            divLp2.bottomMargin = dp(5);
+            divLp2.bottomMargin = dp(4);
             root.addView(div2, divLp2);
 
             // ---- 桌宠专属子代理功能行: [🧠 汇报进度] [🗣️ 主动说话: 开/关] ----
@@ -589,7 +589,7 @@ public class PetMenu {
                 normal.setColor(0x3310B981);
                 normal.setStroke(dp(1), 0xFF10B981);
                 btn.setTextColor(0xFF34D399);
-                btn.setTypeface(Typeface.DEFAULT_BOLD);
+                btn.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
                 btn.setText("● " + getTargetLabel(key));
             } else {
                 normal.setColor(0x221E293B);
@@ -639,7 +639,7 @@ public class PetMenu {
     private TextView buildCompactActionBtn(String text, int normalColor, int strokeColor, int textColor, View.OnClickListener listener) {
         TextView btn = new TextView(context);
         btn.setText(text);
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         btn.setTextColor(textColor);
         btn.setGravity(Gravity.CENTER);
         btn.setClickable(true);

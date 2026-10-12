@@ -214,7 +214,7 @@ public class PiWebActivity extends AppCompatActivity {
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setPadding(dp(10), 0, dp(8), 0);
+        topBar.setPadding(dp(12), 0, dp(8), 0);
         GradientDrawable barBg = new GradientDrawable();
         barBg.setColor(0xE6201B2E); // 半透明深色背景
         barBg.setCornerRadius(0);
@@ -230,7 +230,7 @@ public class PiWebActivity extends AppCompatActivity {
         statusText.setText(getTargetName(port) + " :" + port);
         statusText.setTextSize(11f);
         statusText.setTextColor(0xDDFFFFFF);
-        statusText.setPadding(dp(6), 0, dp(4), 0);
+        statusText.setPadding(dp(8), 0, dp(4), 0);
         topBar.addView(statusText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         // 刷新小按钮
@@ -296,7 +296,7 @@ public class PiWebActivity extends AppCompatActivity {
         FrameLayout.LayoutParams expLp = new FrameLayout.LayoutParams(dp(28), dp(28));
         expLp.gravity = Gravity.TOP | Gravity.END;
         expLp.topMargin = dp(4);
-        expLp.rightMargin = dp(6);
+        expLp.rightMargin = dp(8);
         root.addView(restoreBtn, expLp);
 
         setContentView(root);
@@ -305,13 +305,13 @@ public class PiWebActivity extends AppCompatActivity {
     private Button createTinyButton(String text, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextSize(10.5f);
+        b.setTextSize(11f);
         b.setTextColor(0xFFFFFFFF);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0x33FFFFFF);
         bg.setCornerRadius(dp(6));
         b.setBackground(bg);
-        b.setPadding(dp(6), 0, dp(6), 0);
+        b.setPadding(dp(8), 0, dp(8), 0);
         b.setMinHeight(0);
         b.setMinWidth(0);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(

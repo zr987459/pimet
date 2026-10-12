@@ -894,7 +894,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout item = new LinearLayout(this);
             item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
-            item.setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6));
+            item.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
             item.setBackground(selected ? ThemeManager.createPrimaryButtonDrawable(this, palette, 8f) : ThemeManager.createSunkenDrawable(this, palette, 8f));
 
             ImageView iv = new ImageView(this);
@@ -916,7 +916,7 @@ public class MainActivity extends AppCompatActivity {
             tv.setMaxLines(1);
             tv.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(thumbSize + dpToPx(8), LinearLayout.LayoutParams.WRAP_CONTENT);
-            tvLp.topMargin = dpToPx(3);
+            tvLp.topMargin = dpToPx(4);
             item.addView(tv, tvLp);
 
             item.setOnClickListener(v -> {
@@ -1121,7 +1121,7 @@ public class MainActivity extends AppCompatActivity {
             AlertDialog.Builder builder = new AlertDialog.Builder(this);
             LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+            root.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
 
             // ---- 顶栏：标题 + ✕ 关闭 ----
             LinearLayout topBar = new LinearLayout(this);
@@ -1131,15 +1131,15 @@ public class MainActivity extends AppCompatActivity {
             TextView title = new TextView(this);
             title.setText("🐾 桌宠控制中心");
             title.setTextColor(0xFFF0F6FC);
-            title.setTextSize(12.5f);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setTextSize(12f);
+            title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             topBar.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
             TextView closeBtn = new TextView(this);
             closeBtn.setText("✕");
             closeBtn.setTextColor(0xFF8B949E);
             closeBtn.setTextSize(13f);
-            closeBtn.setPadding(dpToPx(6), dpToPx(2), dpToPx(4), dpToPx(2));
+            closeBtn.setPadding(dpToPx(8), dpToPx(2), dpToPx(4), dpToPx(2));
             closeBtn.setOnClickListener(v -> {
                 if (petHudDialog != null) petHudDialog.dismiss();
             });
@@ -1151,8 +1151,8 @@ public class MainActivity extends AppCompatActivity {
             div1.setBackgroundColor(0x2230363D);
             LinearLayout.LayoutParams divLp1 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
-            divLp1.topMargin = dpToPx(6);
-            divLp1.bottomMargin = dpToPx(6);
+            divLp1.topMargin = dpToPx(8);
+            divLp1.bottomMargin = dpToPx(8);
             root.addView(div1, divLp1);
 
             // ---- 监控目标标签行 (Operit / pi-web / ClawBench / RikkaHub) 学习自 DevPetM 架构 ----
@@ -1188,7 +1188,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout.LayoutParams divLp2 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
             divLp2.topMargin = dpToPx(8);
-            divLp2.bottomMargin = dpToPx(6);
+            divLp2.bottomMargin = dpToPx(8);
             root.addView(div2, divLp2);
 
             // ---- 角色形象切换器 ◀ 名字 ▶ ----
@@ -1210,8 +1210,8 @@ public class MainActivity extends AppCompatActivity {
             TextView tvPetName = new TextView(this);
             tvPetName.setGravity(Gravity.CENTER);
             tvPetName.setTextColor(0xFFF0F6FC);
-            tvPetName.setTextSize(11.5f);
-            tvPetName.setTypeface(Typeface.DEFAULT_BOLD);
+            tvPetName.setTextSize(12f);
+            tvPetName.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             tvPetName.setText((petIdx[0] + 1) + "/" + allPets.size() + " " + (allPets.isEmpty() ? curPetDir : allPets.get(petIdx[0]).displayName));
 
             TextView btnNext = createHudChip("▶", 0x223B82F6, 0xFF58A6FF, null);
@@ -1254,7 +1254,7 @@ public class MainActivity extends AppCompatActivity {
             // ---- 才艺互动芯片 (跳舞 / 挥手 / 翻跟斗) ----
             LinearLayout actionChipsRow = new LinearLayout(this);
             actionChipsRow.setOrientation(LinearLayout.HORIZONTAL);
-            actionChipsRow.setPadding(0, dpToPx(6), 0, 0);
+            actionChipsRow.setPadding(0, dpToPx(8), 0, 0);
 
             TextView btnDance = createHudChip("💃 跳舞", 0x228B5CF6, 0xFFC4B5FD, v -> {
                 if (floatingPetView != null) {
@@ -1288,7 +1288,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout.LayoutParams divLp3 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
             divLp3.topMargin = dpToPx(8);
-            divLp3.bottomMargin = dpToPx(6);
+            divLp3.bottomMargin = dpToPx(8);
             root.addView(div3, divLp3);
 
             // ---- 快捷工具栏按钮 ----
@@ -1354,7 +1354,7 @@ public class MainActivity extends AppCompatActivity {
 
                 GradientDrawable bg = new GradientDrawable();
                 bg.setColor(0xF4181A22);
-                bg.setCornerRadius(dpToPx(13));
+                bg.setCornerRadius(dpToPx(12));
                 bg.setStroke(dpToPx(1), 0x33475569);
                 window.setBackgroundDrawable(bg);
             }
@@ -1394,9 +1394,9 @@ public class MainActivity extends AppCompatActivity {
         boolean isActive = targetKey.equals(activeTarget);
         TextView chip = new TextView(this);
         chip.setText("⏳ " + displayName + "...");
-        chip.setTextSize(10.5f);
+        chip.setTextSize(11f);
         chip.setGravity(Gravity.CENTER);
-        chip.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+        chip.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
         applyHudChipStyle(chip, isActive, false);
 
         // 毫秒级异步端口探测
@@ -1472,7 +1472,7 @@ public class MainActivity extends AppCompatActivity {
         tv.setTextColor(textColor);
         tv.setTextSize(11f);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+        tv.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
 
         GradientDrawable n = new GradientDrawable();
         n.setColor(bgColor);
@@ -1645,7 +1645,7 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(18), dpToPx(12), dpToPx(18), dpToPx(12));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         EditText etPiWeb = createPortDialogRow(layout, "Pi-Web 工作台端口:", String.valueOf(PiMetConfig.getWebPort(this)));
         EditText etOperit = createPortDialogRow(layout, "Operit 伴侣服务端口:", String.valueOf(PetRegistry.getOperitPort(this)));
@@ -1688,7 +1688,7 @@ public class MainActivity extends AppCompatActivity {
         tv.setText(label);
         tv.setTextColor(0xFFCBD5E1);
         tv.setTextSize(12f);
-        tv.setPadding(0, dpToPx(6), 0, dpToPx(2));
+        tv.setPadding(0, dpToPx(8), 0, dpToPx(2));
         parent.addView(tv);
 
         LinearLayout row = new LinearLayout(this);
@@ -1705,7 +1705,7 @@ public class MainActivity extends AppCompatActivity {
         et.setPadding(dpToPx(8), 0, dpToPx(8), 0);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xFF0D1117);
-        bg.setCornerRadius(dpToPx(4));
+        bg.setCornerRadius(dpToPx(6));
         bg.setStroke(dpToPx(1), 0x33475569);
         et.setBackground(bg);
         row.addView(et);
@@ -1715,10 +1715,10 @@ public class MainActivity extends AppCompatActivity {
         btnTest.setTextColor(0xFFC9D1D9);
         btnTest.setTextSize(11f);
         btnTest.setGravity(Gravity.CENTER);
-        btnTest.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        btnTest.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
         GradientDrawable tbg = new GradientDrawable();
         tbg.setColor(0x2230363D);
-        tbg.setCornerRadius(dpToPx(4));
+        tbg.setCornerRadius(dpToPx(6));
         tbg.setStroke(dpToPx(1), 0x22FFFFFF);
         btnTest.setBackground(tbg);
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
@@ -1727,7 +1727,7 @@ public class MainActivity extends AppCompatActivity {
         row.addView(btnTest, btnLp);
 
         TextView tvStatus = new TextView(this);
-        tvStatus.setTextSize(10.5f);
+        tvStatus.setTextSize(11f);
         tvStatus.setTextColor(0xFF8B949E);
         tvStatus.setVisibility(View.GONE);
         tvStatus.setPadding(dpToPx(2), dpToPx(2), 0, 0);
@@ -2532,7 +2532,7 @@ public class MainActivity extends AppCompatActivity {
         input.setSelection(input.getText().length());
         input.setTextColor(0xFFF0F6FC);
         input.setBackgroundColor(0xFF0D1117);
-        input.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+        input.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
 
         new AlertDialog.Builder(this)
                 .setTitle("🌐 自定义 Pi-Web 启动端口")
@@ -3251,13 +3251,13 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16));
+        layout.setPadding(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16));
         layout.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
 
         TextView title = new TextView(this);
         title.setText("🔍 工作台显示缩放调节");
-        title.setTextSize(15f);
-        title.setTypeface(null, Typeface.BOLD);
+        title.setTextSize(16f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         title.setTextColor(palette.text);
         layout.addView(title);
 
@@ -3342,11 +3342,11 @@ public class MainActivity extends AppCompatActivity {
         TextView btnDone = new TextView(this);
         btnDone.setText("完成");
         btnDone.setTextSize(13f);
-        btnDone.setTypeface(null, Typeface.BOLD);
+        btnDone.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         btnDone.setGravity(Gravity.CENTER);
         btnDone.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
         btnDone.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 8f));
-        btnDone.setPadding(0, dpToPx(10), 0, dpToPx(10));
+        btnDone.setPadding(0, dpToPx(12), 0, dpToPx(12));
         LinearLayout.LayoutParams doneLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         doneLp.topMargin = dpToPx(16);
@@ -3969,7 +3969,7 @@ public class MainActivity extends AppCompatActivity {
         tvStage.setText("正在准备升级环境...");
         tvStage.setTextColor(0xFFF0F6FC);
         tvStage.setTextSize(13f);
-        tvStage.setTypeface(null, Typeface.BOLD);
+        tvStage.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         layout.addView(tvStage);
 
         ProgressBar pBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -3977,8 +3977,8 @@ public class MainActivity extends AppCompatActivity {
         pBar.setProgress(5);
         LinearLayout.LayoutParams pbParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(6));
-        pbParams.topMargin = dpToPx(10);
-        pbParams.bottomMargin = dpToPx(6);
+        pbParams.topMargin = dpToPx(12);
+        pbParams.bottomMargin = dpToPx(8);
         pBar.setLayoutParams(pbParams);
         layout.addView(pBar);
 
@@ -4001,11 +4001,11 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(120));
         logScrollView.setLayoutParams(svParams);
         logScrollView.setBackgroundColor(0xFF161B22);
-        logScrollView.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        logScrollView.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
 
         TextView tvLiveLog = new TextView(this);
         tvLiveLog.setTextColor(0xFF7EE787);
-        tvLiveLog.setTextSize(10f);
+        tvLiveLog.setTextSize(11f);
         tvLiveLog.setTypeface(Typeface.MONOSPACE);
         tvLiveLog.setText("[info] 启动更新流水线...\n");
         logScrollView.addView(tvLiveLog);
@@ -4404,13 +4404,13 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dpToPx(12), dpToPx(9), dpToPx(12), dpToPx(9));
+        row.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(isSelected ? ThemeManager.createSelectedOptionDrawable(this, palette, 8f) : ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dpToPx(6);
+        lp.topMargin = dpToPx(8);
         row.setLayoutParams(lp);
 
         LinearLayout textCol = new LinearLayout(this);
@@ -4420,14 +4420,14 @@ public class MainActivity extends AppCompatActivity {
         TextView titleTv = new TextView(this);
         titleTv.setText(title);
         titleTv.setTextColor(isSelected ? palette.accent : palette.text);
-        titleTv.setTextSize(12.5f);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        titleTv.setTextSize(12f);
+        titleTv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         textCol.addView(titleTv);
 
         TextView subTv = new TextView(this);
         subTv.setText(subtitle);
         subTv.setTextColor(palette.textMuted);
-        subTv.setTextSize(10.5f);
+        subTv.setTextSize(11f);
         textCol.addView(subTv);
 
         row.addView(textCol);
@@ -4439,15 +4439,15 @@ public class MainActivity extends AppCompatActivity {
             speedBadge.setText(speedStr);
             speedBadge.setTextColor(speedStr.contains("FAIL") ? 0xFFF85149 : palette.accent);
             speedBadge.setTextSize(11f);
-            speedBadge.setPadding(dpToPx(6), 0, dpToPx(8), 0);
+            speedBadge.setPadding(dpToPx(8), 0, dpToPx(8), 0);
             row.addView(speedBadge);
         }
 
         TextView checkTv = new TextView(this);
         checkTv.setText(isSelected ? "✔" : "");
         checkTv.setTextColor(palette.accent);
-        checkTv.setTextSize(15f);
-        checkTv.setTypeface(Typeface.DEFAULT_BOLD);
+        checkTv.setTextSize(16f);
+        checkTv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         row.addView(checkTv);
 
         row.setOnClickListener(v -> {
@@ -4871,7 +4871,7 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
-        card.setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(12));
+        card.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dpToPx(8);
@@ -4885,7 +4885,7 @@ public class MainActivity extends AppCompatActivity {
         title.setText(item.name);
         title.setTextColor(palette.text);
         title.setTextSize(14f);
-        title.setTypeface(null, Typeface.BOLD);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
         title.setLayoutParams(tLp);
         header.addView(title);
@@ -4895,18 +4895,18 @@ public class MainActivity extends AppCompatActivity {
         badge.setTextColor(palette.accent);
         badge.setTextSize(11f);
         badge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
+        badge.setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2));
         header.addView(badge);
 
         TextView stateBadge = new TextView(this);
         stateBadge.setText(item.enabled ? "已启用" : "已停用");
         stateBadge.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
-        stateBadge.setTextSize(10.5f);
+        stateBadge.setTextSize(11f);
         stateBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        stateBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+        stateBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
         LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sbLp.leftMargin = dpToPx(6);
+        sbLp.leftMargin = dpToPx(8);
         stateBadge.setLayoutParams(sbLp);
         header.addView(stateBadge);
 
@@ -4919,12 +4919,12 @@ public class MainActivity extends AppCompatActivity {
                 vBadge.setText("v" + item.version);
                 vBadge.setTextColor(palette.textMuted);
             }
-            vBadge.setTextSize(10.5f);
+            vBadge.setTextSize(11f);
             vBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-            vBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+            vBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
             LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            vbLp.leftMargin = dpToPx(6);
+            vbLp.leftMargin = dpToPx(8);
             vBadge.setLayoutParams(vbLp);
             header.addView(vBadge);
         }
@@ -4946,7 +4946,7 @@ public class MainActivity extends AppCompatActivity {
         desc.setLineSpacing(dpToPx(2), 1f);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        dLp.topMargin = dpToPx(6);
+        dLp.topMargin = dpToPx(8);
         desc.setLayoutParams(dLp);
         card.addView(desc);
 
@@ -4962,10 +4962,10 @@ public class MainActivity extends AppCompatActivity {
         TextView btnToggle = new TextView(this);
         btnToggle.setText(item.enabled ? "🟢 启停: 开" : "⏸ 启停: 关");
         btnToggle.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E));
-        btnToggle.setTextSize(11.5f);
-        btnToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        btnToggle.setTextSize(12f);
+        btnToggle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         btnToggle.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnToggle.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnToggle.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnToggle.setOnClickListener(v -> {
             boolean nextState = !item.enabled;
             boolean ok = PluginManager.setPluginEnabled(this, item, nextState);
@@ -4985,9 +4985,9 @@ public class MainActivity extends AppCompatActivity {
         TextView btnConfig = new TextView(this);
         btnConfig.setText("⚙️ 配置/详情");
         btnConfig.setTextColor(palette.text);
-        btnConfig.setTextSize(11.5f);
+        btnConfig.setTextSize(12f);
         btnConfig.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnConfig.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnConfig.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnConfig.setOnClickListener(v -> showEditPluginConfigDialog(item));
         actions.addView(btnConfig);
 
@@ -4999,9 +4999,9 @@ public class MainActivity extends AppCompatActivity {
             TextView btnUpdate = new TextView(this);
             btnUpdate.setText(item.latestVersion.isEmpty() ? "🆙 更新插件" : ("🆙 升级至 v" + item.latestVersion));
             btnUpdate.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
-            btnUpdate.setTextSize(11.5f);
+            btnUpdate.setTextSize(12f);
             btnUpdate.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-            btnUpdate.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+            btnUpdate.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
             btnUpdate.setOnClickListener(v -> {
                 Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
                 new Thread(() -> {
@@ -5023,9 +5023,9 @@ public class MainActivity extends AppCompatActivity {
         TextView btnDelete = new TextView(this);
         btnDelete.setText("🗑️ 移除");
         btnDelete.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
-        btnDelete.setTextSize(11.5f);
+        btnDelete.setTextSize(12f);
         btnDelete.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnDelete.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnDelete.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnDelete.setOnClickListener(v -> {
             new AlertDialog.Builder(this)
                     .setTitle("确认移除插件")
@@ -5084,7 +5084,7 @@ public class MainActivity extends AppCompatActivity {
     private void showAddMcpDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText nameInput = createDialogInput("服务名称 (如 fetch 或 mt)", false);
         final EditText cmdInput = createDialogInput("命令或 HTTP URL (如 npx, uvx, 或 http://127.0.0.1:8788/mcp)", false);
@@ -5131,7 +5131,7 @@ public class MainActivity extends AppCompatActivity {
     private void showAddSkillDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText nameInput = createDialogInput("技能目录名 (如 code-review)", false);
         final EditText contentInput = createDialogInput("# 技能描述与流程规范\n\n## When to use\n...", true);
@@ -5167,7 +5167,7 @@ public class MainActivity extends AppCompatActivity {
     private void showEditGlobalSettingsDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         String currentJson = PluginManager.getGlobalSettings(this);
         final EditText contentInput = createDialogInput("", true);
@@ -5205,7 +5205,7 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText contentInput = createDialogInput("", true);
         contentInput.setText(content);
@@ -5242,10 +5242,10 @@ public class MainActivity extends AppCompatActivity {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(0xFF8B949E);
-        tv.setTextSize(11.5f);
+        tv.setTextSize(12f);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dpToPx(6);
+        lp.topMargin = dpToPx(8);
         lp.bottomMargin = dpToPx(2);
         tv.setLayoutParams(lp);
         return tv;
@@ -5258,7 +5258,7 @@ public class MainActivity extends AppCompatActivity {
         et.setHintTextColor(0xFF484F58);
         et.setTextSize(12f);
         et.setBackgroundColor(0xFF0D1117);
-        et.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        et.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
         if (multiline) {
             et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             et.setGravity(Gravity.TOP | Gravity.START);
@@ -5396,11 +5396,11 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(0, dpToPx(3), 0, dpToPx(3));
+            row.setPadding(0, dpToPx(4), 0, dpToPx(4));
 
             final TextView label = new TextView(this);
             label.setText(name);
-            label.setTextSize(11.5f);
+            label.setTextSize(12f);
             label.setTextColor(palette.textMuted);
             label.setMaxLines(1);
             row.addView(label, new LinearLayout.LayoutParams(
@@ -5408,7 +5408,7 @@ public class MainActivity extends AppCompatActivity {
 
             final TextView valueText = new TextView(this);
             valueText.setText(cur + " " + unit);
-            valueText.setTextSize(11.5f);
+            valueText.setTextSize(12f);
             valueText.setTypeface(Typeface.MONOSPACE);
             valueText.setTextColor(palette.accent);
             valueText.setGravity(Gravity.END);
@@ -5660,8 +5660,8 @@ public class MainActivity extends AppCompatActivity {
         TextView tvTitle = new TextView(this);
         tvTitle.setText(title);
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvStage = new TextView(this);
@@ -5682,7 +5682,7 @@ public class MainActivity extends AppCompatActivity {
         TextView tvDetail = new TextView(this);
         tvDetail.setText("");
         tvDetail.setTextColor(0xFF8B949E);
-        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvDetail.setTypeface(Typeface.MONOSPACE);
         tvDetail.setSingleLine(true);
         tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);

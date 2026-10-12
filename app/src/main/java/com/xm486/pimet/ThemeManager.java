@@ -4,7 +4,11 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.graphics.Paint;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Build;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +25,8 @@ import java.util.List;
  * 深度对齐 Pi-Web 官方 UI 设计语言与配色规范。
  * 支持系统自适应与 Light、Dark、Mist、Rose、Pine 5套原生色彩矩阵。
  * 具备整树递归无损着色引擎，全面覆盖原生卡片、面板、输入框、按钮及文本。
+ * 视觉规范：极简风格 —— 扁平表面、1dp 发丝描边、统一圆角/间距/字号阶梯（见下方 Design Token），
+ * 所有颜色均派生自 ThemePalette，切换主题时不引入任何额外色值。
  */
 public class ThemeManager {
 
@@ -237,109 +243,187 @@ public class ThemeManager {
         return (int) (dp * context.getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    // ================= Drawable 生成工厂 =================
+    // ================= 极简设计 Token (Minimal Design Tokens) =================
+    // 与 res/values/dimens.xml 保持一致。只约束尺寸/间距/圆角/字号，颜色全部来自 ThemePalette。
 
-    public static GradientDrawable createCardDrawable(Context context, ThemePalette palette, float radiusDp) {
+    /** 间距阶梯 (dp)：4 / 8 / 12 / 16 / 24 */
+    public static final float SPACE_XXS = 2f;
+    public static final float SPACE_XS = 4f;
+    public static final float SPACE_SM = 8f;
+    public static final float SPACE_MD = 12f;
+    public static final float SPACE_LG = 16f;
+    public static final float SPACE_XL = 24f;
+
+    /** 圆角 (dp)：小徽章 / 控件(按钮、输入框、选项) / 卡片 / 胶囊 */
+    public static final float RADIUS_SMALL = 6f;
+    public static final float RADIUS_CONTROL = 10f;
+    public static final float RADIUS_CARD = 12f;
+    public static final float RADIUS_PILL = 16f;
+
+    /** 发丝描边 (dp) */
+    public static final float HAIRLINE = 1f;
+
+    /** 控件高度 (dp) */
+    public static final float CONTROL_HEIGHT = 44f;
+    public static final float CONTROL_HEIGHT_COMPACT = 32f;
+    public static final float CTA_HEIGHT = 48f;
+
+    /** 字号阶梯 (sp)：11 / 12 / 13 / 14 / 16 / 20 */
+    public static final float TEXT_CAPTION = 11f;
+    public static final float TEXT_SMALL = 12f;
+    public static final float TEXT_BODY_SMALL = 13f;
+    public static final float TEXT_BODY = 14f;
+    public static final float TEXT_TITLE = 16f;
+    public static final float TEXT_HEADLINE = 20f;
+
+    /** 将任意圆角吸附到统一的圆角体系：≤7 → 小徽章，≤11 → 控件，<16 → 卡片，≥16 保留（胶囊/圆形）。 */
+    public static float snapRadius(float radiusDp) {
+        if (radiusDp <= 0f) return 0f;
+        if (radiusDp <= 7f) return RADIUS_SMALL;
+        if (radiusDp <= 11f) return RADIUS_CONTROL;
+        if (radiusDp < 16f) return RADIUS_CARD;
+        return radiusDp;
+    }
+
+    /** 将任意字号吸附到统一字号阶梯；超出阶梯的大字号（如图标/表情）保持不变。 */
+    public static float snapTextSize(float sp) {
+        if (sp <= 0f || sp > 20f) return sp;
+        if (sp < 11.25f) return TEXT_CAPTION;
+        if (sp < 12.75f) return TEXT_SMALL;
+        if (sp < 13.25f) return TEXT_BODY_SMALL;
+        if (sp < 14.75f) return TEXT_BODY;
+        if (sp < 19f) return TEXT_TITLE;
+        return TEXT_HEADLINE;
+    }
+
+    /** 将任意间距吸附到 4 / 8 / 12 / 16 / 24 阶梯；超出 28dp 的特殊间距保持不变。 */
+    public static float snapSpacing(float dp) {
+        if (dp <= 0f || dp > 28f) return dp;
+        if (dp <= 2f) return SPACE_XXS;
+        if (dp <= 5f) return SPACE_XS;
+        if (dp <= 9f) return SPACE_SM;
+        if (dp <= 13f) return SPACE_MD;
+        if (dp <= 18f) return SPACE_LG;
+        return SPACE_XL;
+    }
+
+    public static int hairlinePx(Context context) {
+        return Math.max(1, dpToPx(context, HAIRLINE));
+    }
+
+    private static float systemDensity() {
+        return android.content.res.Resources.getSystem().getDisplayMetrics().density;
+    }
+
+    /** 像素版本的圆角吸附（用于仅传入 px 的旧接口）。 */
+    private static int snapRadiusPx(int radiusPx) {
+        float density = systemDensity();
+        if (density <= 0f) return radiusPx;
+        return (int) (snapRadius(radiusPx / density) * density + 0.5f);
+    }
+
+    private static int hairlinePx() {
+        return Math.max(1, (int) (HAIRLINE * systemDensity() + 0.5f));
+    }
+
+    private static GradientDrawable flat(int color, int radiusPx) {
         GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgPanel);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        gd.setShape(GradientDrawable.RECTANGLE);
+        gd.setColor(color);
+        gd.setCornerRadius(radiusPx);
+        return gd;
+    }
+
+    // ================= Drawable 生成工厂（极简：扁平 + 发丝描边 + 统一圆角） =================
+
+    /** 卡片：面板底色 + 1dp 发丝描边，无阴影。 */
+    public static GradientDrawable createCardDrawable(Context context, ThemePalette palette, float radiusDp) {
+        GradientDrawable gd = flat(palette.bgPanel, dpToPx(context, snapRadius(radiusDp)));
+        gd.setStroke(hairlinePx(context), palette.border);
         return gd;
     }
 
     public static GradientDrawable createCardDrawable(ThemePalette palette, int radiusPx) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgPanel);
-        gd.setCornerRadius(radiusPx);
-        gd.setStroke(1, palette.border);
+        GradientDrawable gd = flat(palette.bgPanel, snapRadiusPx(radiusPx));
+        gd.setStroke(hairlinePx(), palette.border);
         return gd;
     }
 
+    /** 选中项：强调色浅底 + 1dp 强调色描边。 */
     public static GradientDrawable createSelectedOptionDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.accentSubtle);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(2, dpToPx(context, 1.5f)), palette.accent);
+        GradientDrawable gd = flat(palette.accentSubtle, dpToPx(context, snapRadius(radiusDp)));
+        gd.setStroke(hairlinePx(context), palette.accent);
         return gd;
     }
 
+    /** 次级按钮 / 未选中项：纯色扁平填充，无描边。 */
     public static GradientDrawable createSecondaryButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgHover);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
-        return gd;
+        return flat(palette.bgHover, dpToPx(context, snapRadius(radiusDp)));
     }
 
     public static GradientDrawable createSecondaryButtonDrawable(ThemePalette palette, int radiusPx) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgHover);
-        gd.setCornerRadius(radiusPx);
-        gd.setStroke(1, palette.border);
-        return gd;
+        return flat(palette.bgHover, snapRadiusPx(radiusPx));
     }
 
+    /** 主按钮：强调色纯色填充。 */
     public static GradientDrawable createPrimaryButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.accent);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        return gd;
+        return flat(palette.accent, dpToPx(context, snapRadius(radiusDp)));
     }
 
     public static GradientDrawable createPrimaryButtonDrawable(ThemePalette palette, int radiusPx) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.accent);
-        gd.setCornerRadius(radiusPx);
-        return gd;
+        return flat(palette.accent, snapRadiusPx(radiusPx));
     }
 
+    /** 下沉区域（日志/控制台/快捷栏）：下沉底色，无描边，靠底色层级区分。 */
     public static GradientDrawable createSunkenDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgSunken);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
-        return gd;
+        return flat(palette.bgSunken, dpToPx(context, snapRadius(radiusDp)));
     }
 
     public static GradientDrawable createSuccessButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
         int greenColor = palette.isDark ? 0xFF238636 : 0xFF2EA043;
-        gd.setColor(greenColor);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        return gd;
+        return flat(greenColor, dpToPx(context, snapRadius(radiusDp)));
     }
 
     public static GradientDrawable createDangerButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
         int redColor = palette.isDark ? 0xFFDA3633 : 0xFFCF222E;
-        gd.setColor(redColor);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        return gd;
+        return flat(redColor, dpToPx(context, snapRadius(radiusDp)));
     }
 
+    /** 输入框：保留 1dp 发丝描边以提示可输入。 */
     public static GradientDrawable createInputDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
         int inputBg = palette.isDark ? palette.bg : palette.bgPanel;
-        gd.setColor(inputBg);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
+        GradientDrawable gd = flat(inputBg, dpToPx(context, snapRadius(radiusDp)));
+        gd.setStroke(hairlinePx(context), palette.border);
         return gd;
     }
 
+    /** 徽章：强调色浅底，无描边。 */
     public static GradientDrawable createBadgeDrawable(Context context, ThemePalette palette, float radiusDp) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.accentSubtle);
-        gd.setCornerRadius(dpToPx(context, radiusDp));
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
-        return gd;
+        return flat(palette.accentSubtle, dpToPx(context, snapRadius(radiusDp)));
     }
 
-    public static GradientDrawable createNavBarDrawable(Context context, ThemePalette palette) {
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(palette.bgPanel);
-        gd.setStroke(Math.max(1, dpToPx(context, 1f)), palette.border);
-        return gd;
+    /** 底部导航：面板底色 + 仅顶部 1dp 发丝分隔线。 */
+    public static Drawable createNavBarDrawable(Context context, ThemePalette palette) {
+        GradientDrawable line = new GradientDrawable();
+        line.setColor(palette.border);
+        GradientDrawable body = new GradientDrawable();
+        body.setColor(palette.bgPanel);
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{line, body});
+        ld.setLayerInset(1, 0, hairlinePx(context), 0, 0);
+        return ld;
     }
+
+    /** 将加粗标题统一为 Medium 字重（等宽字体与非加粗文本保持不变）。 */
+    public static void applyMediumWeight(TextView tv) {
+        if (tv == null || tv instanceof EditText) return;
+        Typeface tf = tv.getTypeface();
+        if (tf == null || !tf.isBold()) return;
+        Paint p = tv.getPaint();
+        if (p != null && Math.abs(p.measureText("i") - p.measureText("W")) < 0.5f) return; // 等宽字体
+        tv.setTypeface(MEDIUM_TYPEFACE);
+    }
+
+    public static final Typeface MEDIUM_TYPEFACE = Typeface.create("sans-serif-medium", Typeface.NORMAL);
 
     // ================= 视图层级递归主题应用 (Tree Theming Engine) =================
 
@@ -347,6 +431,9 @@ public class ThemeManager {
         if (v == null || palette == null) return;
 
         styleSingleView(v, palette);
+        if (v instanceof TextView) {
+            applyMediumWeight((TextView) v);
+        }
 
         if (v instanceof ViewGroup) {
             ViewGroup vg = (ViewGroup) v;
@@ -363,7 +450,7 @@ public class ThemeManager {
         // 1. 输入框 (EditText)
         if (v instanceof EditText) {
             EditText et = (EditText) v;
-            et.setBackground(createInputDrawable(ctx, palette, 8f));
+            et.setBackground(createInputDrawable(ctx, palette, RADIUS_CONTROL));
             if ("launchPortInput".equals(idName)) {
                 et.setTextColor(palette.accent);
             } else {
@@ -382,14 +469,14 @@ public class ThemeManager {
                         || idName.equals("btnCheckAppUpdate") || idName.equals("btnSmartInstall")
                         || idName.equals("btnInstallCustomPlugin") || idName.equals("btnLaunchPortApplySave")
                         || idName.equals("btnSendFloatPetChat") || idName.equals("btnSmartFix")) {
-                    tv.setBackground(createPrimaryButtonDrawable(ctx, palette, 8f));
+                    tv.setBackground(createPrimaryButtonDrawable(ctx, palette, RADIUS_CONTROL));
                     tv.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
                     return;
                 }
                 // 停止/危险操作按钮
                 if (idName.equals("launchStopBtn") || idName.equals("btnResetContainer")
                         || idName.equals("btnClearContainerData")) {
-                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, 8f));
+                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, RADIUS_CONTROL));
                     tv.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
                     return;
                 }
@@ -413,7 +500,7 @@ public class ThemeManager {
                 }
                 // 普通次级按钮
                 if (idName.startsWith("btn") || idName.endsWith("Btn")) {
-                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, 8f));
+                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, RADIUS_CONTROL));
                     if (idName.equals("btnRefreshPlugins") || idName.equals("btnSettingsExportBackup")
                             || idName.equals("btnSettingsImportBackup")) {
                         tv.setTextColor(palette.accent);
@@ -501,7 +588,7 @@ public class ThemeManager {
                 if (idName.endsWith("Badge") || idName.startsWith("badge")
                         || idName.equals("launchPortBadge") || idName.equals("launchPetStateBadge")
                         || idName.equals("btnLaunchFileBadge") || idName.equals("btnLaunchHelpGuideBadge")) {
-                    v.setBackground(createBadgeDrawable(ctx, palette, 6f));
+                    v.setBackground(createBadgeDrawable(ctx, palette, RADIUS_SMALL));
                     return;
                 }
                 // 二级窗口顶栏
@@ -519,7 +606,7 @@ public class ThemeManager {
                     GradientDrawable ballBg = new GradientDrawable();
                     ballBg.setColor(palette.bgPanel);
                     ballBg.setShape(GradientDrawable.OVAL);
-                    ballBg.setStroke(Math.max(1, dpToPx(ctx, 1.5f)), palette.border);
+                    ballBg.setStroke(hairlinePx(ctx), palette.border);
                     v.setBackground(ballBg);
                     if (v instanceof TextView) {
                         ((TextView) v).setTextColor(palette.accent);
@@ -528,13 +615,13 @@ public class ThemeManager {
                 }
                 // 悬浮球垂直展开菜单
                 if (idName.equals("floatingMenuVertical")) {
-                    v.setBackground(createCardDrawable(ctx, palette, 12f));
+                    v.setBackground(createCardDrawable(ctx, palette, RADIUS_CARD));
                     return;
                 }
                 // 下沉等宽文本/日志/控制台区域与快捷配置栏
                 if (idName.equals("viewDetailedLogContainer") || idName.equals("physicsContainer")
                         || idName.equals("launchConsoleScroll") || idName.equals("cardLaunchPortQuickSet")) {
-                    v.setBackground(createSunkenDrawable(ctx, palette, 10f));
+                    v.setBackground(createSunkenDrawable(ctx, palette, RADIUS_CARD));
                     return;
                 }
                 // 卡片容器 (包含首页状态卡、双指标卡、文件管理卡片、桌宠开关卡片、日志控制台等)
@@ -542,12 +629,12 @@ public class ThemeManager {
                         || idName.equals("piWebOfflineCard") || idName.equals("floatingPetChatCard")
                         || idName.equals("btnLaunchFileManager") || idName.equals("btnLaunchPetToggle")
                         || idName.equals("btnLaunchHelpGuide")) {
-                    v.setBackground(createCardDrawable(ctx, palette, 14f));
+                    v.setBackground(createCardDrawable(ctx, palette, RADIUS_CARD));
                     return;
                 }
                 // 设置菜单选项条目
                 if (idName.startsWith("menuItem")) {
-                    v.setBackground(createSecondaryButtonDrawable(ctx, palette, 10f));
+                    v.setBackground(createSecondaryButtonDrawable(ctx, palette, RADIUS_CONTROL));
                     return;
                 }
             }

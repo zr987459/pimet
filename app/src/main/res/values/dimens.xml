@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  极简风格设计 Token（与 ThemeManager 中的 Java 常量保持一致）。
+  只定义尺寸/间距/圆角/字号，不包含任何颜色；颜色一律来自主题调色板。
+-->
+<resources>
+
+    <!-- ===== 间距阶梯 4 / 8 / 12 / 16 / 24 ===== -->
+    <dimen name="space_xxs">2dp</dimen>
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">12dp</dimen>
+    <dimen name="space_lg">16dp</dimen>
+    <dimen name="space_xl">24dp</dimen>
+
+    <!-- ===== 圆角：卡片 / 控件(按钮、输入框) / 小徽章 ===== -->
+    <dimen name="radius_card">12dp</dimen>
+    <dimen name="radius_control">10dp</dimen>
+    <dimen name="radius_small">6dp</dimen>
+    <dimen name="radius_pill">16dp</dimen>
+
+    <!-- ===== 描边：统一 1dp 发丝线 ===== -->
+    <dimen name="hairline">1dp</dimen>
+
+    <!-- ===== 控件高度 ===== -->
+    <dimen name="control_height">44dp</dimen>
+    <dimen name="control_height_compact">32dp</dimen>
+    <dimen name="cta_height">48dp</dimen>
+    <dimen name="bottom_nav_height">56dp</dimen>
+
+    <!-- ===== 字号阶梯 11 / 12 / 13 / 14 / 16 / 20 ===== -->
+    <dimen name="text_caption">11sp</dimen>
+    <dimen name="text_small">12sp</dimen>
+    <dimen name="text_body_small">13sp</dimen>
+    <dimen name="text_body">14sp</dimen>
+    <dimen name="text_title">16sp</dimen>
+    <dimen name="text_headline">20sp</dimen>
+
+</resources>

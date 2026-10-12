@@ -67,14 +67,14 @@ public class SubAgentDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText("🤖 Pi 子代理中心 (Subagents)");
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f);
-        tvTitle.setTypeface(null, Typeface.BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         titleCol.addView(tvTitle);
 
         TextView tvSub = new TextView(context);
         tvSub.setText("双向打通 ~/.pi/agent/agents/*.md 规范配置");
         tvSub.setTextColor(0xFF8B949E);
-        tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvSub.setPadding(0, dp(2), 0, 0);
         titleCol.addView(tvSub);
 
@@ -84,7 +84,7 @@ public class SubAgentDialog {
         btnNew.setText("➕ 新建子代理");
         btnNew.setTextColor(0xFFFFFFFF);
         btnNew.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        btnNew.setPadding(dp(10), dp(4), dp(10), dp(4));
+        btnNew.setPadding(dp(12), dp(4), dp(12), dp(4));
         GradientDrawable btnBg = new GradientDrawable();
         btnBg.setColor(0xFF238636);
         btnBg.setCornerRadius(dp(6));
@@ -171,13 +171,13 @@ public class SubAgentDialog {
 
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setColor(0xFF161B22);
-        cardBg.setCornerRadius(dp(8));
+        cardBg.setCornerRadius(dp(10));
         cardBg.setStroke(dp(1), 0xFF30363D);
         card.setBackground(cardBg);
 
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardLp.bottomMargin = dp(10);
+        cardLp.bottomMargin = dp(12);
         card.setLayoutParams(cardLp);
 
         // 首行：ID + Scope Badge + Action 按钮
@@ -188,18 +188,18 @@ public class SubAgentDialog {
         TextView tvId = new TextView(context);
         tvId.setText("🤖 " + agent.id);
         tvId.setTextColor(0xFF58A6FF);
-        tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvId.setTypeface(null, Typeface.BOLD);
+        tvId.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvId.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         row1.addView(tvId);
 
         TextView tvScope = new TextView(context);
         tvScope.setText("全局 (~/.pi/agent/agents/)");
         tvScope.setTextColor(0xFF3FB950);
-        tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
-        tvScope.setPadding(dp(6), dp(1), dp(6), dp(1));
+        tvScope.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvScope.setPadding(dp(8), dp(2), dp(8), dp(2));
         GradientDrawable scopeBg = new GradientDrawable();
         scopeBg.setColor(0x223FB950);
-        scopeBg.setCornerRadius(dp(4));
+        scopeBg.setCornerRadius(dp(6));
         scopeBg.setStroke(dp(1), 0x553FB950);
         tvScope.setBackground(scopeBg);
         LinearLayout.LayoutParams scopeLp = new LinearLayout.LayoutParams(
@@ -219,7 +219,7 @@ public class SubAgentDialog {
         btnCopy.setOnClickListener(v -> showEditDialog(agent.copy()));
         LinearLayout.LayoutParams copyLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(26));
-        copyLp.leftMargin = dp(6);
+        copyLp.leftMargin = dp(8);
         row1.addView(btnCopy, copyLp);
 
         Button btnDel = createSmallBtn("🗑️ 删除", 0x33DA3633, 0xFFF85149);
@@ -237,7 +237,7 @@ public class SubAgentDialog {
         });
         LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, dp(26));
-        delLp.leftMargin = dp(6);
+        delLp.leftMargin = dp(8);
         row1.addView(btnDel, delLp);
 
         card.addView(row1);
@@ -256,8 +256,8 @@ public class SubAgentDialog {
             TextView tvDesc = new TextView(context);
             tvDesc.setText(agent.description);
             tvDesc.setTextColor(0xFF8B949E);
-            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            tvDesc.setPadding(0, dp(3), 0, dp(4));
+            tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            tvDesc.setPadding(0, dp(4), 0, dp(4));
             card.addView(tvDesc);
         }
 
@@ -274,7 +274,7 @@ public class SubAgentDialog {
         TextView tvMeta = new TextView(context);
         tvMeta.setText(metaSb.toString());
         tvMeta.setTextColor(0xFF7EE787);
-        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvMeta.setPadding(0, dp(2), 0, dp(4));
         card.addView(tvMeta);
 
@@ -287,7 +287,7 @@ public class SubAgentDialog {
             TextView toolsLabel = new TextView(context);
             toolsLabel.setText("工具: ");
             toolsLabel.setTextColor(0xFF8B949E);
-            toolsLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            toolsLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             toolsLabel.setGravity(Gravity.CENTER_VERTICAL);
             chipRow.addView(toolsLabel);
 
@@ -295,13 +295,13 @@ public class SubAgentDialog {
                 TextView chip = new TextView(context);
                 chip.setText(tool);
                 chip.setTextColor(0xFF58A6FF);
-                chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+                chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
                 chip.setTypeface(Typeface.MONOSPACE);
-                chip.setPadding(dp(5), dp(1), dp(5), dp(1));
+                chip.setPadding(dp(4), dp(2), dp(4), dp(2));
 
                 GradientDrawable cbg = new GradientDrawable();
                 cbg.setColor(0xFF1F242C);
-                cbg.setCornerRadius(dp(4));
+                cbg.setCornerRadius(dp(6));
                 cbg.setStroke(dp(1), 0xFF388BFD);
                 chip.setBackground(cbg);
 
@@ -326,7 +326,7 @@ public class SubAgentDialog {
         b.setPadding(dp(8), dp(0), dp(8), dp(0));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(bgColor);
-        bg.setCornerRadius(dp(4));
+        bg.setCornerRadius(dp(6));
         b.setBackground(bg);
         b.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(26)));
         return b;
@@ -353,7 +353,7 @@ public class SubAgentDialog {
         tvDialogTitle.setText(isEdit ? "✏️ 编辑子代理: " + agent.id : "➕ 新建子代理");
         tvDialogTitle.setTextColor(0xFFF0F6FC);
         tvDialogTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
-        tvDialogTitle.setTypeface(null, Typeface.BOLD);
+        tvDialogTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         form.addView(tvDialogTitle);
 
         TextView tvHint = new TextView(context);
@@ -368,7 +368,7 @@ public class SubAgentDialog {
         TextView tvScopeVal = new TextView(context);
         tvScopeVal.setText("全局 (~/.pi/agent/agents/ - 所有项目通用)");
         tvScopeVal.setTextColor(0xFF3FB950);
-        tvScopeVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        tvScopeVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvScopeVal.setPadding(0, 0, 0, dp(8));
         form.addView(tvScopeVal);
 
@@ -559,8 +559,8 @@ public class SubAgentDialog {
         tv.setText(label);
         tv.setTextColor(0xFF8B949E);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tv.setTypeface(null, Typeface.BOLD);
-        tv.setPadding(0, dp(10), 0, dp(3));
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        tv.setPadding(0, dp(12), 0, dp(4));
         parent.addView(tv);
     }
 
@@ -570,8 +570,8 @@ public class SubAgentDialog {
         et.setHint(hint != null ? hint : "");
         et.setHintTextColor(0xFF484F58);
         et.setTextColor(0xFFF0F6FC);
-        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-        et.setPadding(dp(10), dp(8), dp(10), dp(8));
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        et.setPadding(dp(12), dp(8), dp(12), dp(8));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xFF161B22);

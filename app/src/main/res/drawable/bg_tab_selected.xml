@@ -2,5 +2,5 @@
 <!-- 底部 tab：选中态（品牌容器色圆角胶囊，跟随主题） -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="?attr/colorPrimaryContainer" />
-    <corners android:radius="14dp" />
+    <corners android:radius="@dimen/radius_control" />
 </shape>

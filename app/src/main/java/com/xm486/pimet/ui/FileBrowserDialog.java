@@ -175,8 +175,8 @@ public class FileBrowserDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText("📁 内部文件浏览器");
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         header.addView(tvTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView btnUp = buildActionBtn("⬆️ 上级", 0x223B82F6, 0xFF93C5FD, v -> navigateUp());
@@ -209,7 +209,7 @@ public class FileBrowserDialog {
         hsv.setHorizontalScrollBarEnabled(false);
         LinearLayout shortcutBar = new LinearLayout(context);
         shortcutBar.setOrientation(LinearLayout.HORIZONTAL);
-        shortcutBar.setPadding(0, dp(8), 0, dp(6));
+        shortcutBar.setPadding(0, dp(8), 0, dp(8));
 
         File rootfs = ProotManager.getRootfsDir(context);
         if (rootfs != null && rootfs.exists()) {
@@ -258,7 +258,7 @@ public class FileBrowserDialog {
         // ---- 3. 当前路径导航指示与摘要卡片 ----
         LinearLayout pathCard = new LinearLayout(context);
         pathCard.setOrientation(LinearLayout.VERTICAL);
-        pathCard.setPadding(dp(10), dp(8), dp(10), dp(8));
+        pathCard.setPadding(dp(12), dp(8), dp(12), dp(8));
         GradientDrawable pcd = new GradientDrawable();
         pcd.setColor(0xFF161B22);
         pcd.setCornerRadius(dp(6));
@@ -283,8 +283,8 @@ public class FileBrowserDialog {
 
         tvPathSummary = new TextView(context);
         tvPathSummary.setTextColor(0xFF8B949E);
-        tvPathSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-        tvPathSummary.setPadding(0, dp(3), 0, 0);
+        tvPathSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvPathSummary.setPadding(0, dp(4), 0, 0);
         pathCard.addView(tvPathSummary);
 
         LinearLayout.LayoutParams pcLp = new LinearLayout.LayoutParams(
@@ -450,11 +450,11 @@ public class FileBrowserDialog {
         tv.setText(text);
         tv.setTextColor(textColor);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         tv.setPadding(dp(8), dp(4), dp(8), dp(4));
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(bg);
-        gd.setCornerRadius(dp(5));
+        gd.setCornerRadius(dp(6));
         tv.setBackground(gd);
         tv.setOnClickListener(l);
         return tv;
@@ -464,8 +464,8 @@ public class FileBrowserDialog {
         TextView tv = new TextView(context);
         tv.setText(text);
         tv.setTextColor(0xFFC9D1D9);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-        tv.setPadding(dp(8), dp(3), dp(8), dp(3));
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tv.setPadding(dp(8), dp(4), dp(8), dp(4));
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(0xFF21262D);
         gd.setCornerRadius(dp(12));
@@ -473,7 +473,7 @@ public class FileBrowserDialog {
         tv.setBackground(gd);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = dp(6);
+        lp.rightMargin = dp(8);
         tv.setLayoutParams(lp);
         tv.setOnClickListener(l);
         return tv;
@@ -500,7 +500,7 @@ public class FileBrowserDialog {
                 row = new LinearLayout(context);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(10), dp(8), dp(10), dp(8));
+                row.setPadding(dp(12), dp(8), dp(12), dp(8));
                 GradientDrawable gd = new GradientDrawable();
                 gd.setColor(0xFF161B22);
                 gd.setCornerRadius(dp(6));
@@ -517,8 +517,8 @@ public class FileBrowserDialog {
                 TextView name = new TextView(context);
                 name.setTag("name");
                 name.setTextColor(0xFFF0F6FC);
-                name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-                name.setTypeface(Typeface.DEFAULT_BOLD);
+                name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+                name.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
                 name.setSingleLine(true);
                 name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
                 textCol.addView(name);
@@ -526,7 +526,7 @@ public class FileBrowserDialog {
                 TextView meta = new TextView(context);
                 meta.setTag("meta");
                 meta.setTextColor(0xFF8B949E);
-                meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
                 meta.setPadding(0, dp(2), 0, 0);
                 textCol.addView(meta);
 
@@ -604,15 +604,15 @@ public class FileBrowserDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText(item.isDirectory ? "📁 目录详细属性" : "📄 文件详细属性");
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         View divider = new View(context);
         divider.setBackgroundColor(0xFF30363D);
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
-        dlp.topMargin = dp(10);
-        dlp.bottomMargin = dp(10);
+        dlp.topMargin = dp(12);
+        dlp.bottomMargin = dp(12);
         root.addView(divider, dlp);
 
         createDetailRow(root, "名称", item.name);
@@ -642,7 +642,7 @@ public class FileBrowserDialog {
         LinearLayout btnRow = new LinearLayout(context);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         btnRow.setGravity(Gravity.END);
-        btnRow.setPadding(0, dp(14), 0, 0);
+        btnRow.setPadding(0, dp(16), 0, 0);
 
         AlertDialog d = builder.setView(root).create();
 
@@ -705,7 +705,7 @@ public class FileBrowserDialog {
         tvVal.setTextColor(0xFFE6EDF3);
         tvVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvVal.setTypeface(Typeface.MONOSPACE);
-        tvVal.setPadding(0, dp(1), 0, dp(4));
+        tvVal.setPadding(0, dp(2), 0, dp(4));
         tvVal.setTextIsSelectable(true);
         parent.addView(tvVal);
         return tvVal;
@@ -732,7 +732,7 @@ public class FileBrowserDialog {
         title.setText("📄 " + file.getName());
         title.setTextColor(0xFFF0F6FC);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView btnCopy = buildActionBtn("📋 复制路径", 0x223B82F6, 0xFF93C5FD, v -> {
@@ -751,7 +751,7 @@ public class FileBrowserDialog {
         tvMeta.setText(String.format(Locale.getDefault(), "大小: %s (%d bytes)  ·  路径: %s",
                 formatSize(file.length()), file.length(), file.getAbsolutePath()));
         tvMeta.setTextColor(0xFF8B949E);
-        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvMeta.setPadding(0, dp(4), 0, dp(8));
         root.addView(tvMeta);
 
@@ -848,8 +848,8 @@ public class FileBrowserDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText(title);
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvStage = new TextView(context);
@@ -870,7 +870,7 @@ public class FileBrowserDialog {
         TextView tvDetail = new TextView(context);
         tvDetail.setText("");
         tvDetail.setTextColor(0xFF8B949E);
-        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvDetail.setTypeface(Typeface.MONOSPACE);
         tvDetail.setSingleLine(true);
         tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);
@@ -908,15 +908,15 @@ public class FileBrowserDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText("📦 PiMet 配置与数据无损迁移");
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvDesc = new TextView(context);
         tvDesc.setText("支持将当前的聊天记忆、子代理、插件生态、端口及全部偏好设置打包导出为 zip 文件，或将备份包无损还原至当前环境。");
         tvDesc.setTextColor(0xFF8B949E);
-        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        tvDesc.setPadding(0, dp(4), 0, dp(14));
+        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvDesc.setPadding(0, dp(4), 0, dp(16));
         root.addView(tvDesc);
 
         final AlertDialog[] diagRef = new AlertDialog[1];
@@ -926,7 +926,7 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             performExportBackup();
         });
-        btnExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnExport.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnExport.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         elp.bottomMargin = dp(8);
@@ -937,7 +937,7 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             showCustomExportDialog();
         });
-        btnCustomExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnCustomExport.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnCustomExport.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams celp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         celp.bottomMargin = dp(8);
@@ -960,7 +960,7 @@ public class FileBrowserDialog {
                 );
             }
         });
-        btnPick.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnPick.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnPick.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         plp.bottomMargin = dp(8);
@@ -971,7 +971,7 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             showRestorePicker();
         });
-        btnScan.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnScan.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnScan.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         slp.bottomMargin = dp(8);
@@ -1028,15 +1028,15 @@ public class FileBrowserDialog {
             TextView t = new TextView(context);
             t.setText(success ? "✔ 备份导出成功" : "❌ 备份导出失败");
             t.setTextColor(success ? 0xFF3FB950 : 0xFFF85149);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+            t.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             r.addView(t);
 
             TextView msg = new TextView(context);
             msg.setText(message);
             msg.setTextColor(0xFFC9D1D9);
-            msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            msg.setPadding(0, dp(8), 0, dp(14));
+            msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            msg.setPadding(0, dp(8), 0, dp(16));
             r.addView(msg);
 
             final AlertDialog[] resDiagRef = new AlertDialog[1];
@@ -1048,7 +1048,7 @@ public class FileBrowserDialog {
                 btnShare.setPadding(dp(12), dp(8), dp(12), dp(8));
                 btnShare.setGravity(Gravity.CENTER);
                 LinearLayout.LayoutParams splp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                splp.bottomMargin = dp(6);
+                splp.bottomMargin = dp(8);
                 r.addView(btnShare, splp);
 
                 TextView btnCopy = buildActionBtn("📋 复制备份路径", 0x223B82F6, 0xFF93C5FD, v -> {
@@ -1061,7 +1061,7 @@ public class FileBrowserDialog {
                 btnCopy.setPadding(dp(12), dp(8), dp(12), dp(8));
                 btnCopy.setGravity(Gravity.CENTER);
                 LinearLayout.LayoutParams cplp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                cplp.bottomMargin = dp(6);
+                cplp.bottomMargin = dp(8);
                 r.addView(btnCopy, cplp);
 
                 loadCurrentDir();
@@ -1093,8 +1093,8 @@ public class FileBrowserDialog {
         TextView tvTitle = new TextView(context);
         tvTitle.setText("⚙️ 自选备份导出设置");
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvSub = new TextView(context);
@@ -1142,7 +1142,7 @@ public class FileBrowserDialog {
                 TextView tvCwdSubHint = new TextView(context);
                 tvCwdSubHint.setText("可选：细粒度指定要导出的工程子目录 (不勾选则默认全部)：");
                 tvCwdSubHint.setTextColor(0xFF58A6FF);
-                tvCwdSubHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                tvCwdSubHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
                 cwdSubLayout.addView(tvCwdSubHint);
 
                 for (File sp : subProjects) {
@@ -1175,10 +1175,10 @@ public class FileBrowserDialog {
         tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
         tvTargetDirPath.setTextColor(0xFF58A6FF);
         tvTargetDirPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tvTargetDirPath.setPadding(dp(8), dp(6), dp(8), dp(6));
+        tvTargetDirPath.setPadding(dp(8), dp(8), dp(8), dp(8));
         GradientDrawable pathBg = new GradientDrawable();
         pathBg.setColor(0xFF161B22);
-        pathBg.setCornerRadius(dp(4));
+        pathBg.setCornerRadius(dp(6));
         pathBg.setStroke(dp(1), 0xFF30363D);
         tvTargetDirPath.setBackground(pathBg);
         root.addView(tvTargetDirPath);
@@ -1186,7 +1186,7 @@ public class FileBrowserDialog {
         // 目标目录快速切换按钮组
         LinearLayout dirBtnRow = new LinearLayout(context);
         dirBtnRow.setOrientation(LinearLayout.HORIZONTAL);
-        dirBtnRow.setPadding(0, dp(6), 0, dp(10));
+        dirBtnRow.setPadding(0, dp(8), 0, dp(12));
 
         TextView btnUseCurrent = buildActionBtn("📍 设为当前浏览目录", 0x22388BFD, 0xFF79C0FF, v -> {
             if (currentDir != null && currentDir.canWrite()) {
@@ -1210,7 +1210,7 @@ public class FileBrowserDialog {
             }
         });
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        dlp.leftMargin = dp(6);
+        dlp.leftMargin = dp(8);
         dirBtnRow.addView(btnUseDownloads, dlp);
 
         TextView btnUseAppExport = buildActionBtn("📦 内部默认目录", 0x228B5CF6, 0xFFC4B5FD, v -> {
@@ -1219,7 +1219,7 @@ public class FileBrowserDialog {
             Toast.makeText(context, "已设为内部备份目录", Toast.LENGTH_SHORT).show();
         });
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        alp.leftMargin = dp(6);
+        alp.leftMargin = dp(8);
         dirBtnRow.addView(btnUseAppExport, alp);
 
         root.addView(dirBtnRow);
@@ -1236,7 +1236,7 @@ public class FileBrowserDialog {
         etCustomPaths.setPadding(dp(8), dp(8), dp(8), dp(8));
         GradientDrawable etBg = new GradientDrawable();
         etBg.setColor(0xFF161B22);
-        etBg.setCornerRadius(dp(4));
+        etBg.setCornerRadius(dp(6));
         etBg.setStroke(dp(1), 0xFF30363D);
         etCustomPaths.setBackground(etBg);
         root.addView(etCustomPaths);
@@ -1252,7 +1252,7 @@ public class FileBrowserDialog {
             if (customDiagRef[0] != null) customDiagRef[0].dismiss();
         });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        clp.rightMargin = dp(6);
+        clp.rightMargin = dp(8);
         actRow.addView(btnCancel, clp);
 
         TextView btnConfirm = buildActionBtn("🚀 开始打包导出", 0x22238636, 0xFF7EE787, v -> {
@@ -1314,8 +1314,8 @@ public class FileBrowserDialog {
         tv.setText(title);
         tv.setTextColor(0xFFE6EDF3);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(0, dp(10), 0, dp(4));
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        tv.setPadding(0, dp(12), 0, dp(4));
         return tv;
     }
 
@@ -1334,7 +1334,7 @@ public class FileBrowserDialog {
         cb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         cb.setTextColor(0xFFF0F6FC);
         cb.setChecked(checked);
-        cb.setPadding(dp(4), dp(3), dp(4), dp(3));
+        cb.setPadding(dp(4), dp(4), dp(4), dp(4));
         return cb;
     }
 
