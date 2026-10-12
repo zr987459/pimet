@@ -130,6 +130,7 @@ public class PiWebActivity extends AppCompatActivity {
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        com.xm486.pimet.ui.WebPinchZoom.configure(webView);
 
         // 注册通用网页翻译原生桥接
         TranslationBridge transBridge = new TranslationBridge(this, webView);
@@ -148,8 +149,15 @@ public class PiWebActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onPageCommitVisible(WebView v, String url) {
+                super.onPageCommitVisible(v, url);
+                com.xm486.pimet.ui.WebPinchZoom.apply(v, url);
+            }
+
+            @Override
             public void onPageFinished(WebView v, String url) {
                 ThemeManager.syncThemeToWebView(v, PiWebActivity.this);
+                com.xm486.pimet.ui.WebPinchZoom.apply(v, url);
                 if (url != null && !url.startsWith("about:") && !url.isEmpty()) {
                     currentUrl = url;
                     if (isExternalUrl(url)) {

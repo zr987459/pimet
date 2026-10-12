@@ -2862,6 +2862,8 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setSupportZoom(true);
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
+        // 双指缩放：原生页面缩放（最小=适配屏宽，最大5倍），与悬浮球文字缩放按钮并存
+        com.xm486.pimet.ui.WebPinchZoom.configure(piWebWebView);
         webSettings.setAllowFileAccess(true);
         webSettings.setAllowContentAccess(true);
         webSettings.setAllowFileAccessFromFileURLs(true);
@@ -2893,9 +2895,16 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                super.onPageCommitVisible(view, url);
+                com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 ThemeManager.syncThemeToWebView(view, MainActivity.this);
+                com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
                     // 清理历史残留的输入草稿缓存，防止旧消息重复回填至输入框
                     view.evaluateJavascript(
