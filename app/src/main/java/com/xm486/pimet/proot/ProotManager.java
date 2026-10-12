@@ -252,8 +252,12 @@ public final class ProotManager {
         if (!dir.isDirectory()) return dir.length();
 
         // 1. 优先尝试系统底层 du 命令 (Toybox du，毫秒级快速统计真实磁盘占用且防符号链接死循环)
+        Process process = null;
         try {
-            Process process = Runtime.getRuntime().exec(new String[]{"du", "-sk", dir.getAbsolutePath()});
+            // stderr 丢弃：大量「无权限」报错若不读取会塞满管道导致 du 卡死
+            ProcessBuilder pb = new ProcessBuilder("du", "-sk", dir.getAbsolutePath());
+            pb.redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")));
+            process = pb.start();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line = reader.readLine();
                 if (line != null && !line.trim().isEmpty()) {
@@ -266,7 +270,12 @@ public final class ProotManager {
                     }
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        } finally {
+            if (process != null) {
+                try { process.destroy(); } catch (Throwable ignored) {}
+            }
+        }
 
         // 2. 备选方案：防符号链接循环、防无限递归的安全 Java 递归计算
         return calculateDirSizeSafe(dir, 0);
