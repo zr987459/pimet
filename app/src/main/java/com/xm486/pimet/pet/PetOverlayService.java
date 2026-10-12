@@ -1564,11 +1564,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
         String btnLabel = isPetHidden ? "🐾 重新弹出桌宠" : "🙈 隐藏桌宠";
         Notification.Action action = new Notification.Action.Builder(
-                R.mipmap.ic_launcher, btnLabel, togglePi).build();
+                R.drawable.ic_nav_home, btnLabel, togglePi).build();
         builder.addAction(action);
 
         return builder
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_nav_home)
                 .setContentTitle("DevPetM")
                 .setContentText(text)
                 .setContentIntent(pi)
