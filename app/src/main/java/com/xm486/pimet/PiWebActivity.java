@@ -130,7 +130,8 @@ public class PiWebActivity extends AppCompatActivity {
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        com.xm486.pimet.ui.WebPinchZoom.configure(webView);
+        // 双指布局缩放（重排适配屏宽，25%–300%），与工作台悬浮球缩放共用同一缩放值
+        com.xm486.pimet.ui.WebPinchZoom.attach(webView, null);
 
         // 注册通用网页翻译原生桥接
         TranslationBridge transBridge = new TranslationBridge(this, webView);

@@ -2862,16 +2862,18 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setSupportZoom(true);
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
-        // 双指缩放：原生页面缩放（最小=适配屏宽，最大5倍），与悬浮球文字缩放按钮并存
-        com.xm486.pimet.ui.WebPinchZoom.configure(piWebWebView);
+        // 双指布局缩放（重排适配屏宽，25%–300%），与悬浮球缩放按钮共用同一缩放值
+        com.xm486.pimet.ui.WebPinchZoom.attach(piWebWebView, (pct, committed) -> {
+            if (btnFloatZoom != null) btnFloatZoom.setText(pct + "%");
+        });
         webSettings.setAllowFileAccess(true);
         webSettings.setAllowContentAccess(true);
         webSettings.setAllowFileAccessFromFileURLs(true);
         webSettings.setAllowUniversalAccessFromFileURLs(true);
 
         // 初始化网页缩放
-        int savedZoom = PiMetConfig.getWebZoom(this);
-        webSettings.setTextZoom(savedZoom);
+        int savedZoom = com.xm486.pimet.ui.WebPinchZoom.getZoom(this);
+        webSettings.setTextZoom(100);
         btnFloatZoom.setText(savedZoom + "%");
 
         // 注册通用网页翻译原生桥接 (支持任意网页、多引擎、绕过CORS)
@@ -3276,8 +3278,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showZoomDialog() {
-        int currentZoom = PiMetConfig.getWebZoom(this);
+        int currentZoom = com.xm486.pimet.ui.WebPinchZoom.getZoom(this);
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        final int minZ = com.xm486.pimet.ui.WebPinchZoom.MIN_ZOOM;
+        final int maxZ = com.xm486.pimet.ui.WebPinchZoom.MAX_ZOOM;
+        final int onPrimary = palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF;
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -3285,88 +3290,124 @@ public class MainActivity extends AppCompatActivity {
         layout.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
 
         TextView title = new TextView(this);
-        title.setText("🔍 工作台显示缩放调节");
+        title.setText("工作台显示缩放");
         title.setTextSize(16f);
         title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         title.setTextColor(palette.text);
         layout.addView(title);
 
         TextView tvVal = new TextView(this);
-        tvVal.setText("当前缩放比例: " + currentZoom + "%");
+        tvVal.setText("当前 " + currentZoom + "% · 也可双指缩放");
         tvVal.setTextSize(13f);
         tvVal.setTextColor(palette.accent);
         tvVal.setPadding(0, dpToPx(8), 0, dpToPx(12));
         layout.addView(tvVal);
 
-        // 步进按钮行 [-10%] [重置 100%] [+10%]
-        LinearLayout stepRow = new LinearLayout(this);
-        stepRow.setOrientation(LinearLayout.HORIZONTAL);
-        stepRow.setGravity(Gravity.CENTER);
-
-        TextView btnMinus = new TextView(this);
-        btnMinus.setText("➖ 缩小 10%");
-        btnMinus.setTextColor(palette.text);
-        btnMinus.setTextSize(12f);
-        btnMinus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnMinus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-
-        TextView btnReset = new TextView(this);
-        btnReset.setText("🔄 100%");
-        btnReset.setTextColor(palette.accent);
-        btnReset.setTextSize(12f);
-        btnReset.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnReset.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        resetLp.leftMargin = dpToPx(8);
-        resetLp.rightMargin = dpToPx(8);
-        btnReset.setLayoutParams(resetLp);
-
-        TextView btnPlus = new TextView(this);
-        btnPlus.setText("➕ 放大 10%");
-        btnPlus.setTextColor(palette.text);
-        btnPlus.setTextSize(12f);
-        btnPlus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnPlus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-
-        stepRow.addView(btnMinus);
-        stepRow.addView(btnReset);
-        stepRow.addView(btnPlus);
-        layout.addView(stepRow);
-
-        // 常用预设行: 80% | 100% | 125% | 150% | 200%
+        // 固定预设（100% 即重置）
         LinearLayout presetRow = new LinearLayout(this);
         presetRow.setOrientation(LinearLayout.HORIZONTAL);
         presetRow.setGravity(Gravity.CENTER);
-        presetRow.setPadding(0, dpToPx(12), 0, 0);
 
-        int[] presets = {80, 100, 125, 150, 175, 200};
+        final int[] presets = {50, 75, 100, 125, 150};
         final List<TextView> presetViews = new ArrayList<>();
-        for (int p : presets) {
-            final int presetVal = p;
+        final Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            int z = com.xm486.pimet.ui.WebPinchZoom.getZoom(MainActivity.this);
+            tvVal.setText("当前 " + z + "% · 也可双指缩放");
+            for (int i = 0; i < presets.length; i++) {
+                boolean active = presets[i] == z;
+                presetViews.get(i).setTextColor(active ? onPrimary : palette.textMuted);
+                presetViews.get(i).setBackground(active
+                        ? ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f)
+                        : ThemeManager.createSecondaryButtonDrawable(MainActivity.this, palette, 6f));
+            }
+        };
+        for (int i = 0; i < presets.length; i++) {
+            final int presetVal = presets[i];
             TextView pBtn = new TextView(this);
             pBtn.setText(presetVal + "%");
-            pBtn.setTextSize(11f);
-            pBtn.setTextColor(presetVal == currentZoom ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
-            pBtn.setBackground(presetVal == currentZoom ? ThemeManager.createPrimaryButtonDrawable(this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-            pBtn.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
-            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            pLp.rightMargin = dpToPx(4);
+            pBtn.setTextSize(12f);
+            pBtn.setSingleLine(true);
+            pBtn.setGravity(Gravity.CENTER);
+            pBtn.setPadding(0, dpToPx(8), 0, dpToPx(8));
+            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) pLp.leftMargin = dpToPx(6);
             pBtn.setLayoutParams(pLp);
             pBtn.setOnClickListener(v -> {
                 applyWebZoom(presetVal);
-                tvVal.setText("当前缩放比例: " + presetVal + "%");
-                for (int i = 0; i < presets.length; i++) {
-                    boolean active = presets[i] == presetVal;
-                    presetViews.get(i).setTextColor(active ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
-                    presetViews.get(i).setBackground(active ? ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(MainActivity.this, palette, 6f));
-                }
+                refresh[0].run();
             });
             presetViews.add(pBtn);
             presetRow.addView(pBtn);
         }
         layout.addView(presetRow);
+
+        // 自定义数值：输入百分比后点「应用」
+        LinearLayout customRow = new LinearLayout(this);
+        customRow.setOrientation(LinearLayout.HORIZONTAL);
+        customRow.setGravity(Gravity.CENTER_VERTICAL);
+        customRow.setPadding(0, dpToPx(12), 0, 0);
+
+        android.widget.EditText etCustom = new android.widget.EditText(this);
+        etCustom.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etCustom.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(3)});
+        etCustom.setSingleLine(true);
+        etCustom.setHint("自定义 " + minZ + "–" + maxZ);
+        etCustom.setTextSize(13f);
+        etCustom.setTextColor(palette.text);
+        etCustom.setHintTextColor(palette.textDim);
+        etCustom.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        etCustom.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+        etCustom.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        customRow.addView(etCustom, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView pct = new TextView(this);
+        pct.setText("%");
+        pct.setTextSize(13f);
+        pct.setTextColor(palette.textMuted);
+        pct.setPadding(dpToPx(6), 0, dpToPx(8), 0);
+        customRow.addView(pct);
+
+        TextView btnApply = new TextView(this);
+        btnApply.setText("应用");
+        btnApply.setTextSize(12f);
+        btnApply.setSingleLine(true);
+        btnApply.setTextColor(palette.accent);
+        btnApply.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        btnApply.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        customRow.addView(btnApply);
+        layout.addView(customRow);
+
+        final Runnable applyCustom = () -> {
+            String txt = etCustom.getText() == null ? "" : etCustom.getText().toString().trim();
+            int v;
+            try {
+                v = Integer.parseInt(txt);
+            } catch (NumberFormatException e) {
+                Toast.makeText(MainActivity.this, "请输入 " + minZ + "–" + maxZ + " 之间的数字", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int z = com.xm486.pimet.ui.WebPinchZoom.clamp(v);
+            if (z != v) {
+                Toast.makeText(MainActivity.this, "已限制在 " + minZ + "–" + maxZ + "%，应用 " + z + "%", Toast.LENGTH_SHORT).show();
+            }
+            applyWebZoom(z);
+            etCustom.setText(String.valueOf(z));
+            etCustom.setSelection(etCustom.getText().length());
+            refresh[0].run();
+        };
+        btnApply.setOnClickListener(v -> applyCustom.run());
+        etCustom.setOnEditorActionListener((v, actionId, ev) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                applyCustom.run();
+                return true;
+            }
+            return false;
+        });
+
+        refresh[0].run();
 
         // 完成按键
         TextView btnDone = new TextView(this);
@@ -3374,7 +3415,7 @@ public class MainActivity extends AppCompatActivity {
         btnDone.setTextSize(13f);
         btnDone.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         btnDone.setGravity(Gravity.CENTER);
-        btnDone.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+        btnDone.setTextColor(onPrimary);
         btnDone.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 8f));
         btnDone.setPadding(0, dpToPx(12), 0, dpToPx(12));
         LinearLayout.LayoutParams doneLp = new LinearLayout.LayoutParams(
@@ -3391,31 +3432,18 @@ public class MainActivity extends AppCompatActivity {
         }
         btnDone.setOnClickListener(v -> dialog.dismiss());
 
-        btnMinus.setOnClickListener(v -> {
-            int z = Math.max(50, PiMetConfig.getWebZoom(this) - 10);
-            applyWebZoom(z);
-            tvVal.setText("当前缩放比例: " + z + "%");
-        });
-        btnReset.setOnClickListener(v -> {
-            applyWebZoom(100);
-            tvVal.setText("当前缩放比例: 100%");
-        });
-        btnPlus.setOnClickListener(v -> {
-            int z = Math.min(300, PiMetConfig.getWebZoom(this) + 10);
-            applyWebZoom(z);
-            tvVal.setText("当前缩放比例: " + z + "%");
-        });
-
         dialog.show();
     }
 
     private void applyWebZoom(int zoom) {
-        PiMetConfig.setWebZoom(this, zoom);
+        int z = com.xm486.pimet.ui.WebPinchZoom.clamp(zoom);
         if (piWebWebView != null) {
-            piWebWebView.getSettings().setTextZoom(zoom);
+            z = com.xm486.pimet.ui.WebPinchZoom.setZoom(piWebWebView, z);
+        } else {
+            PiMetConfig.setWebZoom(this, z);
         }
         if (btnFloatZoom != null) {
-            btnFloatZoom.setText(zoom + "%");
+            btnFloatZoom.setText(z + "%");
         }
     }
 
