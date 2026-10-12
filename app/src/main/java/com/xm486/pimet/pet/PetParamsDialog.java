@@ -122,7 +122,7 @@ public class PetParamsDialog {
             int curBubbleTextSize = PetRegistry.getIntPref(context, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
             int curCardWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_CARD_WIDTH, PetRegistry.DEFAULT_CARD_WIDTH);
             int curCardScale = PetRegistry.getIntPref(context, PetRegistry.KEY_CARD_SCALE, PetRegistry.DEFAULT_CARD_SCALE);
-            int curMenuWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_MENU_WIDTH, PetRegistry.DEFAULT_MENU_WIDTH);
+            int curMenuScale = PetRegistry.getIntPref(context, PetRegistry.KEY_MENU_SCALE, PetRegistry.DEFAULT_MENU_SCALE);
 
             int curBounce = PetRegistry.getIntPref(context, PetRegistry.KEY_BOUNCE, PetRegistry.DEFAULT_BOUNCE);
             int curFriction = PetRegistry.getIntPref(context, PetRegistry.KEY_FRICTION, PetRegistry.DEFAULT_FRICTION);
@@ -188,10 +188,10 @@ public class PetParamsDialog {
                 if (onChangeCallback != null) onChangeCallback.run();
             }));
 
-            // 10. 长按菜单宽度: 120 ~ 240 dp (min 120)
-            listLayout.addView(createCompactSlider("📑 长按菜单面板宽", Math.max(PetMenu.MIN_MENU_WIDTH, Math.min(PetMenu.MAX_MENU_WIDTH, curMenuWidth)), "dp",
-                    PetMenu.MIN_MENU_WIDTH, PetMenu.MAX_MENU_WIDTH, PetMenu.MIN_MENU_WIDTH, (val) -> {
-                PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_WIDTH, val);
+            // 10. 长按菜单大小：桌宠宽度的 150% ~ 250%（下限 140dp、上限 220dp）
+            listLayout.addView(createCompactSlider("📑 长按菜单大小", Math.max(PetMenu.MIN_MENU_SCALE, Math.min(PetMenu.MAX_MENU_SCALE, curMenuScale)), "%",
+                    PetMenu.MIN_MENU_SCALE, PetMenu.MAX_MENU_SCALE, PetMenu.MIN_MENU_SCALE, (val) -> {
+                PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_SCALE, val);
                 if (onChangeCallback != null) onChangeCallback.run();
             }));
 
@@ -218,7 +218,7 @@ public class PetParamsDialog {
                 PetRegistry.setIntPref(context, PetRegistry.KEY_STOP_SPEED, PetRegistry.DEFAULT_STOP_SPEED);
                 PetRegistry.setIntPref(context, PetRegistry.KEY_CARD_WIDTH, PetRegistry.DEFAULT_CARD_WIDTH);
                 PetRegistry.setIntPref(context, PetRegistry.KEY_CARD_SCALE, PetRegistry.DEFAULT_CARD_SCALE);
-                PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_WIDTH, PetRegistry.DEFAULT_MENU_WIDTH);
+                PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_SCALE, PetRegistry.DEFAULT_MENU_SCALE);
 
                 if (service != null) {
                     service.applyPetSize(PetRegistry.DEFAULT_PET_SIZE);

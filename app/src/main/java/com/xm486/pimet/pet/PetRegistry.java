@@ -337,7 +337,8 @@ public class PetRegistry {
     public static final String KEY_BUBBLE_TEXT_SIZE = "bubble_text_size";     // 气泡文字字号 sp
     public static final String KEY_CARD_WIDTH = "card_width";                   // 状态卡宽度 dp
     public static final String KEY_CARD_SCALE = "card_scale";                   // 状态卡整体缩放 60-100%
-    public static final String KEY_MENU_WIDTH = "menu_width";                   // 长按菜单宽度 dp
+    public static final String KEY_MENU_WIDTH = "menu_width";                   // 旧版长按菜单宽度 dp（v1.7.2 起不再使用）
+    public static final String KEY_MENU_SCALE = "menu_scale";                   // 长按菜单宽度 = 桌宠宽 × 百分比 (150-250)
     public static final String KEY_RK_PORT = "rikkahub_port";                   // RikkaHub Web API 端口
     public static final String KEY_CB_PORT = "clawbench_port";                  // ClawBench Web 服务端口（/api/ai/sessions/overview）
     public static final String KEY_CB_TOKEN = "clawbench_token";                // ClawBench 登录密码（cookie clawbench_session）
@@ -365,6 +366,7 @@ public class PetRegistry {
     public static final int DEFAULT_CARD_WIDTH = 200;
     public static final int DEFAULT_CARD_SCALE = 100;
     public static final int DEFAULT_MENU_WIDTH = 240;
+    public static final int DEFAULT_MENU_SCALE = 180;
     public static final int DEFAULT_RK_PORT = 8080;
     public static final int DEFAULT_CB_PORT = 20000;                            // ClawBench 默认端口
     public static final String DEFAULT_CB_TOKEN = "";

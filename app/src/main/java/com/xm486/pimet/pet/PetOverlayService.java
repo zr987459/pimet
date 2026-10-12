@@ -680,6 +680,19 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return new int[]{dp(16), dp(160), dp(72), dp(72)};
     }
 
+    /** 桌宠精灵本身在屏幕上的矩形 [x, y, w, h]（像素，含窗口内偏移，如状态卡展开/气泡顶开时）。 */
+    public int[] getPetViewScreenRect() {
+        if (overlayRoot != null && overlayRoot.getLayoutParams() instanceof WindowManager.LayoutParams) {
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            int w = petView != null && petView.getWidth() > 0 ? petView.getWidth() : dp(PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE));
+            int h = petView != null && petView.getHeight() > 0 ? petView.getHeight() : Math.round(w * 208f / 192f);
+            int offX = petView != null ? petView.getLeft() : 0;
+            int offY = petView != null ? petView.getTop() : 0;
+            return new int[]{lp.x + offX, lp.y + offY, w, h};
+        }
+        return new int[]{dp(16), dp(160), dp(72), dp(72)};
+    }
+
     public TextView getChatBubble() {
         return bubbleView;
     }
@@ -804,6 +817,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         statusCard.setScaleX(Math.max(0.4f, Math.min(1.2f, cardScale / 100f)));
         statusCard.setScaleY(Math.max(0.4f, Math.min(1.2f, cardScale / 100f)));
         overlayRoot.addView(statusCard, cardLp);
+        // 缩放锚点始终为顶部中心：首次展开前卡片尚未布局 (width=0)，若锚点取 0 会向左缩放导致偏移
+        statusCard.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            v.setPivotX((r - l) / 2f);
+            v.setPivotY(0f);
+        });
 
         // 任务完成对话气泡（显示在桌宠头顶，初始隐藏）
         buildBubble(petWidthPx);
@@ -1125,11 +1143,17 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         final float cs = Math.max(0.4f, Math.min(1.2f,
                 PetRegistry.getIntPref(this, PetRegistry.KEY_CARD_SCALE,
                         PetRegistry.DEFAULT_CARD_SCALE) / 100f));
+        // 记录桌宠当前屏幕中心 X：窗口包裹宽度变化后据此回调窗口位置，桌宠原地不动、卡片居中在其下方
+        final int petCenterBefore = petScreenCenterX();
         if (cardVisible) {
             statusCard.setAlpha(0f);
             statusCard.setScaleX(cs * 0.94f);
             statusCard.setScaleY(cs * 0.94f);
-            statusCard.setPivotX(statusCard.getWidth() / 2f);
+            int cw = statusCard.getWidth();
+            if (cw <= 0 && statusCard.getLayoutParams() != null && statusCard.getLayoutParams().width > 0) {
+                cw = statusCard.getLayoutParams().width;
+            }
+            statusCard.setPivotX(cw / 2f);
             statusCard.setPivotY(0f);
             statusCard.setVisibility(View.VISIBLE);
             statusCard.animate()
@@ -1150,7 +1174,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                                     (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
                             windowManager.updateViewLayout(overlayRoot, lp);
                         } catch (Exception ignored) {}
-                        overlayRoot.post(this::clampToScreen);
+                        overlayRoot.post(() -> keepPetCenter(petCenterBefore));
                     })
                     .start();
         }
@@ -1166,9 +1190,58 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 // 触发窗口重新测量包裹新内容
                 windowManager.updateViewLayout(overlayRoot, lp);
             } catch (Exception ignored) {}
-            // 等一帧让布局完成后再 clamp 位置，防止状态卡/桌宠飞出屏幕
-            overlayRoot.post(this::clampToScreen);
+            // 等一帧让布局完成后：保持桌宠原地（卡片居中在其正下方），再 clamp 位置防止飞出屏幕
+            if (cardVisible) {
+                overlayRoot.post(() -> keepPetCenter(petCenterBefore));
+            } else {
+                overlayRoot.post(this::clampToScreen);
+            }
         });
+    }
+
+    /** 桌宠精灵在屏幕上的中心 X（像素）。 */
+    private int petScreenCenterX() {
+        if (overlayRoot == null || petView == null) return Integer.MIN_VALUE;
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+        if (lp == null) return Integer.MIN_VALUE;
+        return lp.x + petView.getLeft() + petView.getWidth() / 2;
+    }
+
+    /** 等窗口按新内容完成布局（或最多 150ms）后，再把桌宠中心对回原位。 */
+    private void keepPetCenter(int petCenterBefore) {
+        if (overlayRoot == null) return;
+        final boolean[] done = new boolean[1];
+        final android.view.ViewTreeObserver.OnGlobalLayoutListener[] holder =
+                new android.view.ViewTreeObserver.OnGlobalLayoutListener[1];
+        final Runnable once = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            try {
+                if (holder[0] != null) overlayRoot.getViewTreeObserver().removeOnGlobalLayoutListener(holder[0]);
+            } catch (Exception ignored) {}
+            applyPetCenter(petCenterBefore);
+        };
+        holder[0] = once::run;
+        overlayRoot.getViewTreeObserver().addOnGlobalLayoutListener(holder[0]);
+        overlayRoot.requestLayout();
+        overlayRoot.postDelayed(once, 150);
+    }
+
+    /** 窗口内容宽度变化后，平移窗口使桌宠中心回到原位，然后限制在屏幕内。 */
+    private void applyPetCenter(int petCenterBefore) {
+        if (overlayRoot == null) return;
+        try {
+            if (petCenterBefore != Integer.MIN_VALUE) {
+                int now = petScreenCenterX();
+                if (now != Integer.MIN_VALUE && now != petCenterBefore) {
+                    WindowManager.LayoutParams lp =
+                            (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                    lp.x -= (now - petCenterBefore);
+                    windowManager.updateViewLayout(overlayRoot, lp);
+                }
+            }
+        } catch (Exception ignored) {}
+        clampToScreen();
     }
 
     /** 将窗口位置限制在屏幕内（配合状态卡展开/收起） */

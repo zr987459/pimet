@@ -5433,7 +5433,7 @@ public class MainActivity extends AppCompatActivity {
             {"空气摩擦", PetRegistry.KEY_FRICTION, 0, 100, PetRegistry.DEFAULT_FRICTION, "%"},
             {"停稳阈值", PetRegistry.KEY_STOP_SPEED, 10, 200, PetRegistry.DEFAULT_STOP_SPEED, "px/s"},
             {"聊天框宽度", PetRegistry.KEY_CARD_WIDTH, 140, 360, PetRegistry.DEFAULT_CARD_WIDTH, "dp"},
-            {"设置框宽度", PetRegistry.KEY_MENU_WIDTH, 240, 320, PetRegistry.DEFAULT_MENU_WIDTH, "dp"},
+            {"菜单大小", PetRegistry.KEY_MENU_SCALE, 150, 250, PetRegistry.DEFAULT_MENU_SCALE, "%"},
             {"窗口紧凑度", PetRegistry.KEY_CARD_SCALE, 40, 120, PetRegistry.DEFAULT_CARD_SCALE, "%"},
     };
 
