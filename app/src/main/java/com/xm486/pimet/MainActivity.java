@@ -386,6 +386,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsStorageTv;
     private View btnClearNpmCache;
     private View btnResetContainer;
+    private com.xm486.pimet.ui.StorageCleanPanel storageCleanPanel;
     private TextView btnBatteryIgnoreOpt;
     private View btnAutoStartSettings;
     private TextView btnPrivilegeRoot;
@@ -693,6 +694,13 @@ public class MainActivity extends AppCompatActivity {
         settingsStorageTv = findViewById(R.id.settingsStorageTv);
         btnClearNpmCache = findViewById(R.id.btnClearNpmCache);
         btnResetContainer = findViewById(R.id.btnResetContainer);
+        View btnStorageScan = findViewById(R.id.btnStorageScan);
+        LinearLayout storageScanContainer = findViewById(R.id.storageScanContainer);
+        if (btnStorageScan != null && storageScanContainer != null) {
+            storageCleanPanel = new com.xm486.pimet.ui.StorageCleanPanel(this, storageScanContainer,
+                    piWebWebView, this::refreshStorageSize);
+            btnStorageScan.setOnClickListener(v -> storageCleanPanel.scan());
+        }
         btnBatteryIgnoreOpt = findViewById(R.id.btnBatteryIgnoreOpt);
         btnAutoStartSettings = findViewById(R.id.btnAutoStartSettings);
         btnPrivilegeRoot = findViewById(R.id.btnPrivilegeRoot);
@@ -5606,6 +5614,7 @@ public class MainActivity extends AppCompatActivity {
         if (viewLaunch != null) ThemeManager.applyThemeToHierarchy(viewLaunch, palette);
         if (viewPlugins != null) ThemeManager.applyThemeToHierarchy(viewPlugins, palette);
         if (viewSettings != null) ThemeManager.applyThemeToHierarchy(viewSettings, palette);
+        if (storageCleanPanel != null) storageCleanPanel.rerender();
         if (viewSettingsSubWindow != null) ThemeManager.applyThemeToHierarchy(viewSettingsSubWindow, palette);
 
         if (bottomNavBar != null) {
