@@ -72,7 +72,7 @@ public class HelpGuideDialog {
 
         try {
             this.palette = ThemeManager.getEffectivePalette(context);
-            AlertDialog.Builder builder = new AlertDialog.Builder(context);
+            AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
             LinearLayout root = new LinearLayout(context);
             root.setOrientation(LinearLayout.VERTICAL);
             root.setPadding(dp(16), dp(12), dp(16), dp(12));

@@ -212,7 +212,7 @@ public class WebTranslationDialog {
         root.addView(btnRow);
         scrollView.addView(root);
 
-        AlertDialog dialog = new AlertDialog.Builder(context)
+        AlertDialog dialog = new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                 .setView(scrollView)
                 .create();
 

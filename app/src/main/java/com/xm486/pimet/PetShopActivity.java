@@ -509,7 +509,7 @@ public class PetShopActivity extends AppCompatActivity {
         final String[] importedDir = new String[1];
         importBtn.setOnClickListener(v -> startImport(pet, importBtn, preview, animated, switchBtn, importedDir));
 
-        AlertDialog dlg = new AlertDialog.Builder(this)
+        AlertDialog dlg = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setView(content)
                 .setPositiveButton("浏览器打开", (d, w) -> openInBrowser(pet))
                 .setNegativeButton("关闭", null)

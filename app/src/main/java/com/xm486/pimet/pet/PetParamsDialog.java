@@ -60,7 +60,7 @@ public class PetParamsDialog {
         if (dialog != null && dialog.isShowing()) return;
 
         try {
-            AlertDialog.Builder builder = new AlertDialog.Builder(context);
+            AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
 
             LinearLayout root = new LinearLayout(context);
             root.setOrientation(LinearLayout.VERTICAL);

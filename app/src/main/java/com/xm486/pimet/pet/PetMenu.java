@@ -418,7 +418,7 @@ public class PetMenu {
             actionRow.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
             root.addView(actionRow, arLp);
 
-            dialog.setContentView(root);
+            dialog.setContentView(com.xm486.pimet.ui.Icons.install(root));
 
             Window window = dialog.getWindow();
             if (window != null) {
@@ -690,7 +690,7 @@ public class PetMenu {
         }
 
         try {
-            android.app.AlertDialog alert = new android.app.AlertDialog.Builder(context)
+            android.app.AlertDialog alert = new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                     .setTitle("🗣️ 桌宠活跃度与主动说话频率")
                     .setSingleChoiceItems(options, checkedItem, (dialogInterface, which) -> {
                         dialogInterface.dismiss();

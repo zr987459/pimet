@@ -719,6 +719,23 @@ public class MainActivity extends AppCompatActivity {
         tabSettings.setOnClickListener(v -> switchTab(3));
     }
 
+    /** 底栏线性图标与标签同色（选中=强调色，未选中=次要文字色），颜色全部来自当前主题调色板。 */
+    private void syncTabIconColors() {
+        int[][] pairs = {
+                {R.id.tabLaunchIcon, R.id.tabLaunchText},
+                {R.id.tabPiWebIcon, R.id.tabPiWebText},
+                {R.id.tabPluginsIcon, R.id.tabPluginsText},
+                {R.id.tabSettingsIcon, R.id.tabSettingsText},
+        };
+        for (int[] pair : pairs) {
+            View icon = findViewById(pair[0]);
+            View label = findViewById(pair[1]);
+            if (icon instanceof TextView && label instanceof TextView) {
+                ((TextView) icon).setTextColor(((TextView) label).getCurrentTextColor());
+            }
+        }
+    }
+
     public void switchTab(int index) {
         viewLaunch.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
@@ -735,6 +752,7 @@ public class MainActivity extends AppCompatActivity {
         tabPiWebText.setTextColor(index == 1 ? activeColor : normalColor);
         if (tabPluginsText != null) tabPluginsText.setTextColor(index == 2 ? activeColor : normalColor);
         tabSettingsText.setTextColor(index == 3 ? activeColor : normalColor);
+        syncTabIconColors();
 
         if (index == 0) {
             checkServiceStatus();
@@ -945,7 +963,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void confirmDeletePet(PetRegistry.PetInfo pet) {
         String typeDesc = pet.external ? "外部导入" : "内置角色";
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("删除桌宠形象")
                 .setMessage("确定要删除「" + pet.displayName + "」（" + typeDesc + "）吗？\n\n"
                         + (pet.external ? "本地导入的角色素材将被彻底清除。" : "内置角色删除后可在角色商城中恢复。"))
@@ -973,7 +991,7 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < pets.size(); i++) {
             names[i] = pets.get(i).displayName + " (" + pets.get(i).dir + ")";
         }
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🐾 选择切换桌宠伙伴")
                 .setItems(names, (dialog, which) -> {
                     PetRegistry.PetInfo selected = pets.get(which);
@@ -1118,7 +1136,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         try {
-            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+            AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
             LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
             root.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
@@ -1640,7 +1658,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showCustomPortsDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
         builder.setTitle("🌐 自定义多服务端口配置");
 
         LinearLayout layout = new LinearLayout(this);
@@ -2511,7 +2529,7 @@ public class MainActivity extends AppCompatActivity {
             refreshSettingsPortFields();
             updateLaunchStatusUI(isPiWebAlive);
             if (isPiWebAlive && oldPort != newPort) {
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("🔄 重启 Pi-Web 服务生效")
                         .setMessage("启动端口已由 " + oldPort + " 调整为 " + newPort + "。\n当前服务正在旧端口运行，是否立即重启服务？")
                         .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
@@ -2534,7 +2552,7 @@ public class MainActivity extends AppCompatActivity {
         input.setBackgroundColor(0xFF0D1117);
         input.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🌐 自定义 Pi-Web 启动端口")
                 .setMessage("请输入 1024 ~ 65535 范围内的端口号：")
                 .setView(input)
@@ -2579,7 +2597,7 @@ public class MainActivity extends AppCompatActivity {
                 btnLaunchStop.setAlpha(1.0f);
                 btnLaunchStop.setBackground(ThemeManager.createDangerButtonDrawable(this, palette, 8f));
                 if (btnLaunchStop instanceof TextView) {
-                    ((TextView) btnLaunchStop).setTextColor(0xFFFFFFFF);
+                    ((TextView) btnLaunchStop).setTextColor(ThemeManager.statusDangerColor(palette));
                 }
             }
             if (btnLaunchRestart != null) {
@@ -3353,7 +3371,7 @@ public class MainActivity extends AppCompatActivity {
         btnDone.setLayoutParams(doneLp);
         layout.addView(btnDone);
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setView(layout)
                 .create();
         if (dialog.getWindow() != null) {
@@ -3582,7 +3600,7 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "所有自定义端口与凭证已保存并生效！", Toast.LENGTH_SHORT).show();
 
                     if (oldPort != pwPort && isPiWebAlive) {
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("🔄 重启 Pi-Web 服务生效")
                                 .setMessage("Pi-Web 启动端口已由 " + oldPort + " 调整为 " + pwPort + "。\n当前服务正在旧端口运行，是否立即重启服务应用新端口？")
                                 .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
@@ -3620,7 +3638,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnResetContainer.setOnClickListener(v -> {
-            new AlertDialog.Builder(this)
+            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                     .setTitle("重置 Linux 容器？")
                     .setMessage("此操作将彻底删除内置 PRoot 容器文件系统，所有已安装的 npm 包及数据将被清空。")
                     .setPositiveButton("确认重置", (dialog, which) -> {
@@ -3675,7 +3693,7 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "打开 Shizuku 失败", Toast.LENGTH_SHORT).show();
                 }
             } else {
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("⚡ Shizuku 特权未安装")
                         .setMessage("Shizuku 可通过无线调试 (ADB) 免 Root 为应用赋予系统级 ADB 权限。\n\n是否打开 Shizuku 官方主页下载？")
                         .setPositiveButton("前往下载", (dialog, which) -> {
@@ -3845,7 +3863,7 @@ public class MainActivity extends AppCompatActivity {
                 break;
             }
         }
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("⏱️ 调节桌宠主动关怀活跃度")
                 .setSingleChoiceItems(options, selected, (d, which) -> {
                     d.dismiss();
@@ -3881,7 +3899,7 @@ public class MainActivity extends AppCompatActivity {
                             settingsPiWebVersionTv.setText("已安装: v" + info.currentVersion + (info.hasUpdate ? " (有新版: v" + info.latestVersion + ")" : " (最新)"));
                         }
                         if (info.hasUpdate) {
-                            new AlertDialog.Builder(this)
+                            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                     .setTitle("🎉 发现 Pi-Web 工作台新版本 (v" + info.latestVersion + ")")
                                     .setMessage("【当前已安装】v" + info.currentVersion +
                                             "\n【最新可用版本】v" + info.latestVersion +
@@ -3893,7 +3911,7 @@ public class MainActivity extends AppCompatActivity {
                                     .setNegativeButton("稍后再说", null)
                                     .show();
                         } else {
-                            new AlertDialog.Builder(this)
+                            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                     .setTitle("✔ Pi-Web 工作台已是最新")
                                     .setMessage("当前版本: v" + info.currentVersion + "\n已是 npm 镜像源上的最新稳定版本，无需更新。")
                                     .setPositiveButton("确定", null)
@@ -3921,7 +3939,7 @@ public class MainActivity extends AppCompatActivity {
                                 "【更新内容】\n" + (info.changelog != null && !info.changelog.isEmpty() ? info.changelog : "常规体验与底层稳定性优化") +
                                 "\n\n【说明】更新采用安全覆盖安装，完整保留现有所有数据、配置、会话与桌宠。";
 
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("✨ 发现 PiMet 客户端新版本 " + info.latestVersion)
                                 .setMessage(msg)
                                 .setPositiveButton("📥 本地下载", (d, w) -> {
@@ -3937,7 +3955,7 @@ public class MainActivity extends AppCompatActivity {
                     } else if (info != null) {
                         String routeTip = (info.bestRouteName != null ? info.bestRouteName : "优选线路") +
                                 (info.routeLatencyMs > 0 ? " (" + info.routeLatencyMs + "ms)" : "");
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("✔ 当前已是最新版本")
                                 .setMessage("当前安装版本: v" + info.currentVersion + "\n已连通线路: " + routeTip +
                                         "\n\n暂无可用新版本，若需备份或在其他设备安装，可复制安装包下载链接。")
@@ -4011,7 +4029,7 @@ public class MainActivity extends AppCompatActivity {
         logScrollView.addView(tvLiveLog);
         layout.addView(logScrollView);
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🚀 Pi-Web 平滑增量升级")
                 .setView(layout)
                 .setCancelable(false)
@@ -4046,7 +4064,7 @@ public class MainActivity extends AppCompatActivity {
                 if (settingsPiWebVersionTv != null) {
                     settingsPiWebVersionTv.setText("已安装版本: v" + newVer);
                 }
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("✨ 升级成功")
                         .setMessage("Pi-Web 工作台已成功平滑升级至 v" + newVer + "！\n所有本地配置与工程数据完整保留。")
                         .setPositiveButton("确定", (d, w) -> {
@@ -4058,7 +4076,7 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 tvStage.setText("❌ 升级失败");
                 tvStage.setTextColor(0xFFF85149);
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("升级失败")
                         .setMessage(message != null ? message : "更新过程中遇到错误，请检查网络或稍后重试。")
                         .setPositiveButton("确定", null)
@@ -4214,7 +4232,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                 if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                    new AlertDialog.Builder(this)
+                    new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                             .setTitle("⚡ 开启后台高保活模式")
                             .setMessage("检测到系统尚未为 PiMet 开启电池白名单。\n\n为保证在外部浏览器使用 Pi-Web 或息屏时后台服务不被系统冻结杀掉，建议允许忽略电池优化。")
                             .setPositiveButton("立即开启", (dialog, which) -> requestBatteryOptimizationExemption())
@@ -4319,7 +4337,7 @@ public class MainActivity extends AppCompatActivity {
         String clip = getClipboardText();
         String preview = TextUtils.isEmpty(clip) ? "（剪贴板为空）" : (clip.length() > 60 ? clip.substring(0, 60) + "..." : clip);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("📋 剪贴板操作")
                 .setMessage("当前剪贴板内容：\n" + preview)
                 .setItems(new String[]{
@@ -5027,7 +5045,7 @@ public class MainActivity extends AppCompatActivity {
         btnDelete.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
         btnDelete.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnDelete.setOnClickListener(v -> {
-            new AlertDialog.Builder(this)
+            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                     .setTitle("确认移除插件")
                     .setMessage("确定要从容器中删除 " + item.name + " (" + item.getTypeName() + ") 吗？")
                     .setPositiveButton("移除", (d, w) -> {
@@ -5056,7 +5074,7 @@ public class MainActivity extends AppCompatActivity {
                 "🤖 新建 Subagent 子智能体 (.md)",
                 "📄 编辑 settings.json (全局配置)"
         };
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("添加生态配置")
                 .setItems(options, (dialog, which) -> {
                     switch (which) {
@@ -5100,7 +5118,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("环境变量 / Headers (JSON 格式):"));
         layout.addView(envInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("添加 MCP 外部服务")
                 .setView(layout)
                 .setPositiveButton("保存并生效", (dialog, which) -> {
@@ -5142,7 +5160,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("SKILL.md Markdown 内容:"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("新建 Skill 专家技能")
                 .setView(layout)
                 .setPositiveButton("保存", (dialog, which) -> {
@@ -5178,7 +5196,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("编辑 ~/.pi/agent/settings.json:"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("全局 settings.json 配置")
                 .setView(layout)
                 .setPositiveButton("保存", (dialog, which) -> {
@@ -5215,7 +5233,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("配置/内容 (" + item.getTypeName() + "):"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("配置: " + item.name)
                 .setView(layout)
                 .setNeutralButton("🔍 校验语法", (dialog, which) -> {
@@ -5527,6 +5545,7 @@ public class MainActivity extends AppCompatActivity {
             tabSettingsText.setTextColor(((viewSettings != null && viewSettings.getVisibility() == View.VISIBLE)
                     || (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE)) ? activeTabColor : normalTabColor);
         }
+        syncTabIconColors();
 
         View headerView = findViewById(R.id.viewSettingsSubHeader);
         if (headerView != null) {
@@ -5620,7 +5639,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void confirmAndImportBackupUri(Uri uri) {
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("⚠️ 确认无损还原备份包？")
                 .setMessage("即将从所选外部文件无损恢复全部数据与配置。\n包含聊天记忆、子代理、插件生态、端口及应用偏好。\n是否继续？")
                 .setPositiveButton("立即还原", (d, w) -> {
@@ -5631,7 +5650,7 @@ public class MainActivity extends AppCompatActivity {
                         holder.tvDetail.setText(logLine);
                     }, (success, restoredCount, msg) -> {
                         holder.dialog.dismiss();
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
                                 .setMessage(msg)
                                 .setPositiveButton("确定", null)
@@ -5650,7 +5669,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private BackupProgressHolder showBackupProgressDialog(String title) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);

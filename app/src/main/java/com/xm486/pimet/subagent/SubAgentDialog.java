@@ -48,7 +48,7 @@ public class SubAgentDialog {
     }
 
     public void show() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
 
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -224,7 +224,7 @@ public class SubAgentDialog {
 
         Button btnDel = createSmallBtn("🗑️ 删除", 0x33DA3633, 0xFFF85149);
         btnDel.setOnClickListener(v -> {
-            new AlertDialog.Builder(context)
+            new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                     .setTitle("确认删除子代理")
                     .setMessage("确定删除子代理「" + agent.id + "」(" + agent.filePath + ") 吗？此操作不可逆。")
                     .setPositiveButton("删除", (d, w) -> {
@@ -339,7 +339,7 @@ public class SubAgentDialog {
         final boolean isEdit = (targetAgent != null && !TextUtils.isEmpty(targetAgent.filePath));
         final SubAgentInfo agent = (targetAgent != null) ? targetAgent : new SubAgentInfo();
 
-        AlertDialog.Builder b = new AlertDialog.Builder(context);
+        AlertDialog.Builder b = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
 
         ScrollView sv = new ScrollView(context);
         LinearLayout form = new LinearLayout(context);

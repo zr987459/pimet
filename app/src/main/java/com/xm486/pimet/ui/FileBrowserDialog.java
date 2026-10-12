@@ -161,7 +161,7 @@ public class FileBrowserDialog {
     public void show() {
         if (dialog != null && dialog.isShowing()) return;
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -595,7 +595,7 @@ public class FileBrowserDialog {
      */
     private void showItemDetailDialog(FileItem item) {
         if (item == null || item.file == null) return;
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -717,7 +717,7 @@ public class FileBrowserDialog {
     private void showFilePreviewDialog(File file) {
         if (file == null || !file.exists() || file.isDirectory()) return;
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -839,7 +839,7 @@ public class FileBrowserDialog {
     }
 
     private ProgressDialogHolder showBackupProgressDialog(String title) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -899,7 +899,7 @@ public class FileBrowserDialog {
     }
 
     public void showBackupMigrationDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -1019,7 +1019,7 @@ public class FileBrowserDialog {
         }, (success, file, message) -> {
             holder.dialog.dismiss();
 
-            AlertDialog.Builder resB = new AlertDialog.Builder(context);
+            AlertDialog.Builder resB = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
             LinearLayout r = new LinearLayout(context);
             r.setOrientation(LinearLayout.VERTICAL);
             r.setBackgroundColor(0xFF0D1117);
@@ -1082,7 +1082,7 @@ public class FileBrowserDialog {
     }
 
     public void showCustomExportDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         ScrollView scroll = new ScrollView(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -1369,7 +1369,7 @@ public class FileBrowserDialog {
         } catch (Throwable ignored) {}
 
         if (zipCandidates.isEmpty()) {
-            new AlertDialog.Builder(context)
+            new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                     .setTitle("未发现备份包")
                     .setMessage("当前浏览目录及系统 Downloads 文件夹中未发现 .zip 格式备份文件。\n\n提示：您可在文件浏览器中先导航至包含备份包的文件夹，点击该 .zip 文件即可一键无损还原。")
                     .setPositiveButton("我知道了", null)
@@ -1383,7 +1383,7 @@ public class FileBrowserDialog {
             names[i] = f.getName() + " (" + formatSize(f.length()) + ")";
         }
 
-        new AlertDialog.Builder(context)
+        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                 .setTitle("选择要导入还原的备份包")
                 .setItems(names, (d, which) -> {
                     if (which >= 0 && which < zipCandidates.size()) {
@@ -1400,7 +1400,7 @@ public class FileBrowserDialog {
             return;
         }
 
-        new AlertDialog.Builder(context)
+        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                 .setTitle("⚠️ 确认无损还原备份包？")
                 .setMessage("即将从以下文件还原全量数据：\n" + zipFile.getName() + " (" + formatSize(zipFile.length()) + ")\n\n包含内容：\n• 桌面宠物聊天记忆与好感度\n• 全部子代理配置与技能生态\n• NPM 插件与扩展依赖清单\n• 本地多服务端口与偏好设置\n\n现有环境的同名配置将被安全覆盖同步。是否继续？")
                 .setPositiveButton("立即还原", (d, which) -> {
@@ -1412,7 +1412,7 @@ public class FileBrowserDialog {
                     }, (success, restoredCount, message) -> {
                         holder.dialog.dismiss();
 
-                        new AlertDialog.Builder(context)
+                        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                                 .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
                                 .setMessage(message + (success ? "\n\n建议重启相关后台服务或刷新界面以使所有新配置完全生效。" : ""))
                                 .setPositiveButton("确定", (d2, w2) -> {

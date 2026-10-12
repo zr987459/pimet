@@ -26,6 +26,23 @@ public class PiMetApp extends Application {
         super.onCreate();
         instance = this;
 
+        // 全局线性图标：为每个 Activity 的视图树安装 emoji→Lucide 线性图标渲染
+        registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
+            @Override public void onActivityCreated(android.app.Activity a, android.os.Bundle b) {}
+            @Override public void onActivityStarted(android.app.Activity a) {
+                try {
+                    com.xm486.pimet.ui.Icons.install(a.getWindow().getDecorView());
+                } catch (Throwable t) {
+                    Log.w(TAG, "Icons install failed", t);
+                }
+            }
+            @Override public void onActivityResumed(android.app.Activity a) {}
+            @Override public void onActivityPaused(android.app.Activity a) {}
+            @Override public void onActivityStopped(android.app.Activity a) {}
+            @Override public void onActivitySaveInstanceState(android.app.Activity a, android.os.Bundle b) {}
+            @Override public void onActivityDestroyed(android.app.Activity a) {}
+        });
+
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             Log.e(TAG, "Uncaught exception in thread " + thread.getName(), throwable);
             try {

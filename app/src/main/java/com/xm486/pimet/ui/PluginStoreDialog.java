@@ -246,7 +246,7 @@ public class PluginStoreDialog {
     }
 
     public static void show(Context context, Runnable onInstallComplete) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         AlertDialog[] dialogRef = new AlertDialog[1];
         View dialogView = buildStoreView(context, onInstallComplete, () -> {
             if (dialogRef[0] != null) dialogRef[0].dismiss();

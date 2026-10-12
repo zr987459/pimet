@@ -384,9 +384,35 @@ public class ThemeManager {
         return flat(greenColor, dpToPx(context, snapRadius(radiusDp)));
     }
 
+    /**
+     * 危险按钮（停止 / 重置）：极简处理 —— 与次级按钮相同的中性底色，
+     * 叠加约 8% 透明度的现有危险色作为极淡提示，危险色仅用于文字与图标（见 {@link #statusDangerColor}）。
+     */
     public static GradientDrawable createDangerButtonDrawable(Context context, ThemePalette palette, float radiusDp) {
-        int redColor = palette.isDark ? 0xFFDA3633 : 0xFFCF222E;
-        return flat(redColor, dpToPx(context, snapRadius(radiusDp)));
+        return flat(blendOver(palette.bgHover, statusDangerColor(palette), 0.08f),
+                dpToPx(context, snapRadius(radiusDp)));
+    }
+
+    // ================= 状态语义色（沿用既有色值，不新增颜色）=================
+
+    public static int statusSuccessColor(ThemePalette palette) {
+        return palette.isDark ? 0xFF3FB950 : 0xFF1A7F37;
+    }
+
+    public static int statusWarningColor(ThemePalette palette) {
+        return palette.isDark ? 0xFFD29922 : 0xFF9A6700;
+    }
+
+    public static int statusDangerColor(ThemePalette palette) {
+        return palette.isDark ? 0xFFF85149 : 0xFFCF222E;
+    }
+
+    /** 将 top 以 alpha 比例叠加到不透明 base 上，得到派生色（仅用于从既有色值派生淡色底）。 */
+    public static int blendOver(int base, int top, float alpha) {
+        int r = Math.round(((base >> 16) & 0xFF) * (1 - alpha) + ((top >> 16) & 0xFF) * alpha);
+        int g = Math.round(((base >> 8) & 0xFF) * (1 - alpha) + ((top >> 8) & 0xFF) * alpha);
+        int b = Math.round((base & 0xFF) * (1 - alpha) + (top & 0xFF) * alpha);
+        return 0xFF000000 | (r << 16) | (g << 8) | b;
     }
 
     /** 输入框：保留 1dp 发丝描边以提示可输入。 */
@@ -474,10 +500,10 @@ public class ThemeManager {
                     return;
                 }
                 // 停止/危险操作按钮
-                if (idName.equals("launchStopBtn") || idName.equals("btnResetContainer")
+                if (idName.equals("launchStopBtn") || idName.equals("btnLaunchStop") || idName.equals("btnResetContainer")
                         || idName.equals("btnClearContainerData")) {
-                    tv.setBackground(createSecondaryButtonDrawable(ctx, palette, RADIUS_CONTROL));
-                    tv.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
+                    tv.setBackground(createDangerButtonDrawable(ctx, palette, RADIUS_CONTROL));
+                    tv.setTextColor(statusDangerColor(palette));
                     return;
                 }
                 // 顶栏特定文本
