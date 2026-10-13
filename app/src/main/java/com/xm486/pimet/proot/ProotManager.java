@@ -189,6 +189,29 @@ public final class ProotManager {
         }
     }
 
+    /**
+     * 预热并确认首页能出首字节：pi-web 的 Service Worker 对页面导航只等 8 秒，冷启动时首页 SSR 常超过 8 秒，
+     * WebView 直接加载就会先闪「Pi Web is offline」。这里由原生先请求一次首页（最多等 25 秒），
+     * 首页能响应后再让 WebView 加载，就不会再看到离线页。
+     */
+    public static boolean warmPiWebPage(int port) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL("http://127.0.0.1:" + port + "/");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(25000);
+            conn.setRequestMethod("GET");
+            conn.setInstanceFollowRedirects(false);
+            int code = conn.getResponseCode();
+            return code >= 200 && code < 400;
+        } catch (Throwable ignored) {
+            return false;
+        } finally {
+            if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) {}
+        }
+    }
+
     public static boolean isPiWebHttpReady() {
         return isPiWebHttpReady(PI_WEB_PORT);
     }

@@ -2789,9 +2789,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshLaunchLog();
 
                 // 核心预加载：服务一就绪，后台立刻触发静默渲染，用户点击进入工作台秒开呈现
-                if (piWebWebView != null) {
-                    piWebWebView.loadUrl(getPiWebUrl());
-                }
+                warmThenLoadPiWeb(false);
             }
 
             @Override
@@ -2856,9 +2854,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshLaunchLog();
 
                 // 核心预加载：服务就绪瞬间立即静默加载 WebView，进入工作台 0 秒呈现
-                if (piWebWebView != null) {
-                    piWebWebView.loadUrl(getPiWebUrl());
-                }
+                warmThenLoadPiWeb(false);
             }
 
             @Override
@@ -3635,9 +3631,10 @@ public class MainActivity extends AppCompatActivity {
 
         // 关键秒开优化：若服务已知在运行，或者 WebView 已在目标地址，主线程同步直接切出工作台，毫秒级即现！
         if (isPiWebAlive || (piWebWebView != null && piWebWebView.getUrl() != null && piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-            showPiWebOffline(false);
             if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-                piWebWebView.loadUrl(url);
+                warmThenLoadPiWeb(true);
+            } else if (!isPiWebLoading) {
+                showPiWebOffline(false);
             }
         }
 
@@ -3657,11 +3654,15 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 isPiWebAlive = isReady;
                 if (isReady) {
-                    showPiWebOffline(false);
                     if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-                        piWebWebView.loadUrl(url);
+                        warmThenLoadPiWeb(true);
+                    } else if (!isPiWebLoading) {
+                        showPiWebOffline(false);
                     }
                     // 目标网页已正确加载，切勿调用 reload()，以完整保留 WebView 内存状态
+                } else if (isPiWebActionInProgress || isOfflineRecovering) {
+                    // 服务正在启动：显示「正在加载」并等首页就绪，而不是「未在运行」
+                    warmThenLoadPiWeb(true);
                 } else {
                     showPiWebOffline(true);
                 }
@@ -3726,39 +3727,66 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handlePiWebOfflineDetected() {
+        // 离线页是 Service Worker 在首页 8 秒没响应时给的兜底：盖上「正在加载」，预热首页后自动重载
+        warmThenLoadPiWeb(true);
+    }
+
+    private volatile boolean isPiWebLoading = false;
+    private TextView piWebOfflineTitleTv;
+
+    /** 后台等首页能出首字节再加载 WebView；showUi=true 时期间显示原生「正在加载」而不是离线页 */
+    private void warmThenLoadPiWeb(boolean showUi) {
+        if (showUi) showPiWebLoading();
         if (isOfflineRecovering) return;
         isOfflineRecovering = true;
-        int port = PiMetConfig.getWebPort(this);
-        // 如果服务实际在运行或刚拉起，静默轮询并在就绪后自动重新加载，摆脱手动点击 Try again
+        final int port = PiMetConfig.getWebPort(this);
         new Thread(() -> {
+            boolean ok = false;
             try {
-                // 手机上 Next.js 冷启动常需 20–60 秒：最多等 2 分钟，就绪立即自动重载（不用手点 Try again）
-                for (int i = 0; i < 170; i++) {
+                long deadline = System.currentTimeMillis() + 150000L;
+                while (System.currentTimeMillis() < deadline && !isFinishing() && !isDestroyed()) {
+                    if (ProotManager.warmPiWebPage(port)) { ok = true; break; }
                     try { Thread.sleep(700); } catch (InterruptedException ignored) {}
-                    if (isFinishing() || isDestroyed()) break;
-                    if (ProotManager.isPiWebHttpReady(port)) {
-                        mainHandler.post(() -> {
-                            if (piWebWebView != null) {
-                                String url = getPiWebUrl();
-                                String cur = piWebWebView.getUrl();
-                                if (cur == null || !cur.startsWith("http://127.0.0.1:" + port)) {
-                                    piWebWebView.loadUrl(url);
-                                } else {
-                                    piWebWebView.reload();
-                                }
-                                showPiWebOffline(false);
-                            }
-                        });
-                        break;
-                    }
                 }
             } finally {
                 isOfflineRecovering = false;
             }
-        }).start();
+            final boolean ready = ok;
+            mainHandler.post(() -> {
+                if (piWebWebView == null) return;
+                if (ready) {
+                    String url = getPiWebUrl();
+                    String cur = piWebWebView.getUrl();
+                    if (cur == null || !cur.startsWith("http://127.0.0.1:" + port)) piWebWebView.loadUrl(url);
+                    else piWebWebView.reload();
+                    if (isPiWebLoading) showPiWebOffline(false);
+                } else if (isPiWebLoading) {
+                    showPiWebOffline(true);
+                }
+            });
+        }, "piweb-warmup").start();
+    }
+
+    private void showPiWebLoading() {
+        if (piWebOfflineCard == null || piWebWebView == null) return;
+        isPiWebLoading = true;
+        piWebOfflineCard.setVisibility(View.VISIBLE);
+        piWebWebView.setVisibility(View.INVISIBLE);
+        if (piWebOfflineTitleTv == null && piWebOfflineSubTv != null
+                && piWebOfflineSubTv.getParent() instanceof android.view.ViewGroup) {
+            android.view.ViewGroup pg = (android.view.ViewGroup) piWebOfflineSubTv.getParent();
+            int idx = pg.indexOfChild(piWebOfflineSubTv);
+            if (idx > 0 && pg.getChildAt(idx - 1) instanceof TextView) piWebOfflineTitleTv = (TextView) pg.getChildAt(idx - 1);
+        }
+        if (piWebOfflineTitleTv != null) piWebOfflineTitleTv.setText("Pi-Web 正在加载…");
+        if (piWebOfflineSubTv != null) piWebOfflineSubTv.setText("服务刚启动，首屏准备好后会自动进入");
+        if (piWebWakeBtn != null) piWebWakeBtn.setVisibility(View.GONE);
     }
 
     private void showPiWebOffline(boolean offline) {
+        isPiWebLoading = false;
+        if (piWebOfflineTitleTv != null) piWebOfflineTitleTv.setText("Pi-Web 服务未在运行");
+        if (piWebWakeBtn != null) piWebWakeBtn.setVisibility(View.VISIBLE);
         piWebOfflineCard.setVisibility(offline ? View.VISIBLE : View.GONE);
         piWebWebView.setVisibility(offline ? View.GONE : View.VISIBLE);
         int port = PiMetConfig.getWebPort(this);
