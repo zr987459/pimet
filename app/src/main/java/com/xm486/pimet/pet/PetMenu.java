@@ -165,6 +165,11 @@ public class PetMenu {
     private LinearLayout grid(List<View> cells, int innerWidthDp, int cellHeightDp, int minCols, int maxCols) {
         int cols = (innerWidthDp + GAP_DP) / (CELL_DP + GAP_DP);
         cols = Math.max(minCols, Math.min(maxCols, Math.min(cols, cells.size())));
+        // 均衡行：行数不变时尽量平均分配（如 6 个按钮排成 3×2，而不是 5+1）
+        if (cols > 0 && cells.size() > cols) {
+            int rows = (cells.size() + cols - 1) / cols;
+            cols = Math.max(minCols, (cells.size() + rows - 1) / rows);
+        }
         LinearLayout g = new LinearLayout(context);
         g.setOrientation(LinearLayout.VERTICAL);
         for (int i = 0; i < cells.size(); i += cols) {
@@ -336,7 +341,7 @@ public class PetMenu {
             });
             root.addView(sizeRow, rowLp(4));
 
-            // ---- 操作图标网格：汇报进度 · 活跃度 · 设置 · 指南 · 关闭桌宠 ----
+            // ---- 操作图标网格：汇报进度 · 活跃度 · 绑定 · 设置 · 指南 · 关闭桌宠 ----
             List<View> actions = new ArrayList<>();
             actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_brain, "汇报进度", palette.text, false, v -> {
                 dismiss();
@@ -363,6 +368,16 @@ public class PetMenu {
                         dismiss();
                         showActivenessDialog();
                     }));
+
+            // 绑定：为各监控目标绑定桌宠（当前监控高亮，选完若是当前监控立即换上）
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_link, "绑定桌宠", palette.text, false, v -> {
+                dismiss();
+                try {
+                    PetBindingDialog.show(context);
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "open PetBindingDialog failed", t);
+                }
+            }));
 
             actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_settings, "设置", palette.text, false, v -> {
                 dismiss();
