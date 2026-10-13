@@ -210,7 +210,15 @@ public class AppBridgeManager {
                         writeJson(s, resp);
                         return;
                     }
-                    if (isPhoneControl(json)) {
+                    if (isTerminal(json)) {
+                        if (token == null) token = json.optString("token", null);
+                        if (!getBridgeToken().equals(token)) {
+                            resp = new JSONObject().put("success", false)
+                                    .put("error", "终端请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
+                        } else {
+                            resp = com.xm486.pimet.terminal.TerminalHub.handle(appContext, json);
+                        }
+                    } else if (isPhoneControl(json)) {
                         if (token == null) token = json.optString("token", null);
                         if (!getBridgeToken().equals(token)) {
                             resp = new JSONObject().put("success", false)
@@ -227,6 +235,10 @@ public class AppBridgeManager {
                 Log.w(TAG, "bridge client error: " + t);
             }
         });
+    }
+
+    private static boolean isTerminal(JSONObject json) {
+        return "terminal".equals(json.optString("action")) || json.has("terminal_action");
     }
 
     private static boolean isPhoneControl(JSONObject json) {

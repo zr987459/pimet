@@ -1656,8 +1656,27 @@ public final class PluginManager {
                 writeFile(bridgeFile, code);
                 Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts updated in container");
             }
+            ensureTerminalExtension(context, extDir);
         } catch (Throwable t) {
             Log.w("PiMet.PluginMgr", "Failed to ensure Android bridge extension", t);
+        }
+    }
+
+    /** 终端插件：从 assets/extensions/pimet-terminal.ts 同步到容器（内容不同才写） */
+    private static void ensureTerminalExtension(Context context, File extDir) {
+        try (java.io.InputStream in = context.getAssets().open("extensions/pimet-terminal.ts")) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            String code = new String(bo.toByteArray(), StandardCharsets.UTF_8);
+            File f = new File(extDir, "pimet-terminal.ts");
+            if (!code.equals(readFileRaw(f))) {
+                writeFile(f, code);
+                Log.i("PiMet.PluginMgr", "pimet-terminal.ts updated in container");
+            }
+        } catch (Throwable t) {
+            Log.w("PiMet.PluginMgr", "Failed to ensure terminal extension", t);
         }
     }
 

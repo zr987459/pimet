@@ -400,6 +400,11 @@ public class PetMenu {
                 }
             }));
 
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_terminal, "终端", palette.text, false, v -> {
+                dismiss();
+                com.xm486.pimet.terminal.FloatingTerminal.toggle(context);
+            }));
+
             // 关闭桌宠：低调危险样式（极淡危险底 + 危险色图标）
             actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_power, "关闭桌宠",
                     ThemeManager.statusDangerColor(palette), true, v -> {

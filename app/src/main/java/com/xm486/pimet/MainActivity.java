@@ -3338,6 +3338,13 @@ public class MainActivity extends AppCompatActivity {
             floatingMenuVertical.setVisibility(View.GONE);
             openExternalBrowser();
         });
+        View btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
+        if (btnFloatTerminal != null) {
+            btnFloatTerminal.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                com.xm486.pimet.terminal.FloatingTerminal.toggle(MainActivity.this);
+            });
+        }
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
     }
 

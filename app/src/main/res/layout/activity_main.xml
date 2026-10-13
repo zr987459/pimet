@@ -826,6 +826,19 @@
                             android:text="🎨"
                             android:textSize="14sp" />
 
+                        <!-- >_ 悬浮终端（真 PTY，多会话） -->
+                        <TextView
+                            android:id="@+id/btnFloatTerminal"
+                            android:layout_width="40dp"
+                            android:layout_height="36dp"
+                            android:contentDescription="终端"
+                            android:fontFamily="monospace"
+                            android:gravity="center"
+                            android:text="&gt;_"
+                            android:textColor="#3FB950"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
                         <!-- ↗ 外部浏览器打开 -->
                         <TextView
                             android:id="@+id/btnFloatBrowser"
