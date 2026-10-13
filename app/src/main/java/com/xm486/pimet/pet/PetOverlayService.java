@@ -1679,12 +1679,14 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
         String btnLabel = isPetHidden ? "🐾 重新弹出桌宠" : "🙈 隐藏桌宠";
         Notification.Action action = new Notification.Action.Builder(
-                R.drawable.ic_nav_home, btnLabel, togglePi).build();
+                R.drawable.ic_paw, btnLabel, togglePi).build();
         builder.addAction(action);
 
         return builder
-                .setSmallIcon(R.drawable.ic_nav_home)
-                .setContentTitle("DevPetM")
+                .setSmallIcon(com.xm486.pimet.ui.NotificationStyle.SMALL_ICON)
+                .setColor(com.xm486.pimet.ui.NotificationStyle.accentColor(this))
+                .setLargeIcon(com.xm486.pimet.ui.NotificationStyle.largeIcon(this))
+                .setContentTitle("PiMet 桌宠")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(true)

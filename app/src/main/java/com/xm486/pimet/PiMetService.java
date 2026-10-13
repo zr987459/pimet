@@ -108,7 +108,9 @@ public class PiMetService extends Service {
 
         int port = PiMetConfig.getWebPort(this);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_nav_home)
+                .setSmallIcon(com.xm486.pimet.ui.NotificationStyle.SMALL_ICON)
+                .setColor(com.xm486.pimet.ui.NotificationStyle.accentColor(this))
+                .setLargeIcon(com.xm486.pimet.ui.NotificationStyle.largeIcon(this))
                 .setContentTitle("PiMet Linux 守护服务运行中")
                 .setContentText("端口 " + port + " | PRoot 与 Pi-Web 后台持续在线 (点击切回应用)")
                 .setContentIntent(pendingIntent)
