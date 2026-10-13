@@ -433,6 +433,22 @@ public final class ProotManager {
                 }
                 File targetTarball = new File(tmpDir, "rootfs.tar.gz");
 
+                // 国内直连路线：GitHub 各镜像都慢（< 1 MB/s，常见于国内不开代理）时，
+                // 改为从阿里云/清华/中科大拉 Ubuntu 底包 + npmmirror 拉 Node，在手机上现装，全程不经过 GitHub。
+                boolean autoMode = com.xm486.pimet.PiMetConfig.ROOTFS_MIRROR_AUTO.equals(chosenMirror);
+                boolean domesticTried = false;
+                if (autoMode && lastBestMirrorSpeedBps < 1024L * 1024L) {
+                    domesticTried = true;
+                    if (callback != null) callback.onProgress("GitHub 线路太慢，切换国内源现装 Linux 容器...", 5);
+                    if (buildDomesticRootfs(context, isX86, rootfsDir, tmpDir, callback)) {
+                        if (callback != null) { callback.onProgress("容器就绪！", 100); callback.onSuccess(); }
+                        return;
+                    }
+                    deleteRecursive(rootfsDir);
+                    rootfsDir.mkdirs();
+                    if (callback != null) callback.onProgress("国内源安装未完成，回退 GitHub 镜像...", 5);
+                }
+
                 boolean downloadSuccess = false;
                 for (String urlStr : urls) {
                     try {
@@ -451,6 +467,14 @@ public final class ProotManager {
                     }
                 }
 
+                if ((!downloadSuccess || !targetTarball.exists()) && !domesticTried) {
+                    targetTarball.delete();
+                    if (callback != null) callback.onProgress("GitHub 镜像下载失败，改用国内源现装 Linux 容器...", 5);
+                    if (buildDomesticRootfs(context, isX86, rootfsDir, tmpDir, callback)) {
+                        if (callback != null) { callback.onProgress("容器就绪！", 100); callback.onSuccess(); }
+                        return;
+                    }
+                }
                 if (!downloadSuccess || !targetTarball.exists()) {
                     if (callback != null) callback.onError("下载 Linux 容器镜像失败，请检查网络后重试");
                     return;
@@ -478,6 +502,228 @@ public final class ProotManager {
                 if (callback != null) callback.onError("解压容器失败: " + e.getMessage());
             }
         }).start();
+    }
+
+    // ================= 国内源现装容器 =================
+    private static final String[] UBUNTU_BASE_MIRRORS = {
+            "https://mirrors.aliyun.com/ubuntu-cdimage/ubuntu-base/releases/24.04/release/",
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/",
+            "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/24.04/release/",
+            "https://mirrors.huaweicloud.com/ubuntu-cdimage/ubuntu-base/releases/24.04/release/"
+    };
+    private static final String[] UBUNTU_BASE_VERSIONS = {"24.04.5", "24.04.4", "24.04.3"};
+    private static final String NODE_FALLBACK_VERSION = "v24.9.0";
+
+    /**
+     * 不经过 GitHub：Ubuntu 24.04 base（国内镜像）+ Node 24（npmmirror）+ apt 换阿里云装 git。
+     * pi 与 pi-web 由后续流程通过 npmmirror 安装。成功返回 true。
+     */
+    public static boolean buildDomesticRootfs(Context context, boolean isX86, File rootfsDir, File tmpDir, InstallCallback cb) {
+        File base = new File(tmpDir, "ubuntu-base.tar.gz");
+        File nodeTar = new File(tmpDir, "node.tar.gz");
+        try {
+            rootfsDir.mkdirs();
+            tmpDir.mkdirs();
+            String arch = isX86 ? "amd64" : "arm64";
+
+            // 1) Ubuntu 底包：先探测哪个版本存在，再对各镜像竞速
+            List<String> baseUrls = new ArrayList<>();
+            String ver = null;
+            for (String v : UBUNTU_BASE_VERSIONS) {
+                String probe = UBUNTU_BASE_MIRRORS[0] + "ubuntu-base-" + v + "-base-" + arch + ".tar.gz";
+                if (headOk(probe) || headOk(UBUNTU_BASE_MIRRORS[1] + "ubuntu-base-" + v + "-base-" + arch + ".tar.gz")) { ver = v; break; }
+            }
+            if (ver == null) ver = UBUNTU_BASE_VERSIONS[0];
+            for (String m : UBUNTU_BASE_MIRRORS) baseUrls.add(m + "ubuntu-base-" + ver + "-base-" + arch + ".tar.gz");
+            if (cb != null) cb.onProgress("⚡ 正在挑选最快的国内镜像...", 6);
+            String[] sortedBase = testAndSortCandidateUrls(baseUrls.toArray(new String[0]), null);
+            if (!downloadFromAny(sortedBase, base, 10 * 1024 * 1024, "Ubuntu 底包", 8, 30, cb)) return false;
+
+            if (cb != null) cb.onProgress("正在解压 Ubuntu 底包...", 32);
+            TarGzipExtractor.extractRootfs(base, rootfsDir);
+            base.delete();
+            for (String d : new String[]{"dev", "proc", "sys", "tmp", "root", "usr/local"}) new File(rootfsDir, d).mkdirs();
+
+            // 2) Node.js 24（npmmirror）
+            String nodeVer = latestNodeV24();
+            String nodeArch = isX86 ? "x64" : "arm64";
+            String nodeName = "node-" + nodeVer + "-linux-" + nodeArch + ".tar.gz";
+            String[] nodeUrls = {
+                    "https://registry.npmmirror.com/-/binary/node/" + nodeVer + "/" + nodeName,
+                    "https://cdn.npmmirror.com/binaries/node/" + nodeVer + "/" + nodeName,
+                    "https://mirrors.huaweicloud.com/nodejs/" + nodeVer + "/" + nodeName,
+                    "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/" + nodeVer + "/" + nodeName,
+                    "https://mirrors.aliyun.com/nodejs-release/" + nodeVer + "/" + nodeName
+            };
+            if (!downloadFromAny(nodeUrls, nodeTar, 10 * 1024 * 1024, "Node.js " + nodeVer, 40, 62, cb)) return false;
+            if (cb != null) cb.onProgress("正在安装 Node.js...", 64);
+            try (InputStream in = new FileInputStream(nodeTar)) {
+                TarGzipExtractor.extractAuto(in, new File(rootfsDir, "usr/local"), 1);
+            }
+            nodeTar.delete();
+            for (String b : new String[]{"usr/local/bin/node"}) {
+                File f = new File(rootfsDir, b);
+                if (!f.exists()) return false;
+                f.setExecutable(true, false);
+            }
+
+            // 3) apt 换阿里云源，补装 git / ca-certificates / curl（失败不致命）
+            writeDomesticAptConfig(rootfsDir, isX86);
+            ensureContainerDns(context);
+            if (cb != null) cb.onProgress("正在从阿里云安装 git 等基础工具...", 68);
+            int rc = runInContainer(context,
+                    "export DEBIAN_FRONTEND=noninteractive; apt-get update -o Acquire::Retries=2 && " +
+                    "apt-get install -y --no-install-recommends -o Acquire::Retries=2 git ca-certificates curl xz-utils procps && " +
+                    "apt-get clean && rm -rf /var/lib/apt/lists/*",
+                    8 * 60 * 1000L, line -> {
+                        if (cb != null && line != null) {
+                            String t = line.trim();
+                            if (t.startsWith("Get:") || t.startsWith("Setting up") || t.startsWith("Unpacking")) {
+                                cb.onProgress("安装基础工具: " + (t.length() > 60 ? t.substring(0, 60) : t), 70);
+                            }
+                        }
+                    });
+            Log.i(TAG, "domestic apt install rc=" + rc);
+            // apt 装好后切回 https（阿里云支持），失败则保留 http
+            if (rc == 0) writeDomesticAptConfig(rootfsDir, isX86);
+
+            new File(rootfsDir, "etc/pimet-domestic-rootfs").createNewFile();
+            if (cb != null) cb.onProgress("国内源容器安装完成", 95);
+            return isRootfsInstalled(context);
+        } catch (Throwable t) {
+            Log.w(TAG, "buildDomesticRootfs failed", t);
+            if (cb != null) cb.onProgress("国内源安装出错: " + t.getMessage(), 5);
+            return false;
+        } finally {
+            base.delete();
+            nodeTar.delete();
+        }
+    }
+
+    private static boolean downloadFromAny(String[] urls, File target, long minBytes, String label,
+                                           int pFrom, int pTo, InstallCallback cb) {
+        for (String u : urls) {
+            if (u == null) continue;
+            try {
+                if (cb != null) cb.onProgress("下载 " + label + ": " + hostOf(u), pFrom);
+                target.delete();
+                downloadWithResume(u, target, percent -> {
+                    if (cb != null) cb.onProgress("正在下载 " + label + " (" + percent + "%)", pFrom + percent * (pTo - pFrom) / 100);
+                });
+                if (target.exists() && target.length() >= minBytes) return true;
+            } catch (Throwable t) {
+                Log.w(TAG, "download failed: " + u, t);
+            }
+        }
+        return false;
+    }
+
+    private static String hostOf(String u) {
+        try { return new URL(u).getHost(); } catch (Throwable t) { return u; }
+    }
+
+    private static boolean headOk(String u) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(u).openConnection();
+            c.setRequestMethod("HEAD");
+            c.setConnectTimeout(4000);
+            c.setReadTimeout(4000);
+            c.setInstanceFollowRedirects(true);
+            int code = c.getResponseCode();
+            return code >= 200 && code < 400;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 从 npmmirror 取 Node 24 最新版本号，失败用内置版本 */
+    private static String latestNodeV24() {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL("https://registry.npmmirror.com/-/binary/node/latest-v24.x/").openConnection();
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(8000);
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                String l;
+                while ((l = r.readLine()) != null) sb.append(l);
+            }
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("node-(v24\\.\\d+\\.\\d+)-linux").matcher(sb);
+            String best = null;
+            int[] bestN = null;
+            while (m.find()) {
+                String v = m.group(1);
+                String[] p = v.substring(1).split("\\.");
+                int[] n = {Integer.parseInt(p[0]), Integer.parseInt(p[1]), Integer.parseInt(p[2])};
+                if (bestN == null || n[1] > bestN[1] || (n[1] == bestN[1] && n[2] > bestN[2])) { best = v; bestN = n; }
+            }
+            return best != null ? best : NODE_FALLBACK_VERSION;
+        } catch (Throwable t) {
+            return NODE_FALLBACK_VERSION;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void writeDomesticAptConfig(File rootfsDir, boolean isX86) {
+        try {
+            File srcDir = new File(rootfsDir, "etc/apt/sources.list.d");
+            srcDir.mkdirs();
+            boolean haveCa = new File(rootfsDir, "etc/ssl/certs/ca-certificates.crt").exists();
+            String scheme = haveCa ? "https" : "http";
+            String repo = isX86 ? "ubuntu" : "ubuntu-ports";
+            String uri = scheme + "://mirrors.aliyun.com/" + repo + "/";
+            String content = "Types: deb\nURIs: " + uri + "\nSuites: noble noble-updates noble-security\n" +
+                    "Components: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n";
+            writeText(new File(srcDir, "ubuntu.sources"), content);
+            File legacy = new File(rootfsDir, "etc/apt/sources.list");
+            if (legacy.exists()) writeText(legacy, "# PiMet: see /etc/apt/sources.list.d/ubuntu.sources\n");
+            File conf = new File(rootfsDir, "etc/apt/apt.conf.d");
+            conf.mkdirs();
+            writeText(new File(conf, "99pimet"), "APT::Sandbox::User \"root\";\nAcquire::http::Timeout \"20\";\nAcquire::https::Timeout \"20\";\nDPkg::Options { \"--force-confdef\"; \"--force-confold\"; };\n");
+        } catch (Throwable t) {
+            Log.w(TAG, "writeDomesticAptConfig failed", t);
+        }
+    }
+
+    private static void writeText(File f, String text) throws java.io.IOException {
+        try (FileOutputStream fos = new FileOutputStream(f, false)) {
+            fos.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private interface LineSink { void onLine(String line); }
+
+    /** 在容器内执行命令并持续读取输出（避免缓冲区写满卡死），带超时 */
+    private static int runInContainer(Context context, String cmd, long timeoutMs, LineSink sink) {
+        Process p = null;
+        try {
+            ProcessBuilder pb = buildProotProcess(context, "/root", Arrays.asList("/bin/bash", "-c", cmd));
+            pb.redirectErrorStream(true);
+            p = pb.start();
+            final Process proc = p;
+            Thread reader = new Thread(() -> {
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        if (sink != null) sink.onLine(l);
+                    }
+                } catch (Throwable ignored) {}
+            }, "proot-out");
+            reader.start();
+            if (!p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                p.destroy();
+                return -2;
+            }
+            reader.join(2000);
+            return p.exitValue();
+        } catch (Throwable t) {
+            if (p != null) try { p.destroy(); } catch (Throwable ignored) {}
+            return -1;
+        }
     }
 
     /**
@@ -541,9 +787,9 @@ public final class ProotManager {
             URL u = new URL(urlStr);
             conn = (HttpURLConnection) u.openConnection();
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36");
-            conn.setRequestProperty("Range", "bytes=0-131071"); // 128 KB
+            conn.setRequestProperty("Range", "bytes=0-524287"); // 512 KB，测带宽而不只是延迟
             conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3500);
+            conn.setReadTimeout(4000);
             conn.setInstanceFollowRedirects(true);
 
             int code = conn.getResponseCode();
@@ -572,6 +818,9 @@ public final class ProotManager {
         }
         return new MirrorSpeedResult(urlStr, 0, 99999L, false);
     }
+
+    /** 最近一次镜像竞速的最高吞吐量（B/s），0 表示全部失败 */
+    public static volatile long lastBestMirrorSpeedBps = 0;
 
     public static String[] testAndSortCandidateUrls(String[] urls, SpeedLogCallback logCallback) {
         if (urls == null || urls.length <= 1) return urls;
@@ -603,6 +852,7 @@ public final class ProotManager {
             sorted[i] = speedResults.get(i).url;
         }
 
+        lastBestMirrorSpeedBps = (!speedResults.isEmpty() && speedResults.get(0).success) ? speedResults.get(0).speedBps : 0;
         if (logCallback != null && !speedResults.isEmpty() && speedResults.get(0).success) {
             MirrorSpeedResult top = speedResults.get(0);
             double kb = top.speedBps / 1024.0;
