@@ -48,7 +48,20 @@ public class PetChatBridge {
     private static final String TAG = "DevPetM.ChatBridge";
 
     private final PetOverlayService service;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    /** 服务销毁后丢弃尚未执行的界面回调（网络线程回来时悬浮窗已移除）。 */
+    private volatile boolean detached = false;
+    private final Handler handler = new Handler(Looper.getMainLooper()) {
+        @Override
+        public void dispatchMessage(android.os.Message msg) {
+            if (!detached) super.dispatchMessage(msg);
+        }
+    };
+
+    /** 服务销毁时调用：清掉待执行的界面回调。 */
+    public void detach() {
+        detached = true;
+        handler.removeCallbacksAndMessages(null);
+    }
 
     /** 正在等待 AI 回复（状态变化气泡不抢占聊天气泡） */
     private volatile boolean chatting = false;

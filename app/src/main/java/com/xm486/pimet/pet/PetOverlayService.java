@@ -1718,7 +1718,12 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         } catch (Throwable ignored) {}
         stopFling();
         releaseVelocityTracker();
-        bubbleHandler.removeCallbacks(bubbleHideRunnable);
+        bubbleHandler.removeCallbacksAndMessages(null);
+        bottomPauseHandler.removeCallbacksAndMessages(null);
+        if (chatBridge != null) {
+            chatBridge.detach();
+            chatBridge = null;
+        }
         if (petMenu != null) {
             petMenu.dismiss();
             petMenu = null;

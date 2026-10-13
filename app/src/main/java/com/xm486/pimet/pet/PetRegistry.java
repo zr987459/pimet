@@ -113,18 +113,8 @@ public class PetRegistry {
     }
 
     private static boolean deleteRecursively(File fileOrDirectory) {
-        if (fileOrDirectory != null && fileOrDirectory.exists()) {
-            if (fileOrDirectory.isDirectory()) {
-                File[] children = fileOrDirectory.listFiles();
-                if (children != null) {
-                    for (File child : children) {
-                        deleteRecursively(child);
-                    }
-                }
-            }
-            return fileOrDirectory.delete();
-        }
-        return false;
+        if (fileOrDirectory == null || !fileOrDirectory.exists()) return false;
+        return com.xm486.pimet.util.SafeFiles.deleteTree(fileOrDirectory);
     }
 
     /** 读取内置角色元信息；失败返回 null */
@@ -270,12 +260,7 @@ public class PetRegistry {
     }
 
     private static void deleteRecursive(File f) {
-        if (f.isDirectory()) {
-            File[] fs = f.listFiles();
-            if (fs != null) for (File c : fs) deleteRecursive(c);
-        }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
+        com.xm486.pimet.util.SafeFiles.deleteTree(f);
     }
 
     private static boolean assetExists(Context context, String path) {

@@ -1689,14 +1689,6 @@ public final class PluginManager {
     }
 
     private static void deleteRecursively(File fileOrDir) {
-        if (fileOrDir.isDirectory()) {
-            File[] children = fileOrDir.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteRecursively(child);
-                }
-            }
-        }
-        fileOrDir.delete();
+        com.xm486.pimet.util.SafeFiles.deleteTree(fileOrDir);
     }
 }

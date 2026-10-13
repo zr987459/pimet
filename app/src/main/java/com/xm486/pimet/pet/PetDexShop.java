@@ -442,11 +442,6 @@ public class PetDexShop {
     }
 
     private static void deleteRecursive(File f) {
-        if (f.isDirectory()) {
-            File[] fs = f.listFiles();
-            if (fs != null) for (File c : fs) deleteRecursive(c);
-        }
-        //noinspection ResultOfMethodCallIgnored
-        f.delete();
+        com.xm486.pimet.util.SafeFiles.deleteTree(f);
     }
 }

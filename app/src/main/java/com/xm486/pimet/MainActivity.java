@@ -5466,7 +5466,8 @@ public class MainActivity extends AppCompatActivity {
         try {
             Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         } catch (Throwable ignored) {}
-
+        // 页面已销毁：丢弃尚未执行的界面回调，避免后台线程回来后操作已销毁的视图
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     // ---------------- 拖动物理手感参数设置 (8 项原生交互滑块) ----------------

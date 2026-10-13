@@ -711,6 +711,8 @@ public final class BackupManager {
         }
 
         if (currentFile.isDirectory()) {
+            // 不进入指向目录的符号链接：避免循环（如 pnpm 的 node_modules 链接）与把链接外的宿主目录打进备份
+            if (!relNorm.isEmpty() && com.xm486.pimet.util.SafeFiles.isSymlink(currentFile)) return;
             File[] children = currentFile.listFiles();
             if (children != null) {
                 for (File child : children) {

@@ -328,17 +328,9 @@ public final class ProotManager {
         return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024, digitGroups), units[digitGroups]);
     }
 
+    /** 递归删除，绝不跟随符号链接（容器内指向 /sdcard 等宿主路径的链接只删链接本身）。 */
     public static boolean deleteRecursive(File f) {
-        if (f == null || !f.exists()) return true;
-        if (f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteRecursive(child);
-                }
-            }
-        }
-        return f.delete();
+        return com.xm486.pimet.util.SafeFiles.deleteTree(f);
     }
 
     /**
