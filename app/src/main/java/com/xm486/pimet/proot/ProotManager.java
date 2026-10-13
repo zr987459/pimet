@@ -568,24 +568,26 @@ public final class ProotManager {
             }
 
             // 3) apt 换阿里云源，补装 git / ca-certificates / curl（失败不致命）
-            writeDomesticAptConfig(rootfsDir, isX86);
+            writeDomesticAptConfig(rootfsDir, isX86, true);
             ensureContainerDns(context);
-            if (cb != null) cb.onProgress("正在从阿里云安装 git 等基础工具...", 68);
-            int rc = runInContainer(context,
-                    "export DEBIAN_FRONTEND=noninteractive; apt-get update -o Acquire::Retries=2 && " +
-                    "apt-get install -y --no-install-recommends -o Acquire::Retries=2 git ca-certificates curl xz-utils procps && " +
-                    "apt-get clean && rm -rf /var/lib/apt/lists/*",
-                    8 * 60 * 1000L, line -> {
-                        if (cb != null && line != null) {
-                            String t = line.trim();
-                            if (t.startsWith("Get:") || t.startsWith("Setting up") || t.startsWith("Unpacking")) {
-                                cb.onProgress("安装基础工具: " + (t.length() > 60 ? t.substring(0, 60) : t), 70);
-                            }
-                        }
-                    });
-            Log.i(TAG, "domestic apt install rc=" + rc);
-            // apt 装好后切回 https（阿里云支持），失败则保留 http
-            if (rc == 0) writeDomesticAptConfig(rootfsDir, isX86);
+            // git/curl 等基础工具放到后台装，不挡容器就绪和 Pi-Web 安装（pi-web 本身不依赖它们）
+            final Context appCtx = context.getApplicationContext();
+            final File rootfsFinal = rootfsDir;
+            final boolean x86Final = isX86;
+            new Thread(() -> {
+                try {
+                    int rc = runInContainer(appCtx,
+                            "export DEBIAN_FRONTEND=noninteractive; apt-get update -o Acquire::Retries=2 && " +
+                            "apt-get install -y --no-install-recommends -o Acquire::Retries=2 git ca-certificates curl xz-utils procps && " +
+                            "apt-get clean && rm -rf /var/lib/apt/lists/*",
+                            20 * 60 * 1000L, null);
+                    Log.i(TAG, "background apt install rc=" + rc);
+                    writeDomesticAptConfig(rootfsFinal, x86Final, false);
+                    if (rc == 0) new File(rootfsFinal, "etc/pimet-base-tools-ok").createNewFile();
+                } catch (Throwable t) {
+                    Log.w(TAG, "background apt failed", t);
+                }
+            }, "pimet-apt-bg").start();
 
             new File(rootfsDir, "etc/pimet-domestic-rootfs").createNewFile();
             if (cb != null) cb.onProgress("国内源容器安装完成", 95);
@@ -668,7 +670,7 @@ public final class ProotManager {
         }
     }
 
-    private static void writeDomesticAptConfig(File rootfsDir, boolean isX86) {
+    private static void writeDomesticAptConfig(File rootfsDir, boolean isX86, boolean minimal) {
         try {
             File srcDir = new File(rootfsDir, "etc/apt/sources.list.d");
             srcDir.mkdirs();
@@ -676,14 +678,17 @@ public final class ProotManager {
             String scheme = haveCa ? "https" : "http";
             String repo = isX86 ? "ubuntu" : "ubuntu-ports";
             String uri = scheme + "://mirrors.aliyun.com/" + repo + "/";
-            String content = "Types: deb\nURIs: " + uri + "\nSuites: noble noble-updates noble-security\n" +
-                    "Components: main restricted universe multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n";
+            // minimal：首装只拉 main 索引（约 1–2MB），git/curl/ca-certificates 都在 main；装完再写回完整源
+            String suites = minimal ? "noble noble-updates" : "noble noble-updates noble-security";
+            String comps = minimal ? "main" : "main restricted universe multiverse";
+            String content = "Types: deb\nURIs: " + uri + "\nSuites: " + suites + "\n" +
+                    "Components: " + comps + "\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n";
             writeText(new File(srcDir, "ubuntu.sources"), content);
             File legacy = new File(rootfsDir, "etc/apt/sources.list");
             if (legacy.exists()) writeText(legacy, "# PiMet: see /etc/apt/sources.list.d/ubuntu.sources\n");
             File conf = new File(rootfsDir, "etc/apt/apt.conf.d");
             conf.mkdirs();
-            writeText(new File(conf, "99pimet"), "APT::Sandbox::User \"root\";\nAcquire::http::Timeout \"20\";\nAcquire::https::Timeout \"20\";\nDPkg::Options { \"--force-confdef\"; \"--force-confold\"; };\n");
+            writeText(new File(conf, "99pimet"), "APT::Sandbox::User \"root\";\nAcquire::Languages \"none\";\nAcquire::GzipIndexes \"true\";\nAcquire::http::Timeout \"20\";\nAcquire::https::Timeout \"20\";\nDPkg::Options { \"--force-confdef\"; \"--force-confold\"; };\n");
         } catch (Throwable t) {
             Log.w(TAG, "writeDomesticAptConfig failed", t);
         }
