@@ -103,6 +103,8 @@ public class PetChatBridge {
                     if (TextUtils.isEmpty(text)) return;
                     et.setText("");
                     new ChatTask(text).start();
+                    // 发送成功后自动收起聊天卡（收键盘），回复显示在桌宠头顶气泡
+                    service.collapseCardAfterSend();
                 }
             });
         }
@@ -134,7 +136,7 @@ public class PetChatBridge {
         handler.post(() -> {
             EditText input = service.getChatInput();
             if (input != null) {
-                input.setHint("💬 (. 支线后台问答/查进度，普通说话为桌宠闲聊)…");
+                input.setHint("说点什么");
             }
         });
     }

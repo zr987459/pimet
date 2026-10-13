@@ -90,7 +90,43 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     private FrameLayout overlayRoot;      // 悬浮窗根容器
     private SpritePetView petView;        // 桌宠（精灵图角色）
     private StatusCardView statusCard;    // 状态卡
-    private TextView bubbleView;          // 对话气泡（任务完成 + AI 聊天共用）
+    private PetBubbleView bubbleView;     // 对话气泡（任务完成 + AI 聊天共用，跟随主题）
+
+    /** 主题切换实时生效：监听主题偏好变化，重新给气泡与聊天卡着色 */
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener themePrefListener =
+            (sp, key) -> {
+                if (com.xm486.pimet.ThemeManager.PREF_THEME_KEY.equals(key)) {
+                    new Handler(Looper.getMainLooper()).post(this::applyOverlayTheme);
+                }
+            };
+
+    /** 用当前有效主题（含「跟随系统」）重新着色桌宠气泡与下方聊天卡 */
+    public void applyOverlayTheme() {
+        com.xm486.pimet.ThemeManager.ThemePalette p = com.xm486.pimet.ThemeManager.getEffectivePalette(this);
+        if (bubbleView != null) bubbleView.applyTheme(p);
+        if (statusCard != null) statusCard.applyTheme(p);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // 「跟随系统」主题下系统深浅色切换时同步
+        applyOverlayTheme();
+    }
+
+    /** 发送消息后自动收起聊天卡：清焦点、收键盘、收卡片（回复显示在桌宠头顶气泡） */
+    public void collapseCardAfterSend() {
+        if (statusCard != null) {
+            android.widget.EditText et = statusCard.getChatInput();
+            if (et != null) {
+                android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                        getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+                et.clearFocus();
+            }
+        }
+        if (cardVisible) toggleCard();
+    }
     private boolean cardVisible = false;
 
     /** AI 对话桥（状态卡输入框 → 大模型） */
@@ -219,6 +255,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         startMonitoring();
         // 监听角色切换
         PetRegistry.getPrefs(this).registerOnSharedPreferenceChangeListener(this);
+        getSharedPreferences(com.xm486.pimet.ThemeManager.PREF_NAME, MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(themePrefListener);
         // 挂载 AI 对话桥（状态卡输入框 → 大模型）
         chatBridge = new PetChatBridge(this);
         chatBridge.attach();
@@ -286,7 +324,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         }
 
         applyBubbleDimensions();
-        bubbleView.setText("💬 " + msg);
+        bubbleView.setText(msg);
 
         // 核心：测量气泡高度并将桌宠顶开至气泡下方，杜绝气泡遮挡桌宠
         layoutChatBubble();
@@ -418,7 +456,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         bubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, ts);
         int padH = Math.round(ts * 1.15f);
         int padV = Math.round(ts * 0.75f);
-        bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV));
+        // 底部额外留出尾巴高度，尾巴指向桌宠且不压文字
+        bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV) + bubbleView.tailHeight());
         int maxW = Math.min(dp(bw), (int)(getResources().getDisplayMetrics().widthPixels * 0.75f));
         bubbleView.setMaxWidth(maxW);
     }
@@ -435,18 +474,12 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     /** 创建任务完成对话气泡（圆角背景 + 白字） */
     private void buildBubble(int petHeightPx) {
-        bubbleView = new TextView(this);
+        bubbleView = new PetBubbleView(this);
         bubbleView.setGravity(Gravity.CENTER);
-        bubbleView.setTextColor(0xFFF1F5F9);
         bubbleView.setMaxLines(10);
         bubbleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        bubbleView.setLineSpacing(dp(2), 1.15f);
+        bubbleView.setLineSpacing(dp(2), 1.1f);
         applyBubbleDimensions();
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xF0181A22);
-        bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), 0x4460A5FA);
-        bubbleView.setBackground(bg);
         bubbleView.setVisibility(View.GONE);
         bubbleView.setOnClickListener(v -> {
             openTargetConsole();
@@ -479,7 +512,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(120), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
 
         // 桌宠往下顶出气泡空间 → 气泡显示在人物头顶上方，不遮挡人物
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
@@ -522,7 +555,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(120), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
 
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
         petLp.topMargin = shift;
@@ -735,7 +768,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(180), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
         petLp.topMargin = shift;
         petView.setLayoutParams(petLp);
@@ -1558,7 +1591,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 break;
         }
 
-        bubbleView.setText(text);
+        bubbleView.setText(com.xm486.pimet.ui.StatusCardView.clean(text));
         layoutChatBubble();
         bubbleView.setVisibility(View.VISIBLE);
         bubbleView.setAlpha(0f);
@@ -1668,6 +1701,10 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         stopProactiveChatter();
         savePosition();
         PetRegistry.getPrefs(this).unregisterOnSharedPreferenceChangeListener(this);
+        try {
+            getSharedPreferences(com.xm486.pimet.ThemeManager.PREF_NAME, MODE_PRIVATE)
+                    .unregisterOnSharedPreferenceChangeListener(themePrefListener);
+        } catch (Throwable ignored) {}
         stopFling();
         releaseVelocityTracker();
         bubbleHandler.removeCallbacks(bubbleHideRunnable);
