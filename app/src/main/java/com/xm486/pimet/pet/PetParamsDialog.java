@@ -398,7 +398,8 @@ public class PetParamsDialog {
     private View createAutomationSection() {
         LinearLayout box = sectionBox();
 
-        boolean isAutoRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
+        // 0 未开启 / 1 已开启但未连接（被系统断开，需关掉重开）/ 2 已连接
+        int st = com.xm486.pimet.automation.PiMetAccessibilityService.getState(context);
 
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -408,8 +409,8 @@ public class PetParamsDialog {
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.addView(sectionTitle("📱 手机自动化", palette.text));
         TextView state = new TextView(context);
-        state.setText(isAutoRunning ? "已授权就绪" : "未开启无障碍");
-        state.setTextColor(isAutoRunning ? ThemeManager.statusSuccessColor(palette) : ThemeManager.statusWarningColor(palette));
+        state.setText(st == 2 ? "已连接，可用" : st == 1 ? "已开启 · 未连接" : "未开启");
+        state.setTextColor(st == 2 ? ThemeManager.statusSuccessColor(palette) : ThemeManager.statusWarningColor(palette));
         state.setTextSize(12f);
         state.setSingleLine(true);
         state.setEllipsize(TextUtils.TruncateAt.END);
@@ -417,9 +418,11 @@ public class PetParamsDialog {
         texts.addView(state);
         row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button authBtn = buildMiniBtn(isAutoRunning ? "⚙️ 设置" : "🚀 去开启", isAutoRunning ? BTN_SECONDARY : BTN_PRIMARY, v -> {
+        Button authBtn = buildMiniBtn(st == 2 ? "设置" : st == 1 ? "去重开" : "去开启", st == 2 ? BTN_SECONDARY : BTN_PRIMARY, v -> {
             com.xm486.pimet.automation.PiMetAccessibilityService.openAccessibilitySettings(context);
-            Toast.makeText(context, "请在已安装的服务中找到「PiMet 手机自动化服务」并开启", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, st == 1
+                    ? "找到「PiMet 手机自动化」，先关闭再重新打开"
+                    : "在「已下载的应用」中找到「PiMet 手机自动化」并开启", Toast.LENGTH_LONG).show();
         });
         LinearLayout.LayoutParams authLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -429,7 +432,33 @@ public class PetParamsDialog {
         row.addView(authBtn, authLp);
         box.addView(row);
 
-        box.addView(bodyText("开启后桌宠与 AI 助手可通过 phone_control 自动操作手机（读屏、点击、滑屏、输入等）。"));
+        // 从系统设置返回后状态会变：面板显示期间每 1.5 秒刷新一次状态文字（离开窗口即停止）
+        Runnable[] poll = new Runnable[1];
+        poll[0] = () -> {
+            if (!state.isAttachedToWindow()) return;
+            int now = com.xm486.pimet.automation.PiMetAccessibilityService.getState(context);
+            state.setText(now == 2 ? "已连接，可用" : now == 1 ? "已开启 · 未连接" : "未开启");
+            state.setTextColor(now == 2 ? ThemeManager.statusSuccessColor(palette) : ThemeManager.statusWarningColor(palette));
+            state.postDelayed(poll[0], 1500);
+        };
+        state.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) { v.removeCallbacks(poll[0]); v.postDelayed(poll[0], 1500); }
+            @Override public void onViewDetachedFromWindow(View v) { v.removeCallbacks(poll[0]); }
+        });
+
+        if (st == 2) {
+            box.addView(bodyText("桌宠与 AI 可通过 phone_control 读屏、点击、滑动、输入、启动应用和截图。"));
+        } else if (st == 1) {
+            box.addView(bodyText("服务被系统断开了（常见于更新应用或后台清理后）：在无障碍里关闭再打开即可恢复，并建议允许自启动、电池无限制。"));
+        } else {
+            box.addView(bodyText("开启后桌宠与 AI 可通过 phone_control 自动操作手机。开关是灰色的？到「应用信息」右上角 ⋮ 选「允许受限制的设置」后再开启。"));
+            Button infoBtn = buildMiniBtn("打开应用信息", BTN_SECONDARY, v ->
+                    com.xm486.pimet.automation.PiMetAccessibilityService.openAppDetails(context));
+            LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            infoLp.topMargin = dp(8);
+            box.addView(infoBtn, infoLp);
+        }
 
         return box;
     }

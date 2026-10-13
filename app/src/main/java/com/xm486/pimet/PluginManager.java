@@ -1490,21 +1490,28 @@ public final class PluginManager {
             File bridgeFile = new File(extDir, "pimet-android-bridge.ts");
             String code = "/**\n" +
                     " * PiMet Host Android & Desktop Pet Bridge Extension\n" +
-                    " * 允许 AI 动态控制和修改 Android 宿主界面的桌宠形象、尺寸、动作、气泡、物理参数与标签页\n" +
+                    " * 允许 AI 控制 Android 宿主的桌宠、界面，并通过无障碍服务操作手机（phone_control）\n" +
+                    " * 本文件由 PiMet 自动生成，每次启动会覆盖。\n" +
                     " */\n" +
                     "import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\n" +
                     "import { Type } from \"typebox\";\n" +
                     "import * as http from \"http\";\n" +
                     "import * as fs from \"fs\";\n" +
                     "import * as path from \"path\";\n" +
-                    "import * as os from \"os\";\n\n" +
-                    "function sendBridgeAction(actionData: Record<string, any>): Promise<string> {\n" +
+                    "import * as os from \"os\";\n" +
+                    "\n" +
+                    "const BRIDGE_DIR = path.join(os.homedir(), \".pi\", \"agent\");\n" +
+                    "\n" +
+                    "function readToken(): string {\n" +
+                    "  try {\n" +
+                    "    return fs.readFileSync(path.join(BRIDGE_DIR, \".pimet_bridge_token\"), \"utf-8\").trim();\n" +
+                    "  } catch (e) {\n" +
+                    "    return \"\";\n" +
+                    "  }\n" +
+                    "}\n" +
+                    "\n" +
+                    "function postBridge(actionData: Record<string, any>, timeoutMs: number): Promise<{ ok: boolean; body: string }> {\n" +
                     "  return new Promise((resolve) => {\n" +
-                    "    try {\n" +
-                    "      const bridgeDir = path.join(os.homedir(), \".pi\", \"agent\");\n" +
-                    "      if (!fs.existsSync(bridgeDir)) fs.mkdirSync(bridgeDir, { recursive: true });\n" +
-                    "      fs.writeFileSync(path.join(bridgeDir, \"app_control.json\"), JSON.stringify(actionData), \"utf-8\");\n" +
-                    "    } catch (e) {}\n\n" +
                     "    const postData = JSON.stringify(actionData);\n" +
                     "    const req = http.request(\n" +
                     "      {\n" +
@@ -1513,24 +1520,36 @@ public final class PluginManager {
                     "        path: \"/api/app-control\",\n" +
                     "        method: \"POST\",\n" +
                     "        headers: {\n" +
-                    "          \"Content-Type\": \"application/json\",\n" +
+                    "          \"Content-Type\": \"application/json; charset=utf-8\",\n" +
                     "          \"Content-Length\": Buffer.byteLength(postData),\n" +
+                    "          \"X-PiMet-Token\": readToken(),\n" +
                     "        },\n" +
-                    "        timeout: 1500,\n" +
+                    "        timeout: timeoutMs,\n" +
                     "      },\n" +
                     "      (res) => {\n" +
-                    "        let data = \"\";\n" +
-                    "        res.on(\"data\", (chunk) => (data += chunk));\n" +
-                    "        res.on(\"end\", () => resolve(`Android 宿主执行成功: ${data}`));\n" +
+                    "        const chunks: Buffer[] = [];\n" +
+                    "        res.on(\"data\", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));\n" +
+                    "        res.on(\"end\", () => resolve({ ok: true, body: Buffer.concat(chunks).toString(\"utf-8\") }));\n" +
                     "      }\n" +
                     "    );\n" +
-                    "    req.on(\"error\", (err) => {\n" +
-                    "      resolve(`指令已写入 IPC 文件缓存 (HTTP: ${err.message})`);\n" +
-                    "    });\n" +
+                    "    req.on(\"timeout\", () => req.destroy(new Error(`timeout after ${timeoutMs}ms`)));\n" +
+                    "    req.on(\"error\", (err) => resolve({ ok: false, body: err.message }));\n" +
                     "    req.write(postData);\n" +
                     "    req.end();\n" +
                     "  });\n" +
-                    "}\n\n" +
+                    "}\n" +
+                    "\n" +
+                    "/** 桌宠/界面控制：HTTP 不通时写入 IPC 文件兜底（宿主轮询执行）。 */\n" +
+                    "async function sendBridgeAction(actionData: Record<string, any>): Promise<string> {\n" +
+                    "  const r = await postBridge(actionData, 4000);\n" +
+                    "  if (r.ok) return `Android 宿主执行成功: ${r.body}`;\n" +
+                    "  try {\n" +
+                    "    if (!fs.existsSync(BRIDGE_DIR)) fs.mkdirSync(BRIDGE_DIR, { recursive: true });\n" +
+                    "    fs.writeFileSync(path.join(BRIDGE_DIR, \"app_control.json\"), JSON.stringify(actionData), \"utf-8\");\n" +
+                    "  } catch (e) {}\n" +
+                    "  return `指令已写入 IPC 文件缓存 (HTTP: ${r.body})`;\n" +
+                    "}\n" +
+                    "\n" +
                     "export default function (pi: ExtensionAPI) {\n" +
                     "  pi.registerTool({\n" +
                     "    name: \"control_desktop_pet\",\n" +
@@ -1548,11 +1567,12 @@ public final class PluginManager {
                     "    async execute(_toolCallId, params) {\n" +
                     "      const result = await sendBridgeAction({ action: \"control_desktop_pet\", ...params });\n" +
                     "      return {\n" +
-                    "        content: [{ type: \"text\", text: `🐾 桌宠控制指令已下发！${result}` }],\n" +
+                    "        content: [{ type: \"text\", text: `桌宠控制指令已下发：${result}` }],\n" +
                     "        details: params,\n" +
                     "      };\n" +
                     "    },\n" +
-                    "  });\n\n" +
+                    "  });\n" +
+                    "\n" +
                     "  pi.registerTool({\n" +
                     "    name: \"control_app_ui\",\n" +
                     "    label: \"Control App UI\",\n" +
@@ -1571,15 +1591,67 @@ public final class PluginManager {
                     "    async execute(_toolCallId, params) {\n" +
                     "      const result = await sendBridgeAction({ action: \"control_app_ui\", ...params });\n" +
                     "      return {\n" +
-                    "        content: [{ type: \"text\", text: `📱 Android 宿主界面指令已下发！${result}` }],\n" +
+                    "        content: [{ type: \"text\", text: `Android 宿主界面指令已下发：${result}` }],\n" +
                     "        details: params,\n" +
                     "      };\n" +
                     "    },\n" +
                     "  });\n" +
+                    "\n" +
+                    "  pi.registerTool({\n" +
+                    "    name: \"phone_control\",\n" +
+                    "    label: \"Phone Control\",\n" +
+                    "    description:\n" +
+                    "      \"通过 PiMet 无障碍服务操作这台 Android 手机。坐标均为屏幕像素（与 inspect 返回的 bounds/centerX/centerY 相同）。\" +\n" +
+                    "      \"action 可选：status(服务状态) | inspect(读屏，返回可见节点 text/desc/id/bounds/clickable) | find(按文字/ID 查找) | \" +\n" +
+                    "      \"tap / long_press(按 target 文字、id、desc 或 x,y) | swipe(direction=up/down/left/right 或 from_x,from_y,to_x,to_y) | \" +\n" +
+                    "      \"scroll(direction=down 看下方内容/up，可用 target 指定列表) | input(text，可选 target 输入框、append、submit) | \" +\n" +
+                    "      \"key(key=back/home/recents/notifications/quick_settings/lock/enter) | launch(package 或 app 应用名) | \" +\n" +
+                    "      \"screenshot(Android 11+，返回容器内图片路径，可用 read 查看) | wait_for(target/id 出现，gone=true 等消失，timeout 毫秒) | wait_idle。\" +\n" +
+                    "      \"建议流程：inspect → tap/input → wait_for 或 wait_idle → 再 inspect 确认。\",\n" +
+                    "    parameters: Type.Object({\n" +
+                    "      action: Type.String({ description: \"操作：status | inspect | find | tap | long_press | swipe | scroll | input | key | launch | screenshot | wait_for | wait_idle\" }),\n" +
+                    "      target: Type.Optional(Type.String({ description: \"目标文字（匹配 text/desc/hint，先精确后包含）；input 时为目标输入框；launch 时可为应用名\" })),\n" +
+                    "      id: Type.Optional(Type.String({ description: \"目标 View ID，如 com.tencent.mm:id/xxx 或仅 xxx\" })),\n" +
+                    "      desc: Type.Optional(Type.String({ description: \"按 content-description 匹配\" })),\n" +
+                    "      text: Type.Optional(Type.String({ description: \"input 要输入的文字（tap/find 时也可作为目标文字）\" })),\n" +
+                    "      x: Type.Optional(Type.Number({ description: \"屏幕像素 X\" })),\n" +
+                    "      y: Type.Optional(Type.Number({ description: \"屏幕像素 Y\" })),\n" +
+                    "      from_x: Type.Optional(Type.Number()),\n" +
+                    "      from_y: Type.Optional(Type.Number()),\n" +
+                    "      to_x: Type.Optional(Type.Number()),\n" +
+                    "      to_y: Type.Optional(Type.Number()),\n" +
+                    "      direction: Type.Optional(Type.String({ description: \"swipe/scroll 方向：up | down | left | right\" })),\n" +
+                    "      duration: Type.Optional(Type.Number({ description: \"手势时长毫秒（swipe 默认 300，long_press 默认 800）\" })),\n" +
+                    "      key: Type.Optional(Type.String({ description: \"按键：back | home | recents | notifications | quick_settings | lock | power | screenshot | enter\" })),\n" +
+                    "      package: Type.Optional(Type.String({ description: \"launch 的包名，如 com.android.settings\" })),\n" +
+                    "      app: Type.Optional(Type.String({ description: \"launch 的应用名，如 设置、微信\" })),\n" +
+                    "      index: Type.Optional(Type.Number({ description: \"多个匹配时选第几个（0 起）\" })),\n" +
+                    "      exact: Type.Optional(Type.Boolean({ description: \"只接受精确文字匹配\" })),\n" +
+                    "      append: Type.Optional(Type.Boolean({ description: \"input 时追加而不是替换\" })),\n" +
+                    "      submit: Type.Optional(Type.Boolean({ description: \"input 后执行回车/搜索（Android 11+）\" })),\n" +
+                    "      gone: Type.Optional(Type.Boolean({ description: \"wait_for 等待目标消失\" })),\n" +
+                    "      timeout: Type.Optional(Type.Number({ description: \"wait_for / wait_idle 超时毫秒，默认 5000，最大 30000\" })),\n" +
+                    "      max_nodes: Type.Optional(Type.Number({ description: \"inspect 返回节点上限，默认 300\" })),\n" +
+                    "    }),\n" +
+                    "    async execute(_toolCallId, params) {\n" +
+                    "      const { action, ...rest } = params as Record<string, any>;\n" +
+                    "      const waitMs = Math.min(Number(rest.timeout) || 5000, 30000);\n" +
+                    "      const r = await postBridge({ ...rest, action: \"phone_control\", phone_action: action }, waitMs + 20000);\n" +
+                    "      let text: string;\n" +
+                    "      if (!r.ok) {\n" +
+                    "        text = `无法连接 PiMet 宿主（127.0.0.1:30143）：${r.body}。请确认 PiMet 应用在运行。`;\n" +
+                    "      } else {\n" +
+                    "        text = r.body;\n" +
+                    "      }\n" +
+                    "      return { content: [{ type: \"text\", text }], details: { action, ...rest } };\n" +
+                    "    },\n" +
+                    "  });\n" +
                     "}\n";
 
-            writeFile(bridgeFile, code);
-            Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts ensured in container");
+            if (!code.equals(readFileRaw(bridgeFile))) {
+                writeFile(bridgeFile, code);
+                Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts updated in container");
+            }
         } catch (Throwable t) {
             Log.w("PiMet.PluginMgr", "Failed to ensure Android bridge extension", t);
         }
@@ -1593,6 +1665,15 @@ public final class PluginManager {
                 sb.append(line).append("\n");
             }
             return sb.toString().trim();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String readFileRaw(File file) {
+        if (!file.isFile()) return null;
+        try {
+            return new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
         } catch (Throwable ignored) {
             return null;
         }

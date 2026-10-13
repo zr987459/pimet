@@ -296,7 +296,8 @@ public class HelpGuideDialog {
 
         addSectionHeader("1. 前置授权与关键防杀保活设置");
         boolean isRunning = PiMetAccessibilityService.isRunning();
-        addBulletPoint("无障碍辅助权限", isRunning ? "🟢 已授权并正常运行" : "🔴 尚未开启（点击下方按钮前往授权）");
+        addBulletPoint("无障碍辅助权限", PiMetAccessibilityService.describeState(context));
+        addBulletPoint("开关是灰色的？", "Android 13 起，非应用商店安装的应用需先到「应用信息」右上角 ⋮ →「允许受限制的设置」，再回到无障碍开启「PiMet 手机自动化」。");
         addBulletPoint("厂商系统防杀保活（极其关键）", "小米/华为/OPPO/vivo等系统常自动关闭无障碍服务。请务必在系统设置中将 PiMet 设为「电池无限制 / 允许自启动」，并在手机多任务界面将 PiMet 卡片加锁！");
 
         addSectionHeader("2. 自然语言操作手机指令示例");
@@ -308,7 +309,7 @@ public class HelpGuideDialog {
                        "• ! 返回桌面 / ! 返回上一页 / ! 截图 (物理系统键模拟)");
 
         addSectionHeader("3. AI 智能体 Agent 工具联动");
-        addBulletPoint("phone_control 工具", "主工作区 Agent 内置了 phone_control 专用工具，能够自主调用 inspect、tap、swipe、input、key 完成复杂多步的手机跨 App 操作。");
+        addBulletPoint("phone_control 工具", "Pi-Web Agent 内置 phone_control 工具：inspect 读屏、find 查找、tap / long_press 按文字或坐标点击、swipe / scroll 翻页、input 输入（可回车提交）、key 系统按键、launch 打开应用、screenshot 截图（Android 11+）、wait_for 等待元素出现。失败时会返回具体原因。");
 
         // 快捷授权按钮
         LinearLayout btnRow = new LinearLayout(context);
@@ -317,7 +318,7 @@ public class HelpGuideDialog {
 
         Button authBtn = createActionButton(isRunning ? "⚙️ 打开系统无障碍设置" : "🚀 去开启手机自动化无障碍服务", palette.accent, v -> {
             PiMetAccessibilityService.openAccessibilitySettings(context);
-            Toast.makeText(context, "请在已安装的服务中找到「PiMet 手机自动化服务」并开启", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "在「已下载的应用」中找到「PiMet 手机自动化」并开启", Toast.LENGTH_LONG).show();
         });
         btnRow.addView(authBtn);
         contentContainer.addView(btnRow);
@@ -380,7 +381,7 @@ public class HelpGuideDialog {
 
         addSectionHeader("1. 常见故障排查");
         addBulletPoint("Q: 插话提示「暂无活跃主工作区会话」？", "A: 说明 Web 工作台暂无正在执行的会话，请先进入 Pi-Web 工作台发送一条消息开启任务，桌宠即可自动感知并绑定。");
-        addBulletPoint("Q: 手机自动化点击无效或断开？", "A: 确认已开启「PiMet 手机自动化服务」，且在系统电池优化中将 PiMet 设为「无限制」，并在任务列表锁定。");
+        addBulletPoint("Q: 手机自动化点击无效或断开？", "A: 确认无障碍里「PiMet 手机自动化」已开启且设置页显示「已连接」（显示未连接就关掉重开），且在系统电池优化中将 PiMet 设为「无限制」，并在任务列表锁定。");
         addBulletPoint("Q: 提示端口冲突无法启动？", "A: 可能是旧进程残留或端口被占，在主页切换到「详细日志」查看具体端口，进入「设置 -> 端口管理」修改端口后重启。");
         addBulletPoint("Q: 桌宠不见了？", "A: 主页点击「桌宠开关」重新开启；确保已授权「显示在其他应用上层」悬浮窗权限。");
 

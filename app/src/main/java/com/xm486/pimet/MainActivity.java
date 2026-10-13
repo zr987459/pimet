@@ -470,8 +470,12 @@ public class MainActivity extends AppCompatActivity {
         // 初始化并启动 App 与 AI 宿主控制桥 (AppBridgeManager)
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).attachActivity(this);
-        PluginManager.ensureAndroidBridgeExtension(this);
-        com.xm486.pimet.pet.PetMemoryManager.ensurePetSubagentInstalled(this);
+        // 写容器内扩展/代理文件属于磁盘 I/O，放到后台线程，避免拖慢首屏
+        final android.content.Context appCtx = getApplicationContext();
+        new Thread(() -> {
+            PluginManager.ensureAndroidBridgeExtension(appCtx);
+            com.xm486.pimet.pet.PetMemoryManager.ensurePetSubagentInstalled(appCtx);
+        }, "pimet-ensure-ext").start();
     }
 
     private String getPiWebUrl() {

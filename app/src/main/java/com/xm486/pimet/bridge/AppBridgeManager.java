@@ -115,19 +115,31 @@ public class AppBridgeManager {
      */
     private void startHttpServer() {
         serverThread = new Thread(() -> {
-            try {
-                serverSocket = new ServerSocket();
-                serverSocket.setReuseAddress(true);
-                serverSocket.bind(new InetSocketAddress("127.0.0.1", BRIDGE_PORT));
-                Log.i(TAG, "AppBridge HTTP server listening on 127.0.0.1:" + BRIDGE_PORT);
-
-                while (isRunning.get() && !serverSocket.isClosed()) {
-                    Socket client = serverSocket.accept();
-                    handleHttpClient(client);
+            // 端口被占用（如进程重启时旧连接未释放）时每 2 秒重试，而不是永久停摆
+            while (isRunning.get()) {
+                ServerSocket ss = null;
+                try {
+                    ss = new ServerSocket();
+                    ss.setReuseAddress(true);
+                    ss.bind(new InetSocketAddress("127.0.0.1", BRIDGE_PORT));
+                    serverSocket = ss;
+                    Log.i(TAG, "AppBridge HTTP server listening on 127.0.0.1:" + BRIDGE_PORT);
+                    while (isRunning.get() && !ss.isClosed()) {
+                        Socket client = ss.accept();
+                        handleHttpClient(client);
+                    }
+                } catch (Throwable t) {
+                    if (isRunning.get()) {
+                        Log.w(TAG, "AppBridge HTTP server error, retrying: " + t.getMessage());
+                    }
+                } finally {
+                    if (ss != null) try { ss.close(); } catch (Throwable ignored) {}
                 }
-            } catch (Throwable t) {
-                if (isRunning.get()) {
-                    Log.w(TAG, "AppBridge HTTP server terminated: " + t.getMessage());
+                if (!isRunning.get()) break;
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    break;
                 }
             }
         }, "PiMet-AppBridge-Server");
@@ -135,128 +147,224 @@ public class AppBridgeManager {
         serverThread.start();
     }
 
+    /** 请求线程池：每个连接一个守护线程，手机操作内部再串行化。 */
+    private final java.util.concurrent.ExecutorService clientPool =
+            java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "PiMet-AppBridge-Client");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** 手机操作串行锁：避免多个请求的手势/输入交错。 */
+    private static final Object PHONE_LOCK = new Object();
+
+    private static final int MAX_BODY = 1024 * 1024;
+
     private void handleHttpClient(Socket socket) {
-        new Thread(() -> {
-            try {
-                socket.setSoTimeout(3000);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-                String line = reader.readLine();
-                if (line == null) {
-                    socket.close();
-                    return;
-                }
-
+        clientPool.execute(() -> {
+            try (Socket s = socket) {
+                s.setSoTimeout(5000);
+                java.io.InputStream in = new java.io.BufferedInputStream(s.getInputStream());
+                // 头部按字节读取到空行；Content-Length 是字节数（中文 UTF-8 一字 3 字节），正文必须按字节读
+                String requestLine = readLineBytes(in);
+                if (requestLine == null) return;
                 int contentLength = 0;
-                while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                    String lower = line.toLowerCase();
-                    if (lower.startsWith("content-length:")) {
-                        try {
-                            contentLength = Integer.parseInt(line.substring(15).trim());
-                        } catch (Exception ignored) {}
+                String token = null;
+                String hl;
+                while ((hl = readLineBytes(in)) != null && !hl.isEmpty()) {
+                    int c = hl.indexOf(':');
+                    if (c <= 0) continue;
+                    String name = hl.substring(0, c).trim().toLowerCase(java.util.Locale.ROOT);
+                    String val = hl.substring(c + 1).trim();
+                    if ("content-length".equals(name)) {
+                        try { contentLength = Integer.parseInt(val); } catch (Exception ignored) {}
+                    } else if ("x-pimet-token".equals(name)) {
+                        token = val;
                     }
                 }
-
-                String body = "";
-                if (contentLength > 0) {
-                    char[] buf = new char[contentLength];
-                    int readTotal = 0;
-                    while (readTotal < contentLength) {
-                        int r = reader.read(buf, readTotal, contentLength - readTotal);
-                        if (r == -1) break;
-                        readTotal += r;
-                    }
-                    body = new String(buf, 0, readTotal);
+                if (contentLength < 0 || contentLength > MAX_BODY) contentLength = 0;
+                byte[] bodyBytes = new byte[contentLength];
+                int got = 0;
+                while (got < contentLength) {
+                    int r = in.read(bodyBytes, got, contentLength - got);
+                    if (r == -1) break;
+                    got += r;
                 }
+                String body = new String(bodyBytes, 0, got, StandardCharsets.UTF_8);
 
-                String replyMsg = "OK";
-                JSONObject replyJson = null;
-                if (!TextUtils.isEmpty(body)) {
-                    try {
-                        JSONObject json = new JSONObject(body);
-                        if ("phone_control".equals(json.optString("action")) || json.has("phone_action")) {
-                            replyJson = executePhoneControl(json);
-                        } else {
-                            replyMsg = executeCommand(json);
-                        }
-                    } catch (Throwable t) {
-                        replyMsg = "JSON Error: " + t.getMessage();
-                    }
-                }
-
-                JSONObject resp = new JSONObject();
-                if (replyJson != null) {
-                    resp = replyJson;
+                JSONObject resp;
+                String[] parts = requestLine.split(" ");
+                String method = parts.length > 0 ? parts[0] : "";
+                String path = parts.length > 1 ? parts[1] : "/";
+                if ("GET".equalsIgnoreCase(method) && path.startsWith("/api/phone-status")) {
+                    resp = PiMetAccessibilityService.statusJson(appContext);
+                } else if (TextUtils.isEmpty(body)) {
+                    resp = new JSONObject().put("success", true).put("result", "OK");
                 } else {
-                    resp.put("success", true);
-                    resp.put("result", replyMsg);
+                    JSONObject json;
+                    try {
+                        json = new JSONObject(body);
+                    } catch (Throwable t) {
+                        json = null;
+                        resp = new JSONObject().put("success", false).put("error", "JSON 解析失败: " + t.getMessage());
+                        writeJson(s, resp);
+                        return;
+                    }
+                    if (isPhoneControl(json)) {
+                        if (token == null) token = json.optString("token", null);
+                        if (!getBridgeToken().equals(token)) {
+                            resp = new JSONObject().put("success", false)
+                                    .put("error", "手机自动化请求缺少有效令牌（X-PiMet-Token，见容器内 ~/.pi/agent/.pimet_bridge_token），请重启 PiMet 后重试");
+                        } else {
+                            resp = executePhoneControl(json);
+                        }
+                    } else {
+                        resp = new JSONObject().put("success", true).put("result", executeCommand(json));
+                    }
                 }
-                String respStr = resp.toString();
+                writeJson(s, resp);
+            } catch (Throwable t) {
+                Log.w(TAG, "bridge client error: " + t);
+            }
+        });
+    }
 
-                byte[] respBytes = respStr.getBytes(StandardCharsets.UTF_8);
-                OutputStream out = socket.getOutputStream();
-                out.write(("HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: application/json; charset=utf-8\r\n" +
-                        "Content-Length: " + respBytes.length + "\r\n" +
-                        "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-                out.write(respBytes);
-                out.flush();
-                socket.close();
-            } catch (Throwable ignored) {}
-        }).start();
+    private static boolean isPhoneControl(JSONObject json) {
+        return "phone_control".equals(json.optString("action")) || json.has("phone_action");
+    }
+
+    private static void writeJson(Socket s, JSONObject resp) throws java.io.IOException {
+        byte[] respBytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+        OutputStream out = s.getOutputStream();
+        out.write(("HTTP/1.1 200 OK\r\n" +
+                "Content-Type: application/json; charset=utf-8\r\n" +
+                "Content-Length: " + respBytes.length + "\r\n" +
+                "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(respBytes);
+        out.flush();
+    }
+
+    /** 按字节读一行（去掉 \r\n），流结束返回 null；头部行限长 8KB。 */
+    private static String readLineBytes(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(128);
+        int b;
+        boolean any = false;
+        while ((b = in.read()) != -1) {
+            any = true;
+            if (b == '\n') break;
+            if (b != '\r' && buf.size() < 8192) buf.write(b);
+        }
+        if (!any) return null;
+        return new String(buf.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    // ---------------- 令牌：仅容器内（应用私有目录）可读，防止设备上其他应用借本地端口操控手机 ----------------
+
+    private volatile String bridgeToken;
+
+    public String getBridgeToken() {
+        String t = bridgeToken;
+        if (t != null) return t;
+        synchronized (this) {
+            if (bridgeToken == null) {
+                android.content.SharedPreferences sp = appContext.getSharedPreferences("pimet_bridge", Context.MODE_PRIVATE);
+                String saved = sp.getString("token", null);
+                if (TextUtils.isEmpty(saved)) {
+                    saved = java.util.UUID.randomUUID().toString().replace("-", "");
+                    sp.edit().putString("token", saved).apply();
+                }
+                bridgeToken = saved;
+            }
+            return bridgeToken;
+        }
+    }
+
+    /** 把令牌写进容器 ~/.pi/agent/.pimet_bridge_token，供扩展读取（容器未安装时跳过）。 */
+    private void writeTokenFile() {
+        try {
+            File rootfs = ProotManager.getRootfsDir(appContext);
+            if (!rootfs.exists()) return;
+            File f = new File(rootfs, "root/.pi/agent/.pimet_bridge_token");
+            String tok = getBridgeToken();
+            if (f.isFile() && tok.equals(readFile(f) != null ? readFile(f).trim() : null)) return;
+            File dir = f.getParentFile();
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
+                fos.write(tok.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "write token failed: " + t);
+        }
     }
 
     /**
      * 文件 IPC 轮询监听 (/root/.pi/agent/app_control.json)
-     * 作为 HTTP 连接的坚实备用通道
+     * HTTP 不通时扩展才会写这个文件（只用于桌宠/界面控制，手机自动化只走 HTTP）。
+     * 启动时文件若是 10 秒前的旧指令则忽略，避免每次打开应用重放上次的指令。
      */
     private void startFileWatcher() {
         fileWatchThread = new Thread(() -> {
+            boolean first = true;
+            int tick = 0;
             while (isRunning.get()) {
                 try {
                     Thread.sleep(600);
                     File rootfs = ProotManager.getRootfsDir(appContext);
                     if (!rootfs.exists()) continue;
+                    if (tick++ % 50 == 0) writeTokenFile(); // 约 30 秒确认一次令牌文件（容器重置后补写）
                     File bridgeFile = new File(rootfs, "root/.pi/agent/app_control.json");
-                    if (bridgeFile.exists()) {
-                        long curTs = bridgeFile.lastModified();
-                        if (curTs > lastFileTimestamp) {
+                    if (!bridgeFile.exists()) {
+                        first = false;
+                        continue;
+                    }
+                    long curTs = bridgeFile.lastModified();
+                    if (first) {
+                        first = false;
+                        if (System.currentTimeMillis() - curTs > 10_000) {
                             lastFileTimestamp = curTs;
-                            String content = readFile(bridgeFile);
-                            if (!TextUtils.isEmpty(content)) {
-                                JSONObject json = new JSONObject(content);
-                                executeCommand(json);
-                            }
+                            continue;
+                        }
+                    }
+                    if (curTs > lastFileTimestamp) {
+                        lastFileTimestamp = curTs;
+                        String content = readFile(bridgeFile);
+                        if (!TextUtils.isEmpty(content)) {
+                            JSONObject json = new JSONObject(content);
+                            if (!isPhoneControl(json)) executeCommand(json);
                         }
                     }
                 } catch (InterruptedException ie) {
                     break;
-                } catch (Throwable ignored) {}
+                } catch (Throwable t) {
+                    Log.w(TAG, "file watcher: " + t);
+                }
             }
         }, "PiMet-AppBridge-FileWatcher");
         fileWatchThread.setDaemon(true);
         fileWatchThread.start();
     }
 
+    /** 容器内截图目录（宿主路径）与对应的容器内路径。 */
+    private File screenshotDir() {
+        return new File(ProotManager.getRootfsDir(appContext), "root/.pi/agent/screenshots");
+    }
+
+    private static void pruneScreenshots(File dir, int keep) {
+        File[] fs = dir.listFiles((d, n) -> n.startsWith("screen-") && n.endsWith(".jpg"));
+        if (fs == null || fs.length <= keep) return;
+        java.util.Arrays.sort(fs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        for (int i = keep; i < fs.length; i++) //noinspection ResultOfMethodCallIgnored
+            fs[i].delete();
+    }
+
     /**
-     * 处理手机自动化控制指令 (phone_control)
+     * 处理手机自动化控制指令 (phone_control)。
+     * 操作名（phone_action / sub_action）：status、inspect(read_screen/screen)、find、tap(click)、long_press(long_click)、
+     * swipe、scroll、input(type)、key(press_key)、back/home/recents、enter、launch(open_app)、screenshot、wait_for(wait)、wait_idle。
+     * 每个结果都有 success，失败时 error 说明原因。
      */
     public JSONObject executePhoneControl(JSONObject json) {
-        JSONObject res = new JSONObject();
         try {
-            if (!PiMetAccessibilityService.isRunning()) {
-                res.put("success", false);
-                res.put("error", "PiMet 无障碍服务未开启。请先在安卓系统设置 -> 无障碍 -> 开启 PiMet 手机自动化服务！");
-                res.put("need_permission", true);
-                return res;
-            }
-
-            PiMetAccessibilityService service = PiMetAccessibilityService.getInstance();
-            if (service == null) {
-                res.put("success", false);
-                res.put("error", "AccessibilityService 实例不可用");
-                return res;
-            }
-
             String subAction = json.optString("phone_action", json.optString("sub_action", "")).trim();
             if (TextUtils.isEmpty(subAction)) {
                 if (json.has("click") || json.has("tap")) subAction = "tap";
@@ -265,144 +373,168 @@ public class AppBridgeManager {
                 else if (json.has("input") || json.has("text")) subAction = "input";
                 else if (json.has("key") || json.has("press")) subAction = "key";
             }
+            String act = subAction.toLowerCase(java.util.Locale.ROOT);
+            if ("status".equals(act)) return PiMetAccessibilityService.statusJson(appContext);
 
-            switch (subAction.toLowerCase()) {
-                case "inspect":
-                case "read_screen":
-                case "screen": {
-                    return service.inspectScreen();
-                }
-
-                case "tap":
-                case "click": {
-                    String targetText = json.optString("text", json.optString("click_text", json.optString("target", "")));
-                    String targetId = json.optString("target_id", json.optString("id", ""));
-
-                    // 1. 优先尝试语义级/文字级精准点击 (自动溯源可点击父容器)
-                    if (!TextUtils.isEmpty(targetText)) {
-                        boolean ok = service.clickByText(targetText);
-                        if (ok) {
-                            res.put("success", true);
-                            res.put("message", "已通过语义节点溯源成功点击目标: [" + targetText + "]");
-                            return res;
-                        }
-                    }
-                    if (!TextUtils.isEmpty(targetId)) {
-                        boolean ok = service.clickById(targetId);
-                        if (ok) {
-                            res.put("success", true);
-                            res.put("message", "已通过 ID 节点溯源成功点击: " + targetId);
-                            return res;
-                        }
-                    }
-
-                    // 2. 坐标点击降级
-                    float x = (float) json.optDouble("x", -1);
-                    float y = (float) json.optDouble("y", -1);
-                    if (x < 0 || y < 0) {
-                        res.put("success", false);
-                        res.put("error", "未找到匹配文本且未提供有效的坐标参数 (x=" + x + ", y=" + y + ")");
-                        return res;
-                    }
-                    boolean ok = service.click(x, y);
-                    res.put("success", ok);
-                    res.put("message", ok ? "已成功点击坐标 (" + x + ", " + y + ")" : "手势下发失败或被取消");
-                    return res;
-                }
-
-                case "long_press":
-                case "long_click": {
-                    float x = (float) json.optDouble("x", -1);
-                    float y = (float) json.optDouble("y", -1);
-                    int dur = json.optInt("duration", 800);
-                    if (x < 0 || y < 0) {
-                        res.put("success", false);
-                        res.put("error", "坐标参数错误: x=" + x + ", y=" + y);
-                        return res;
-                    }
-                    boolean ok = service.longClick(x, y, dur);
-                    res.put("success", ok);
-                    res.put("message", ok ? "已成功长按坐标 (" + x + ", " + y + ")" : "长按手势下发失败");
-                    return res;
-                }
-
-                case "swipe": {
-                    float fromX = (float) json.optDouble("from_x", json.optDouble("x1", -1));
-                    float fromY = (float) json.optDouble("from_y", json.optDouble("y1", -1));
-                    float toX = (float) json.optDouble("to_x", json.optDouble("x2", -1));
-                    float toY = (float) json.optDouble("to_y", json.optDouble("y2", -1));
-                    int dur = json.optInt("duration", 300);
-
-                    // 便捷方向参数: direction: up / down / left / right
-                    String dir = json.optString("direction", "").toLowerCase();
-                    if (!TextUtils.isEmpty(dir)) {
-                        int sw = appContext.getResources().getDisplayMetrics().widthPixels;
-                        int sh = appContext.getResources().getDisplayMetrics().heightPixels;
-                        float cx = sw / 2.0f;
-                        float cy = sh / 2.0f;
-                        if ("up".equals(dir)) {
-                            fromX = cx; toX = cx; fromY = cy + (sh * 0.25f); toY = cy - (sh * 0.25f);
-                        } else if ("down".equals(dir)) {
-                            fromX = cx; toX = cx; fromY = cy - (sh * 0.25f); toY = cy + (sh * 0.25f);
-                        } else if ("left".equals(dir)) {
-                            fromY = cy; toY = cy; fromX = cx + (sw * 0.3f); toX = cx - (sw * 0.3f);
-                        } else if ("right".equals(dir)) {
-                            fromY = cy; toY = cy; fromX = cx - (sw * 0.3f); toX = cx + (sw * 0.3f);
-                        }
-                    }
-
-                    if (fromX < 0 || fromY < 0 || toX < 0 || toY < 0) {
-                        res.put("success", false);
-                        res.put("error", "滑动坐标参数错误");
-                        return res;
-                    }
-                    boolean ok = service.swipe(fromX, fromY, toX, toY, dur);
-                    res.put("success", ok);
-                    res.put("message", ok ? "滑动完成 (" + fromX + "," + fromY + ") -> (" + toX + "," + toY + ")" : "滑动失败");
-                    return res;
-                }
-
-                case "input":
-                case "type": {
-                    String text = json.optString("text", "");
-                    String target = json.optString("target", json.optString("target_id", ""));
-                    boolean ok = service.inputText(text, target);
-                    res.put("success", ok);
-                    res.put("message", ok ? "已成功注入文字: " + text : "未能找到可输入文字的输入框");
-                    return res;
-                }
-
-                case "key":
-                case "press_key": {
-                    String key = json.optString("key", "");
-                    boolean ok = service.performSystemKey(key);
-                    res.put("success", ok);
-                    res.put("message", ok ? "已执行按键: " + key : "按键执行失败或不受支持");
-                    return res;
-                }
-
-                default:
-                    res.put("success", false);
-                    res.put("error", "未知自动化操作: " + subAction);
-                    return res;
+            PiMetAccessibilityService service = PiMetAccessibilityService.getInstance();
+            if (service == null) {
+                JSONObject res = new JSONObject();
+                res.put("success", false);
+                boolean enabled = PiMetAccessibilityService.isEnabledInSettings(appContext);
+                res.put("error", enabled
+                        ? "PiMet 无障碍服务已开启但未连接（常见于应用更新后或被系统清理）。请到 系统设置 → 无障碍 → PiMet 手机自动化，关闭后重新打开。"
+                        : "PiMet 无障碍服务未开启。请到 系统设置 → 无障碍 → 已下载的应用 → PiMet 手机自动化 开启（开关灰色时：应用信息 → 右上角 ⋮ → 允许受限制的设置）。");
+                res.put("need_permission", true);
+                return res;
             }
 
+            synchronized (PHONE_LOCK) {
+                switch (act) {
+                    case "inspect":
+                    case "read_screen":
+                    case "screen":
+                    case "dump":
+                        return service.inspectScreen(json);
+
+                    case "find":
+                        return service.find(PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target"));
+
+                    case "tap":
+                    case "click":
+                    case "long_press":
+                    case "long_click": {
+                        boolean longPress = act.startsWith("long");
+                        PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, "text");
+                        if (q.text == null) q.text = emptyToNull(json.optString("click_text", json.optString("target", "")));
+                        boolean hasXY = json.has("x") && json.has("y");
+                        if (!q.isEmpty()) {
+                            JSONObject r = service.clickNode(q, longPress);
+                            if (r.optBoolean("success") || !hasXY) return r;
+                        }
+                        if (!hasXY) {
+                            return err("缺少点击目标：传 target/text（按文字）、id、desc，或 x,y 坐标");
+                        }
+                        float x = (float) json.optDouble("x", -1);
+                        float y = (float) json.optDouble("y", -1);
+                        return longPress ? service.longClickAt(x, y, json.optInt("duration", 800)) : service.tapAt(x, y);
+                    }
+
+                    case "swipe": {
+                        String dir = json.optString("direction", "").toLowerCase(java.util.Locale.ROOT);
+                        int dur = json.optInt("duration", 300);
+                        if (!TextUtils.isEmpty(dir)) {
+                            return service.swipeDirection(dir, (float) json.optDouble("distance", 0.5), dur);
+                        }
+                        double fromX = json.optDouble("from_x", json.optDouble("x1", -1));
+                        double fromY = json.optDouble("from_y", json.optDouble("y1", -1));
+                        double toX = json.optDouble("to_x", json.optDouble("x2", -1));
+                        double toY = json.optDouble("to_y", json.optDouble("y2", -1));
+                        if (fromX < 0 || fromY < 0 || toX < 0 || toY < 0) {
+                            return err("滑动需要 direction（up/down/left/right）或 from_x/from_y/to_x/to_y 坐标");
+                        }
+                        return service.swipeGesture((float) fromX, (float) fromY, (float) toX, (float) toY, dur);
+                    }
+
+                    case "scroll": {
+                        PiMetAccessibilityService.Query within = PiMetAccessibilityService.Query.from(json, "target");
+                        return service.scroll(json.optString("direction", "down"), within);
+                    }
+
+                    case "input":
+                    case "type":
+                    case "set_text": {
+                        String text = json.optString("text", null);
+                        String target = json.optString("target", json.optString("target_id", json.optString("id", "")));
+                        JSONObject r = service.input(text, target, json.optBoolean("append", false));
+                        if (r.optBoolean("success") && json.optBoolean("submit", false)) {
+                            JSONObject e = service.pressEnter();
+                            r.put("submit", e);
+                        }
+                        return r;
+                    }
+
+                    case "key":
+                    case "press_key":
+                    case "global":
+                        return service.systemKey(json.optString("key", json.optString("press", "")));
+
+                    case "back":
+                    case "home":
+                    case "recents":
+                    case "notifications":
+                    case "quick_settings":
+                    case "lock":
+                        return service.systemKey(act);
+
+                    case "enter":
+                    case "submit":
+                        return service.pressEnter();
+
+                    case "launch":
+                    case "open_app":
+                    case "launch_app":
+                    case "open": {
+                        String app = json.optString("package", json.optString("app", json.optString("target", json.optString("text", ""))));
+                        return service.launchApp(app);
+                    }
+
+                    case "screenshot": {
+                        File dir = screenshotDir();
+                        String name = "screen-" + System.currentTimeMillis() + ".jpg";
+                        int maxSide = Math.max(480, Math.min(2400, json.optInt("max_side", 1280)));
+                        JSONObject r = service.screenshot(new File(dir, name), maxSide);
+                        if (r.optBoolean("success")) {
+                            r.put("path", "/root/.pi/agent/screenshots/" + name);
+                            r.put("message", "截图已保存到容器内 /root/.pi/agent/screenshots/" + name + "，可用 read 工具查看；坐标按 scale 换算回屏幕像素");
+                            pruneScreenshots(dir, 5);
+                        }
+                        return r;
+                    }
+
+                    case "wait_for":
+                    case "wait": {
+                        PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target");
+                        if (q.isEmpty()) {
+                            // 纯等待：wait(timeout) 等同于等待界面空闲
+                            return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 3000));
+                        }
+                        return service.waitFor(q, json.optBoolean("gone", false), json.optLong("timeout", 5000));
+                    }
+
+                    case "wait_idle":
+                        return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 5000));
+
+                    default:
+                        return err("未知自动化操作: " + subAction + "（可用 inspect / find / tap / long_press / swipe / scroll / input / key / launch / screenshot / wait_for / wait_idle / status）");
+                }
+            }
         } catch (Throwable t) {
             Log.e(TAG, "executePhoneControl error", t);
-            try {
-                res.put("success", false);
-                res.put("error", t.getMessage());
-            } catch (Throwable ignored) {}
+            return err("执行失败: " + t);
         }
-        return res;
+    }
+
+    private static String emptyToNull(String s) {
+        return s == null || s.trim().isEmpty() ? null : s.trim();
+    }
+
+    private static JSONObject err(String msg) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("success", false);
+            o.put("error", msg);
+        } catch (Throwable ignored) {}
+        return o;
     }
 
     /**
      * 执行由 AI Agent 或自然语言解析器下发的宿主控制指令
      */
     public String executeCommand(JSONObject json) {
-        StringBuilder feedback = new StringBuilder();
-        mainHandler.post(() -> {
+        StringBuffer feedback = new StringBuffer();
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        Runnable task = () -> {
+          try {
             try {
                 // 1. 桌宠尺寸调节
                 if (json.has("size")) {
@@ -432,7 +564,7 @@ public class AppBridgeManager {
                 // 3. 动作播放
                 if (json.has("action")) {
                     String action = json.optString("action").trim();
-                    if (!TextUtils.isEmpty(action) && !action.equals("control_desktop_pet") && !action.equals("control_app_ui")) {
+                    if (!TextUtils.isEmpty(action) && !action.equals("control_desktop_pet") && !action.equals("control_app_ui") && !action.equals("phone_control")) {
                         if (attachedActivity != null && attachedActivity.floatingPetView != null) {
                             attachedActivity.floatingPetView.playOneShot(action);
                         }
@@ -525,8 +657,23 @@ public class AppBridgeManager {
 
             } catch (Throwable t) {
                 Log.w(TAG, "executeCommand main thread error", t);
+                feedback.append("执行出错: ").append(t.getMessage()).append("; ");
             }
-        });
+          } finally {
+            done.countDown();
+          }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            task.run();
+        } else {
+            // 在主线程执行界面操作，等待其完成以便把真实结果返回给 Agent（最多 3 秒）
+            mainHandler.post(task);
+            try {
+                done.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
 
         return feedback.length() == 0 ? "指令已处理" : feedback.toString();
     }

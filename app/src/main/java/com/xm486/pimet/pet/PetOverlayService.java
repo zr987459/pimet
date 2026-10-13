@@ -257,6 +257,14 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         PetRegistry.getPrefs(this).registerOnSharedPreferenceChangeListener(this);
         getSharedPreferences(com.xm486.pimet.ThemeManager.PREF_NAME, MODE_PRIVATE)
                 .registerOnSharedPreferenceChangeListener(themePrefListener);
+        // 仅有桌宠服务存活（主界面未打开/被回收）时也要让 AI 控制桥在线，否则 phone_control 连不上
+        try {
+            com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
+            final android.content.Context appCtx = getApplicationContext();
+            new Thread(() -> com.xm486.pimet.PluginManager.ensureAndroidBridgeExtension(appCtx), "pimet-ensure-ext").start();
+        } catch (Throwable t) {
+            android.util.Log.w("PetOverlayService", "AppBridge start failed", t);
+        }
         // 挂载 AI 对话桥（状态卡输入框 → 大模型）
         chatBridge = new PetChatBridge(this);
         chatBridge.attach();
@@ -296,7 +304,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     public void startProactiveChatter() {
         stopProactiveChatter();
-        PetMemoryManager.ensurePetSubagentInstalled(this);
+        final android.content.Context appCtx = getApplicationContext();
+        new Thread(() -> PetMemoryManager.ensurePetSubagentInstalled(appCtx), "pimet-ensure-agent").start();
         int intervalMin = PetRegistry.getIntPref(this,
                 PetMemoryManager.KEY_PROACTIVE_INTERVAL_MIN, 3);
         proactiveHandler.postDelayed(proactiveRunnable, Math.max(45000L, intervalMin * 60000L));

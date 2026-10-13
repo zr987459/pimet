@@ -431,8 +431,7 @@ public final class PetMemoryManager {
         }
 
         try {
-            boolean autoServiceRunning = com.xm486.pimet.automation.PiMetAccessibilityService.isRunning();
-            sb.append("• 手机自动化服务: ").append(autoServiceRunning ? "🟢 无障碍已开启 (可操控手机)" : "🟡 未开启无障碍权限").append("\n");
+            sb.append("• 手机自动化服务: ").append(com.xm486.pimet.automation.PiMetAccessibilityService.describeState(context)).append("\n");
         } catch (Throwable ignored) {}
 
         JSONArray memories = mem.optJSONArray("memories");
@@ -638,30 +637,44 @@ public final class PetMemoryManager {
             }
 
             // 确保 phone-operator.md 安装 (专用于感叹号 ! 开头的手机屏幕自动化控制)
+            // 内置版本更新时覆盖旧的内置提示词；用户自己改过的（不含旧版签名）不动
             File phoneOperatorFile = new File(agentsDir, "phone-operator.md");
-            if (!phoneOperatorFile.exists()) {
+            final String marker = "<!-- pimet-phone-operator v2 -->";
+            String existing = null;
+            if (phoneOperatorFile.isFile()) {
+                try {
+                    existing = new String(java.nio.file.Files.readAllBytes(phoneOperatorFile.toPath()), StandardCharsets.UTF_8);
+                } catch (Throwable ignored) {}
+            }
+            boolean builtinOld = existing != null && !existing.contains(marker) && existing.contains("屏幕领航员");
+            if (existing == null || builtinOld) {
                 String phonePrompt =
                         "---\n" +
                         "name: phone-operator\n" +
-                        "description: Android 手机自动化专属控制代理，具备全窗口穿透读屏、智能语义节点溯源点击、滑动翻页、输入与系统按键能力\n" +
+                        "description: Android 手机自动化专属控制代理：读屏、按文字/ID 点击、滑动滚动、输入、按键、启动应用、截图与等待\n" +
                         "tools: phone_control, control_desktop_pet, bash, read\n" +
                         "skills: true\n" +
                         "extensions: true\n" +
                         "thinking: off\n" +
-                        "maxTurns: 15\n" +
+                        "maxTurns: 25\n" +
                         "inheritContext: false\n" +
                         "background: false\n" +
-                        "---\n\n" +
+                        "---\n" + marker + "\n\n" +
                         "## 角色定位\n" +
-                        "你是专职操作 Android 手机的智能屏幕操作助手「屏幕领航员」。\n" +
-                        "你的使命是替主人精准、安全、可靠地执行手机界面的交互操作：包括读取屏幕界面、点击目标按钮、滑动翻页、填入文字以及返回/回桌面等系统导航。\n\n" +
-                        "## 工具使用准则与策略\n" +
-                        "1. 优先语义直达点击：尽量使用 phone_control(action=\"tap\", target=\"按钮文字或ViewID\")，底层无障碍会自动溯源可点击父框架实现 100% 精准触发；\n" +
-                        "2. 读屏分析：不确定目标时先调用 phone_control(action=\"inspect\") 查看结构化节点后再操作；\n" +
-                        "3. 滑动翻页：向下翻看内容用 phone_control(action=\"swipe\", direction=\"up\")；向上翻看用 direction=\"down\"；\n" +
-                        "4. 文字填写：调用 phone_control(action=\"input\", text=\"内容\", target=\"目标输入框\")；\n" +
-                        "5. 系统按键：home (回桌面)、back (返回)、recents (多任务后台)；\n" +
-                        "6. 回复风格：在桌宠界面请保持简短干练（25字以内直接汇报执行结果，例如：\"已为你点击【确认】\"）。\n";
+                        "你是专职操作 Android 手机的屏幕操作助手「屏幕领航员」，替主人精准、安全地完成手机界面操作。\n\n" +
+                        "## 工具：phone_control（每次调用都会返回 success；失败时 error 写明原因，按原因调整，不要盲目重试）\n" +
+                        "1. 先看再做：phone_control(action=\"inspect\") 读取当前界面节点（text/desc/id/bounds/clickable）；节点很多时用 action=\"find\", target=\"文字\" 精确定位；\n" +
+                        "2. 点击：优先 action=\"tap\", target=\"按钮文字\"（或 id=\"…\"），会自动找可点击的父容器；文字点不到时再用 x,y 坐标（屏幕像素，与 bounds 相同）；\n" +
+                        "3. 打开应用：action=\"launch\", app=\"微信\" 或 package=\"com.tencent.mm\"；\n" +
+                        "4. 输入：action=\"input\", text=\"内容\"（可选 target 指定输入框，submit=true 回车搜索/发送）；\n" +
+                        "5. 翻页：action=\"scroll\", direction=\"down\" 查看下方内容（up 向上）；或 swipe 方向手势；\n" +
+                        "6. 等待：操作后用 action=\"wait_for\", target=\"预期出现的文字\" 或 action=\"wait_idle\"，再 inspect 确认结果；\n" +
+                        "7. 按键：action=\"key\", key=\"back\" | \"home\" | \"recents\" | \"notifications\"；\n" +
+                        "8. 看图：文字不够时 action=\"screenshot\"（Android 11+）得到图片路径，再用 read 查看；\n" +
+                        "9. 若返回 need_permission 或「未连接」，直接告诉主人去开启/重开无障碍服务，不要继续操作；\n" +
+                        "10. 涉及支付、转账、删除、发送消息给他人等不可撤销操作前，先向主人确认。\n\n" +
+                        "## 回复风格\n" +
+                        "在桌宠界面保持简短（25 字以内汇报结果，例如：\"已为你点击【确认】\"）。\n";
                 try (FileOutputStream fos = new FileOutputStream(phoneOperatorFile)) {
                     fos.write(phonePrompt.getBytes(StandardCharsets.UTF_8));
                 }
