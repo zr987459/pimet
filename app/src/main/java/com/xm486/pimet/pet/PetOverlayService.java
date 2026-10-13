@@ -30,7 +30,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.MainActivity;
-import com.xm486.pimet.PiWebActivity;
 import com.xm486.pimet.R;
 import com.xm486.pimet.monitor.ClawBenchMonitor;
 import com.xm486.pimet.monitor.OperitMonitor;
@@ -605,18 +604,27 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             return;
         }
 
+        openTargetWeb(this, targetKey, port);
+    }
+
+    /**
+     * 打开监控目标的 Web 界面：Pi-Web 直接回到本体的工作台页（不再使用独立 PiWebActivity 浏览器），
+     * 其他目标（Operit / ClawBench / RikkaHub）交给系统浏览器打开。
+     */
+    public static void openTargetWeb(Context ctx, String targetKey, int port) {
         try {
-            Intent intent = new Intent(this, PiWebActivity.class);
-            intent.putExtra(PiWebActivity.EXTRA_PORT, port);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
+            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                Intent intent = new Intent(ctx, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                intent.putExtra("pimet.open_web", true);
+                ctx.startActivity(intent);
+                return;
+            }
+            Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
+            browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(browser);
         } catch (Throwable t) {
-            Log.w(TAG, "openConsoleForTarget failed", t);
-            try {
-                Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
-                browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(browser);
-            } catch (Throwable ignored) {}
+            Log.w(TAG, "openTargetWeb failed", t);
         }
     }
 
@@ -757,7 +765,74 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return statusCard != null ? statusCard.getAttachButton() : null;
     }
 
+    /** 收起卡片时归还焦点：收键盘并恢复 FLAG_NOT_FOCUSABLE，避免悬浮窗继续吞掉返回键和触摸 */
+    private void releaseInputFocus() {
+        try {
+            if (statusCard != null && statusCard.getChatInput() != null) {
+                android.widget.EditText et = statusCard.getChatInput();
+                android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                        getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+                et.clearFocus();
+            }
+            if (overlayRoot != null && overlayRoot.getLayoutParams() instanceof WindowManager.LayoutParams) {
+                WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0) {
+                    lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                    updateOverlayLayout(lp);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // ---- 自动化期间隐身 ----
+    private static final Handler AUTO_HANDLER = new Handler(Looper.getMainLooper());
+    private static final Runnable AUTO_RESTORE = () -> {
+        PetOverlayService s = sInstance;
+        if (s != null) s.applyAutomationPassthrough(false);
+    };
+
+    /** 自动化操作开始：桌宠窗口透明 + 不可触摸（同步等待生效，最多 400ms） */
+    public static void beginAutomation() {
+        final PetOverlayService s = sInstance;
+        if (s == null) return;
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        AUTO_HANDLER.post(() -> {
+            AUTO_HANDLER.removeCallbacks(AUTO_RESTORE);
+            s.applyAutomationPassthrough(true);
+            latch.countDown();
+        });
+        try {
+            if (latch.await(400, java.util.concurrent.TimeUnit.MILLISECONDS)) Thread.sleep(50);
+        } catch (InterruptedException ignored) {}
+    }
+
+    /** 自动化操作结束：1.5 秒内没有新操作再恢复显示，连续操作时不闪烁 */
+    public static void endAutomation() {
+        AUTO_HANDLER.removeCallbacks(AUTO_RESTORE);
+        AUTO_HANDLER.postDelayed(AUTO_RESTORE, 1500);
+    }
+
+    private boolean automationHidden = false;
+
+    private void applyAutomationPassthrough(boolean on) {
+        if (overlayRoot == null || automationHidden == on) return;
+        automationHidden = on;
+        try {
+            if (on) releaseInputFocus();
+            overlayRoot.setAlpha(on ? 0f : 1f);
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            if (on) lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            else lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            updateOverlayLayout(lp);
+        } catch (Throwable t) {
+            Log.w(TAG, "applyAutomationPassthrough failed", t);
+        }
+    }
+
     public void updateOverlayLayout(WindowManager.LayoutParams lp) {
+        // 任何时候都不独占屏幕触摸：输入框获焦（窗口可聚焦）时窗口外的触摸仍交给下层应用
+        lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
         try {
             windowManager.updateViewLayout(overlayRoot, lp);
         } catch (Throwable t) {
@@ -878,6 +953,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 windowType(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         wmParams.gravity = Gravity.TOP | Gravity.START;
@@ -1205,6 +1281,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                     .setInterpolator(new android.view.animation.DecelerateInterpolator())
                     .start();
         } else {
+            releaseInputFocus();
             // 退出比进入更快（约 60%），手感更利落
             statusCard.animate()
                     .alpha(0f).scaleX(cs * 0.96f).scaleY(cs * 0.96f)

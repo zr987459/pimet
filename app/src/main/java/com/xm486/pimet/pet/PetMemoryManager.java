@@ -639,7 +639,7 @@ public final class PetMemoryManager {
             // 确保 phone-operator.md 安装 (专用于感叹号 ! 开头的手机屏幕自动化控制)
             // 内置版本更新时覆盖旧的内置提示词；用户自己改过的（不含旧版签名）不动
             File phoneOperatorFile = new File(agentsDir, "phone-operator.md");
-            final String marker = "<!-- pimet-phone-operator v2 -->";
+            final String marker = "<!-- pimet-phone-operator v3 -->";
             String existing = null;
             if (phoneOperatorFile.isFile()) {
                 try {
@@ -668,7 +668,8 @@ public final class PetMemoryManager {
                         "3. 打开应用：action=\"launch\", app=\"微信\" 或 package=\"com.tencent.mm\"；\n" +
                         "4. 输入：action=\"input\", text=\"内容\"（可选 target 指定输入框，submit=true 回车搜索/发送）；\n" +
                         "5. 翻页：action=\"scroll\", direction=\"down\" 查看下方内容（up 向上）；或 swipe 方向手势；\n" +
-                        "6. 等待：操作后用 action=\"wait_for\", target=\"预期出现的文字\" 或 action=\"wait_idle\"，再 inspect 确认结果；\n" +
+                        "6. 省步骤：tap/input/scroll/swipe/key/launch 成功后结果里自带 screen_after（操作后的界面），直接据此判断下一步，不要再单独 inspect；只有需要等加载时才用 action=\"wait_for\", target=\"预期出现的文字\"；\n" +
+                        "6.1 广告：节点出现 ad_close=true 或结果含 ad_close_candidates（开屏广告、弹窗广告、×、跳过、Skip 倒计时），立即 action=\"close_ad\"；开屏页可传 timeout=3000 等跳过按钮出现；\n" +
                         "7. 按键：action=\"key\", key=\"back\" | \"home\" | \"recents\" | \"notifications\"；\n" +
                         "8. 看图：文字不够时 action=\"screenshot\"（Android 11+）得到图片路径，再用 read 查看；\n" +
                         "9. 若返回 need_permission 或「未连接」，直接告诉主人去开启/重开无障碍服务，不要继续操作；\n" +

@@ -1607,9 +1607,12 @@ public final class PluginManager {
                     "      \"scroll(direction=down 看下方内容/up，可用 target 指定列表) | input(text，可选 target 输入框、append、submit) | \" +\n" +
                     "      \"key(key=back/home/recents/notifications/quick_settings/lock/enter) | launch(package 或 app 应用名) | \" +\n" +
                     "      \"screenshot(Android 11+，返回容器内图片路径，可用 read 查看) | wait_for(target/id 出现，gone=true 等消失，timeout 毫秒) | wait_idle。\" +\n" +
-                    "      \"建议流程：inspect → tap/input → wait_for 或 wait_idle → 再 inspect 确认。\",\n" +
+                    "      \"close_ad(关闭广告/跳过开屏：自动识别 ×、关闭、跳过、Skip 倒计时等按钮并点击；timeout 毫秒内轮询，strict=true 只点有明确文字/ID 的按钮)。\" +\n" +
+                    "      \"tap/long_press/swipe/scroll/input/key/launch/close_ad 成功后会自动等待界面稳定，并在 screen_after 里返回操作后的读屏结果，无需再单独 inspect（传 observe=false 关闭）。\" +\n" +
+                    "      \"读屏节点带 ad_close=true、或结果里出现 ad_close_candidates 时说明有广告弹窗，先 close_ad 再继续。\" +\n" +
+                    "      \"建议流程：inspect → tap/input（看 screen_after 判断结果）→ 下一步；需要等加载时用 wait_for。\",\n" +
                     "    parameters: Type.Object({\n" +
-                    "      action: Type.String({ description: \"操作：status | inspect | find | tap | long_press | swipe | scroll | input | key | launch | screenshot | wait_for | wait_idle\" }),\n" +
+                    "      action: Type.String({ description: \"操作：status | inspect | find | close_ad | tap | long_press | swipe | scroll | input | key | launch | screenshot | wait_for | wait_idle\" }),\n" +
                     "      target: Type.Optional(Type.String({ description: \"目标文字（匹配 text/desc/hint，先精确后包含）；input 时为目标输入框；launch 时可为应用名\" })),\n" +
                     "      id: Type.Optional(Type.String({ description: \"目标 View ID，如 com.tencent.mm:id/xxx 或仅 xxx\" })),\n" +
                     "      desc: Type.Optional(Type.String({ description: \"按 content-description 匹配\" })),\n" +
@@ -1631,7 +1634,8 @@ public final class PluginManager {
                     "      submit: Type.Optional(Type.Boolean({ description: \"input 后执行回车/搜索（Android 11+）\" })),\n" +
                     "      gone: Type.Optional(Type.Boolean({ description: \"wait_for 等待目标消失\" })),\n" +
                     "      timeout: Type.Optional(Type.Number({ description: \"wait_for / wait_idle 超时毫秒，默认 5000，最大 30000\" })),\n" +
-                    "      max_nodes: Type.Optional(Type.Number({ description: \"inspect 返回节点上限，默认 300\" })),\n" +
+                    "      max_nodes: Type.Optional(Type.Number({ description: \"inspect 返回节点上限，默认 300\" })),\n" +                    "      observe: Type.Optional(Type.Boolean({ description: \"操作后是否自动附带 screen_after 读屏，默认 true\" })),\n" +
+                    "      strict: Type.Optional(Type.Boolean({ description: \"close_ad 只点击有明确文字/ID 的关闭按钮\" })),\n" +
                     "    }),\n" +
                     "    async execute(_toolCallId, params) {\n" +
                     "      const { action, ...rest } = params as Record<string, any>;\n" +

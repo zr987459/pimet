@@ -1883,6 +1883,50 @@ public class MainActivity extends AppCompatActivity {
         togglePetChatCard(true);
     }
 
+    // ---- 聊天卡「停止」打断 ----
+    private volatile boolean petChatRunning = false;
+    private volatile boolean petChatCancelled = false;
+    private volatile HttpURLConnection petChatConn;
+    private volatile String petChatSessionId;
+
+    private void setPetChatRunning(boolean running) {
+        petChatRunning = running;
+        mainHandler.post(() -> {
+            if (btnSendFloatPetChat instanceof TextView) {
+                ((TextView) btnSendFloatPetChat).setText(running ? "停止" : "发送");
+            }
+        });
+    }
+
+    /** 打断当前 Pi-Web 回复：通知 Agent abort 并断开事件流 */
+    private void interruptPetChat() {
+        petChatCancelled = true;
+        final HttpURLConnection c = petChatConn;
+        final String sid = petChatSessionId;
+        final int port = PiMetConfig.getWebPort(this);
+        new Thread(() -> {
+            if (sid != null) {
+                HttpURLConnection a = null;
+                try {
+                    a = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/api/agent/" + sid).openConnection();
+                    a.setRequestMethod("POST");
+                    a.setDoOutput(true);
+                    a.setConnectTimeout(2000);
+                    a.setReadTimeout(3000);
+                    a.setRequestProperty("Content-Type", "application/json");
+                    a.getOutputStream().write("{\"type\":\"abort\"}".getBytes(StandardCharsets.UTF_8));
+                    a.getResponseCode();
+                } catch (Throwable ignored) {
+                } finally {
+                    if (a != null) try { a.disconnect(); } catch (Throwable ignored) {}
+                }
+            }
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) {}
+        }).start();
+        setPetChatRunning(false);
+        showPetBubble("⏹ 已打断");
+    }
+
     private void sendPetChatMessage(String question) {
         if (TextUtils.isEmpty(question)) return;
         String q = question.trim();
@@ -2062,6 +2106,10 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             try {
                 if (PetRegistry.TARGET_PIWEB.equals(activeTarget)) {
+                    petChatCancelled = false;
+                    petChatSessionId = null;
+                    setPetChatRunning(true);
+                    try {
                     int piwebPort = PiMetConfig.getWebPort(MainActivity.this);
                     if (!PortDetector.isPortOpen("127.0.0.1", piwebPort, 450)) {
                         mainHandler.post(() -> showPetBubble("⚠️ Pi-Web 未在端口 " + piwebPort + " 启动，请点击上方「🚀 直达工作台」启动服务~"));
@@ -2130,11 +2178,14 @@ public class MainActivity extends AppCompatActivity {
                         return;
                     }
 
+                    petChatSessionId = sessionId;
+                    if (petChatCancelled) return;
                     mainHandler.post(() -> showPetBubble("💭 Pi-Web Agent 正在思考中..."));
 
                     // 2. 监听 SSE 事件流实时更新桌宠动画与气泡
                     URL sseUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/agent/" + sessionId + "/events");
                     HttpURLConnection sseConn = (HttpURLConnection) sseUrl.openConnection();
+                    petChatConn = sseConn;
                     sseConn.setRequestProperty("Accept", "text/event-stream");
                     sseConn.setConnectTimeout(4000);
                     sseConn.setReadTimeout(75000);
@@ -2179,10 +2230,14 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (Throwable ignored) {}
                             }
                         }
+                    } catch (Throwable readErr) {
+                        if (!petChatCancelled) throw readErr;
                     } finally {
                         sseConn.disconnect();
+                        petChatConn = null;
                     }
 
+                    if (petChatCancelled) return;
                     mainHandler.post(() -> {
                         if (floatingPetView != null) floatingPetView.playOneShot("jumping");
                         if (answer.length() > 0) {
@@ -2192,6 +2247,9 @@ public class MainActivity extends AppCompatActivity {
                         }
                     });
                     return;
+                    } finally {
+                        if (!petChatCancelled) setPetChatRunning(false);
+                    }
                 }
                 if (PetRegistry.TARGET_OPERIT.equals(activeTarget)) {
                     int operitPort = PetRegistry.getOperitPort(MainActivity.this);
@@ -3211,6 +3269,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (btnSendFloatPetChat != null) {
             btnSendFloatPetChat.setOnClickListener(v -> {
+                if (petChatRunning) {
+                    interruptPetChat();
+                    return;
+                }
                 String q = inputFloatPetChat != null ? inputFloatPetChat.getText().toString().trim() : "";
                 if (q.isEmpty()) return;
                 if (inputFloatPetChat != null) inputFloatPetChat.setText("");

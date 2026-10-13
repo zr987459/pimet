@@ -50,6 +50,7 @@ public class StatusCardView extends LinearLayout {
     private View fullScreenBtn;
     private EditText chatInput;     // 输入框
     private Button sendButton;      // 发送按钮
+    private boolean sendRunning = false; // 回复进行中：发送按钮变为「停止」
     private Button attachButton;    // 附件按钮（当前未放入布局，保留接口）
     private OnClickListener chipClickListener;
 
@@ -251,6 +252,7 @@ public class StatusCardView extends LinearLayout {
         btnStates.addState(new int[]{android.R.attr.state_pressed}, sendLayer(ctx, p, p.accentHover));
         btnStates.addState(new int[]{}, sendLayer(ctx, p, p.accent));
         sendButton.setBackground(btnStates);
+        sendButton.setContentDescription(sendRunning ? "停止" : "发送");
 
         refreshHeader();
     }
@@ -258,13 +260,20 @@ public class StatusCardView extends LinearLayout {
     private Drawable sendLayer(Context ctx, ThemeManager.ThemePalette p, int bg) {
         GradientDrawable base = ThemeManager.createPrimaryButtonDrawable(ctx, p, ThemeManager.RADIUS_CONTROL);
         base.setColor(bg);
-        Drawable icon = ctx.getResources().getDrawable(R.drawable.ic_send, ctx.getTheme()).mutate();
+        Drawable icon = ctx.getResources().getDrawable(sendRunning ? R.drawable.ic_stop : R.drawable.ic_send, ctx.getTheme()).mutate();
         icon.setTint(p.accentContrast);
         android.graphics.drawable.LayerDrawable ld =
                 new android.graphics.drawable.LayerDrawable(new Drawable[]{base, icon});
         int in = dp(9);
         ld.setLayerInset(1, in, in, in, in);
         return ld;
+    }
+
+    /** 回复进行中把发送按钮切成「停止」图标，点击即可打断 */
+    public void setSendRunning(boolean running) {
+        if (sendRunning == running) return;
+        sendRunning = running;
+        if (palette != null) applyTheme(palette);
     }
 
     private void setDetailsExpanded(boolean expanded) {

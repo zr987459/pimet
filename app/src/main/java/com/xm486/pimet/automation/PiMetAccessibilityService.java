@@ -314,6 +314,17 @@ public class PiMetAccessibilityService extends AccessibilityService {
                 res.put("hint", "节点过多已截断，可用 find 按文字查找，或传 max_nodes 调大上限");
             }
             res.put("nodes", out);
+            List<Object[]> ads = scanAdCandidates(roots, screenRect);
+            if (!ads.isEmpty()) {
+                JSONArray arr = new JSONArray();
+                for (int i = 0; i < ads.size() && i < 3; i++) {
+                    JSONObject d = describeNode((AccessibilityNodeInfo) ads.get(i)[0]);
+                    d.put("score", (int) ads.get(i)[1]);
+                    arr.put(d);
+                }
+                res.put("ad_close_candidates", arr);
+                res.put("ad_hint", "检测到疑似广告关闭/跳过按钮，可直接调用 close_ad");
+            }
             return res;
         } catch (Throwable t) {
             Log.e(TAG, "inspectScreen failed", t);
@@ -358,6 +369,8 @@ public class PiMetAccessibilityService extends AccessibilityService {
                         if (checkable) o.put("checked", node.isChecked());
                         if (editable && node.isFocused()) o.put("focused", true);
                         if (!node.isEnabled()) o.put("enabled", false);
+                        int ad = adCloseScore(node, b, screen.width(), screen.height());
+                        if (ad >= 75) o.put("ad_close", true);
                         o.put("bounds", new JSONArray(Arrays.asList(b.left, b.top, b.right, b.bottom)));
                         o.put("centerX", b.centerX());
                         o.put("centerY", b.centerY());
@@ -473,7 +486,11 @@ public class PiMetAccessibilityService extends AccessibilityService {
             collect(r, q, exact, partial, screenRect, 0);
         }
         List<AccessibilityNodeInfo> res = new ArrayList<>(exact);
-        if (!q.exact) res.addAll(partial);
+        if (!q.exact) {
+            // 包含匹配按文字长度升序：搜「设置」时「设置」类短文字优先于「蓝牙设置说明…」
+            java.util.Collections.sort(partial, (a, b) -> Integer.compare(labelLen(a), labelLen(b)));
+            res.addAll(partial);
+        }
         return res;
     }
 
@@ -563,7 +580,10 @@ public class PiMetAccessibilityService extends AccessibilityService {
         try {
             AccessibilityNodeInfo cur = target;
             int hops = 0;
+            Rect tb = new Rect();
+            target.getBoundsInScreen(tb);
             while (cur != null && hops < 8) {
+                if (hops > 0 && !parentOkForClick(cur, tb)) break; // 父容器过大（整页/整列表），改用坐标点击目标本身，避免点偏
                 boolean can = longPress ? cur.isLongClickable() : cur.isClickable();
                 if (can && cur.isEnabled() && cur.performAction(action)) {
                     JSONObject o = ok((longPress ? "已长按" : "已点击") + " " + q
@@ -589,6 +609,159 @@ public class PiMetAccessibilityService extends AccessibilityService {
         } catch (Throwable t) {
             return fail("点击 " + q + " 失败: " + t);
         }
+    }
+
+    private static int labelLen(AccessibilityNodeInfo n) {
+        try {
+            CharSequence t = n.getText();
+            if (TextUtils.isEmpty(t)) t = n.getContentDescription();
+            return t == null ? 999 : t.length();
+        } catch (Throwable e) {
+            return 999;
+        }
+    }
+
+    /** 父容器是否适合代替目标执行点击：面积不超过目标的 6 倍，或宽高都不超过屏幕的 40% */
+    private boolean parentOkForClick(AccessibilityNodeInfo parent, Rect target) {
+        try {
+            Rect pb = new Rect();
+            parent.getBoundsInScreen(pb);
+            Point s = screenSize();
+            long ta = Math.max(1L, (long) target.width() * target.height());
+            long pa = (long) pb.width() * pb.height();
+            if (pa <= ta * 6) return true;
+            return pb.width() <= s.x * 0.4f && pb.height() <= s.y * 0.4f;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    // ======================= 广告关闭 / 跳过 =======================
+
+    private static final java.util.regex.Pattern AD_SKIP = java.util.regex.Pattern.compile(
+            "^(?:(?:跳过|skip)(?:\\s*广告|\\s*ad)?\\s*[(（\\[]?\\s*\\d{0,2}\\s*[sS秒]?\\s*[)）\\]]?|\\d{1,2}\\s*[sS秒]?\\s*[|｜/]?\\s*(?:跳过|skip)(?:\\s*广告)?)$",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.Set<String> AD_CLOSE_WORDS = new java.util.HashSet<>(Arrays.asList(
+            "×", "✕", "✖", "╳", "⨯", "x", "关闭", "关闭广告", "关闭按钮", "close", "close ad", "dismiss",
+            "不感兴趣", "关闭弹窗", "我知道了", "以后再说", "暂不", "残忍拒绝", "下次再说"));
+
+    /**
+     * 广告关闭/跳过按钮打分（0 表示不是）：
+     * 100 跳过/Skip（含倒计时）；90 ×/关闭 等文字；80 描述含关闭/close；85/75 资源 ID 含 skip/close；
+     * 50 右上角或底部居中的无文字小图标（常见的广告 ×）。
+     */
+    private int adCloseScore(AccessibilityNodeInfo n, Rect b, int sw, int sh) {
+        try {
+            if (b.width() <= 0 || b.height() <= 0) return 0;
+            CharSequence pkg = n.getPackageName();
+            if (pkg != null && getPackageName().contentEquals(pkg)) return 0;
+            String t = n.getText() == null ? "" : n.getText().toString().trim();
+            String d = n.getContentDescription() == null ? "" : n.getContentDescription().toString().trim();
+            for (String v : new String[]{t, d}) {
+                if (v.isEmpty() || v.length() > 12) continue;
+                String c = v.replaceAll("\\s+", " ");
+                if (AD_SKIP.matcher(c).matches()) return 100;
+                if (AD_CLOSE_WORDS.contains(c.toLowerCase(Locale.ROOT))) return 90;
+            }
+            String dl = d.toLowerCase(Locale.ROOT);
+            if (!dl.isEmpty() && dl.length() <= 10 && (dl.contains("关闭") || dl.contains("close") || dl.contains("跳过") || dl.contains("skip"))) return 80;
+            String id = n.getViewIdResourceName();
+            if (id != null) {
+                String il = id.substring(id.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+                if (il.contains("skip")) return 85;
+                if ((il.contains("close") && !il.contains("closed")) || il.contains("dismiss")) return 75;
+            }
+            if (t.isEmpty() && d.isEmpty() && n.getChildCount() == 0) {
+                int w = b.width(), h = b.height();
+                float ratio = (float) w / Math.max(1, h);
+                boolean small = w >= 16 && h >= 16 && w <= sw * 0.13f && h <= sw * 0.13f && ratio > 0.6f && ratio < 1.7f;
+                boolean topRight = b.centerX() > sw * 0.7f && b.centerY() < sh * 0.4f;
+                boolean bottomCenter = Math.abs(b.centerX() - sw / 2) < sw * 0.1f && b.centerY() > sh * 0.6f;
+                if (small && (topRight || bottomCenter)) {
+                    boolean clickable = n.isClickable();
+                    AccessibilityNodeInfo p = n.getParent();
+                    if (!clickable && p != null) {
+                        Rect pb = new Rect();
+                        p.getBoundsInScreen(pb);
+                        clickable = p.isClickable() && pb.width() <= sw * 0.25f;
+                    }
+                    if (clickable) return 50;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return 0;
+    }
+
+    /** 扫描所有窗口中的广告关闭/跳过候选，按分数降序（同分时面积小、越靠上越优先）。元素为 {node, score} */
+    private List<Object[]> scanAdCandidates(List<AccessibilityNodeInfo> roots, Rect screen) {
+        List<Object[]> out = new ArrayList<>();
+        for (AccessibilityNodeInfo r : roots) scanAd(r, screen, out, 0);
+        java.util.Collections.sort(out, (a, b) -> {
+            int c = Integer.compare((int) b[1], (int) a[1]);
+            if (c != 0) return c;
+            Rect ra = new Rect(), rb = new Rect();
+            ((AccessibilityNodeInfo) a[0]).getBoundsInScreen(ra);
+            ((AccessibilityNodeInfo) b[0]).getBoundsInScreen(rb);
+            return Integer.compare(ra.top, rb.top);
+        });
+        return out;
+    }
+
+    private void scanAd(AccessibilityNodeInfo n, Rect screen, List<Object[]> out, int depth) {
+        if (n == null || depth > MAX_DEPTH || out.size() > 20) return;
+        try {
+            if (!n.isVisibleToUser()) return;
+            Rect b = new Rect();
+            n.getBoundsInScreen(b);
+            if (Rect.intersects(b, screen)) {
+                int sc = adCloseScore(n, b, screen.width(), screen.height());
+                if (sc > 0) out.add(new Object[]{n, sc});
+            }
+            int c = n.getChildCount();
+            for (int i = 0; i < c; i++) scanAd(n.getChild(i), screen, out, depth + 1);
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 关闭广告 / 跳过开屏：在 timeoutMs 内轮询（每 200ms），找到分数最高的候选立即点击。
+     * minScore 默认 50（含右上角小 × 图标）；传 75 只点有明确文字/ID 的按钮。
+     */
+    public JSONObject closeAd(long timeoutMs, int minScore) {
+        long end = SystemClock.uptimeMillis() + Math.max(0, Math.min(15000, timeoutMs));
+        Point s = screenSize();
+        Rect screenRect = new Rect(0, 0, s.x, s.y);
+        do {
+            List<Object[]> cands = scanAdCandidates(getRoots(false), screenRect);
+            for (Object[] c : cands) {
+                int score = (int) c[1];
+                if (score < minScore) break;
+                AccessibilityNodeInfo target = (AccessibilityNodeInfo) c[0];
+                try {
+                    Rect tb = new Rect();
+                    target.getBoundsInScreen(tb);
+                    AccessibilityNodeInfo cur = target;
+                    boolean done = false;
+                    for (int hops = 0; cur != null && hops < 4 && !done; hops++) {
+                        if (hops > 0 && !parentOkForClick(cur, tb)) break;
+                        if (cur.isClickable() && cur.isEnabled()) done = cur.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                        if (!done) cur = cur.getParent();
+                    }
+                    if (!done) {
+                        if (!tb.intersect(screenRect)) continue;
+                        done = tapAt(tb.centerX(), tb.centerY()).optBoolean("success");
+                    }
+                    if (done) {
+                        JSONObject o = ok("已点击广告" + (score >= 100 ? "跳过" : "关闭") + "按钮");
+                        o.put("node", describeNode(target));
+                        o.put("score", score);
+                        return o;
+                    }
+                } catch (Throwable ignored) {}
+            }
+            if (SystemClock.uptimeMillis() >= end) break;
+            SystemClock.sleep(200);
+        } while (true);
+        return fail("当前屏幕没有识别到广告的关闭/跳过按钮（可 inspect 或 screenshot 后按坐标点击）");
     }
 
     // ======================= 手势 =======================

@@ -389,129 +389,171 @@ public class AppBridgeManager {
             }
 
             synchronized (PHONE_LOCK) {
-                switch (act) {
-                    case "inspect":
-                    case "read_screen":
-                    case "screen":
-                    case "dump":
-                        return service.inspectScreen(json);
-
-                    case "find":
-                        return service.find(PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target"));
-
-                    case "tap":
-                    case "click":
-                    case "long_press":
-                    case "long_click": {
-                        boolean longPress = act.startsWith("long");
-                        PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, "text");
-                        if (q.text == null) q.text = emptyToNull(json.optString("click_text", json.optString("target", "")));
-                        boolean hasXY = json.has("x") && json.has("y");
-                        if (!q.isEmpty()) {
-                            JSONObject r = service.clickNode(q, longPress);
-                            if (r.optBoolean("success") || !hasXY) return r;
-                        }
-                        if (!hasXY) {
-                            return err("缺少点击目标：传 target/text（按文字）、id、desc，或 x,y 坐标");
-                        }
-                        float x = (float) json.optDouble("x", -1);
-                        float y = (float) json.optDouble("y", -1);
-                        return longPress ? service.longClickAt(x, y, json.optInt("duration", 800)) : service.tapAt(x, y);
-                    }
-
-                    case "swipe": {
-                        String dir = json.optString("direction", "").toLowerCase(java.util.Locale.ROOT);
-                        int dur = json.optInt("duration", 300);
-                        if (!TextUtils.isEmpty(dir)) {
-                            return service.swipeDirection(dir, (float) json.optDouble("distance", 0.5), dur);
-                        }
-                        double fromX = json.optDouble("from_x", json.optDouble("x1", -1));
-                        double fromY = json.optDouble("from_y", json.optDouble("y1", -1));
-                        double toX = json.optDouble("to_x", json.optDouble("x2", -1));
-                        double toY = json.optDouble("to_y", json.optDouble("y2", -1));
-                        if (fromX < 0 || fromY < 0 || toX < 0 || toY < 0) {
-                            return err("滑动需要 direction（up/down/left/right）或 from_x/from_y/to_x/to_y 坐标");
-                        }
-                        return service.swipeGesture((float) fromX, (float) fromY, (float) toX, (float) toY, dur);
-                    }
-
-                    case "scroll": {
-                        PiMetAccessibilityService.Query within = PiMetAccessibilityService.Query.from(json, "target");
-                        return service.scroll(json.optString("direction", "down"), within);
-                    }
-
-                    case "input":
-                    case "type":
-                    case "set_text": {
-                        String text = json.optString("text", null);
-                        String target = json.optString("target", json.optString("target_id", json.optString("id", "")));
-                        JSONObject r = service.input(text, target, json.optBoolean("append", false));
-                        if (r.optBoolean("success") && json.optBoolean("submit", false)) {
-                            JSONObject e = service.pressEnter();
-                            r.put("submit", e);
-                        }
-                        return r;
-                    }
-
-                    case "key":
-                    case "press_key":
-                    case "global":
-                        return service.systemKey(json.optString("key", json.optString("press", "")));
-
-                    case "back":
-                    case "home":
-                    case "recents":
-                    case "notifications":
-                    case "quick_settings":
-                    case "lock":
-                        return service.systemKey(act);
-
-                    case "enter":
-                    case "submit":
-                        return service.pressEnter();
-
-                    case "launch":
-                    case "open_app":
-                    case "launch_app":
-                    case "open": {
-                        String app = json.optString("package", json.optString("app", json.optString("target", json.optString("text", ""))));
-                        return service.launchApp(app);
-                    }
-
-                    case "screenshot": {
-                        File dir = screenshotDir();
-                        String name = "screen-" + System.currentTimeMillis() + ".jpg";
-                        int maxSide = Math.max(480, Math.min(2400, json.optInt("max_side", 1280)));
-                        JSONObject r = service.screenshot(new File(dir, name), maxSide);
-                        if (r.optBoolean("success")) {
-                            r.put("path", "/root/.pi/agent/screenshots/" + name);
-                            r.put("message", "截图已保存到容器内 /root/.pi/agent/screenshots/" + name + "，可用 read 工具查看；坐标按 scale 换算回屏幕像素");
-                            pruneScreenshots(dir, 5);
-                        }
-                        return r;
-                    }
-
-                    case "wait_for":
-                    case "wait": {
-                        PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target");
-                        if (q.isEmpty()) {
-                            // 纯等待：wait(timeout) 等同于等待界面空闲
-                            return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 3000));
-                        }
-                        return service.waitFor(q, json.optBoolean("gone", false), json.optLong("timeout", 5000));
-                    }
-
-                    case "wait_idle":
-                        return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 5000));
-
-                    default:
-                        return err("未知自动化操作: " + subAction + "（可用 inspect / find / tap / long_press / swipe / scroll / input / key / launch / screenshot / wait_for / wait_idle / status）");
+                // 自动化执行期间桌宠悬浮窗临时隐身且不拦截触摸，避免挡住文字、截图和点击
+                boolean hidePet = !"status".equals(act);
+                if (hidePet) com.xm486.pimet.pet.PetOverlayService.beginAutomation();
+                try {
+                    JSONObject r = doPhoneAction(act, subAction, json, service);
+                    return observeAfter(act, json, service, r);
+                } finally {
+                    if (hidePet) com.xm486.pimet.pet.PetOverlayService.endAutomation();
                 }
             }
         } catch (Throwable t) {
             Log.e(TAG, "executePhoneControl error", t);
             return err("执行失败: " + t);
         }
+    }
+
+    /** 会改变界面的操作：执行后自动等待界面稳定并附带精简读屏，省掉一次单独的 inspect 往返 */
+    private static final java.util.Set<String> OBSERVE_ACTIONS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "tap", "click", "long_press", "long_click", "swipe", "scroll", "input", "type", "set_text",
+            "key", "press_key", "global", "back", "home", "recents", "notifications", "quick_settings",
+            "enter", "submit", "launch", "open_app", "launch_app", "open", "close_ad", "skip_ad", "dismiss_ad"));
+
+    private JSONObject observeAfter(String act, JSONObject json, PiMetAccessibilityService service, JSONObject r) {
+        try {
+            if (r == null || !r.optBoolean("success") || !OBSERVE_ACTIONS.contains(act)) return r;
+            if (!json.optBoolean("observe", true)) return r;
+            boolean heavy = act.startsWith("launch") || act.equals("open") || act.equals("open_app");
+            service.waitIdle(heavy ? 500 : 300, heavy ? 3000 : 1500);
+            JSONObject opts = new JSONObject();
+            opts.put("max_nodes", Math.max(20, Math.min(400, json.optInt("observe_nodes", 150))));
+            JSONObject screen = service.inspectScreen(opts);
+            if (screen.optBoolean("success")) {
+                screen.remove("success");
+                r.put("screen_after", screen);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "observeAfter failed", t);
+        }
+        return r;
+    }
+
+    private JSONObject doPhoneAction(String act, String subAction, JSONObject json, PiMetAccessibilityService service) throws Exception {
+            switch (act) {
+                case "inspect":
+                case "read_screen":
+                case "screen":
+                case "dump":
+                    return service.inspectScreen(json);
+
+                case "find":
+                    return service.find(PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target"));
+
+                case "tap":
+                case "click":
+                case "long_press":
+                case "long_click": {
+                    boolean longPress = act.startsWith("long");
+                    PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, "text");
+                    if (q.text == null) q.text = emptyToNull(json.optString("click_text", json.optString("target", "")));
+                    boolean hasXY = json.has("x") && json.has("y");
+                    if (!q.isEmpty()) {
+                        JSONObject r = service.clickNode(q, longPress);
+                        if (r.optBoolean("success") || !hasXY) return r;
+                    }
+                    if (!hasXY) {
+                        return err("缺少点击目标：传 target/text（按文字）、id、desc，或 x,y 坐标");
+                    }
+                    float x = (float) json.optDouble("x", -1);
+                    float y = (float) json.optDouble("y", -1);
+                    return longPress ? service.longClickAt(x, y, json.optInt("duration", 800)) : service.tapAt(x, y);
+                }
+
+                case "swipe": {
+                    String dir = json.optString("direction", "").toLowerCase(java.util.Locale.ROOT);
+                    int dur = json.optInt("duration", 300);
+                    if (!TextUtils.isEmpty(dir)) {
+                        return service.swipeDirection(dir, (float) json.optDouble("distance", 0.5), dur);
+                    }
+                    double fromX = json.optDouble("from_x", json.optDouble("x1", -1));
+                    double fromY = json.optDouble("from_y", json.optDouble("y1", -1));
+                    double toX = json.optDouble("to_x", json.optDouble("x2", -1));
+                    double toY = json.optDouble("to_y", json.optDouble("y2", -1));
+                    if (fromX < 0 || fromY < 0 || toX < 0 || toY < 0) {
+                        return err("滑动需要 direction（up/down/left/right）或 from_x/from_y/to_x/to_y 坐标");
+                    }
+                    return service.swipeGesture((float) fromX, (float) fromY, (float) toX, (float) toY, dur);
+                }
+
+                case "scroll": {
+                    PiMetAccessibilityService.Query within = PiMetAccessibilityService.Query.from(json, "target");
+                    return service.scroll(json.optString("direction", "down"), within);
+                }
+
+                case "input":
+                case "type":
+                case "set_text": {
+                    String text = json.optString("text", null);
+                    String target = json.optString("target", json.optString("target_id", json.optString("id", "")));
+                    JSONObject r = service.input(text, target, json.optBoolean("append", false));
+                    if (r.optBoolean("success") && json.optBoolean("submit", false)) {
+                        JSONObject e = service.pressEnter();
+                        r.put("submit", e);
+                    }
+                    return r;
+                }
+
+                case "key":
+                case "press_key":
+                case "global":
+                    return service.systemKey(json.optString("key", json.optString("press", "")));
+
+                case "back":
+                case "home":
+                case "recents":
+                case "notifications":
+                case "quick_settings":
+                case "lock":
+                    return service.systemKey(act);
+
+                case "enter":
+                case "submit":
+                    return service.pressEnter();
+
+                case "launch":
+                case "open_app":
+                case "launch_app":
+                case "open": {
+                    String app = json.optString("package", json.optString("app", json.optString("target", json.optString("text", ""))));
+                    return service.launchApp(app);
+                }
+
+                case "screenshot": {
+                    File dir = screenshotDir();
+                    String name = "screen-" + System.currentTimeMillis() + ".jpg";
+                    int maxSide = Math.max(480, Math.min(2400, json.optInt("max_side", 1280)));
+                    JSONObject r = service.screenshot(new File(dir, name), maxSide);
+                    if (r.optBoolean("success")) {
+                        r.put("path", "/root/.pi/agent/screenshots/" + name);
+                        r.put("message", "截图已保存到容器内 /root/.pi/agent/screenshots/" + name + "，可用 read 工具查看；坐标按 scale 换算回屏幕像素");
+                        pruneScreenshots(dir, 5);
+                    }
+                    return r;
+                }
+
+                case "wait_for":
+                case "wait": {
+                    PiMetAccessibilityService.Query q = PiMetAccessibilityService.Query.from(json, json.has("text") ? "text" : "target");
+                    if (q.isEmpty()) {
+                        // 纯等待：wait(timeout) 等同于等待界面空闲
+                        return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 3000));
+                    }
+                    return service.waitFor(q, json.optBoolean("gone", false), json.optLong("timeout", 5000));
+                }
+
+                case "close_ad":
+                case "skip_ad":
+                case "dismiss_ad":
+                    return service.closeAd(json.optLong("timeout", 0), json.optBoolean("strict", false) ? 75 : 50);
+
+                case "wait_idle":
+                    return service.waitIdle(json.optLong("idle", 500), json.optLong("timeout", 5000));
+
+                default:
+                    return err("未知自动化操作: " + subAction + "（可用 inspect / find / close_ad / tap / long_press / swipe / scroll / input / key / launch / screenshot / wait_for / wait_idle / status）");
+            }
     }
 
     private static String emptyToNull(String s) {
