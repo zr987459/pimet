@@ -473,12 +473,21 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
 
     /** 气泡尺寸与字号自适应动态调整 */
+    private int lastBubbleW = -1, lastBubbleTs = -1, lastBubbleScreenW = -1, lastBubbleMaxW = -1;
+
     public void applyBubbleDimensions() {
         if (bubbleView == null) return;
         int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
         int ts = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
         bw = Math.max(100, Math.min(320, bw));
         ts = Math.max(9, Math.min(18, ts));
+        int sw = getResources().getDisplayMetrics().widthPixels;
+        // 尺寸没变时跳过（打字机每帧都会走到这里，重复 setTextSize/setPadding 会触发整窗重新布局）
+        if (bw == lastBubbleW && ts == lastBubbleTs && sw == lastBubbleScreenW
+                && bubbleView.getMaxWidth() == lastBubbleMaxW) return;
+        lastBubbleW = bw;
+        lastBubbleTs = ts;
+        lastBubbleScreenW = sw;
         bubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, ts);
         int padH = Math.round(ts * 1.15f);
         int padV = Math.round(ts * 0.75f);
@@ -486,6 +495,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV) + bubbleView.tailHeight());
         int maxW = Math.min(dp(bw), (int)(getResources().getDisplayMetrics().widthPixels * 0.75f));
         bubbleView.setMaxWidth(maxW);
+        lastBubbleMaxW = maxW;
     }
 
     public void applyBubbleWidth(int widthDp) {
@@ -508,6 +518,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         applyBubbleDimensions();
         bubbleView.setVisibility(View.GONE);
         bubbleView.setOnClickListener(v -> {
+            // 点击进入控制台：立即停止播报并收起气泡
+            PetTypewriter.cancelActive();
+            cancelBubbleHide();
+            bubbleView.animate().cancel();
+            bubbleHideRunnable.run();
             openTargetConsole();
         });
 
@@ -872,6 +887,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int bubbleH = bubbleView.getMeasuredHeight();
         int shift = bubbleH + dp(2);
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
+        // 高度没变（同一行内继续打字）就不重排、不更新悬浮窗——以前每个字都触发一次 updateViewLayout，长文明显卡顿
+        if (petLp.topMargin == shift) return;
         petLp.topMargin = shift;
         petView.setLayoutParams(petLp);
         FrameLayout.LayoutParams cardLp = (FrameLayout.LayoutParams) statusCard.getLayoutParams();
@@ -896,6 +913,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void showStreamingBubble(String text) {
         TextView b = bubbleView;
         if (b == null) return;
+        PetTypewriter.cancelActive(); // 流式内容到来时停止旧的打字播报，避免两者抢同一个气泡
         if (!b.isShown()) {
             b.setMaxLines(10);
             b.setEllipsize(android.text.TextUtils.TruncateAt.END);

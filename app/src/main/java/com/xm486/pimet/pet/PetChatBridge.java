@@ -763,7 +763,9 @@ public class PetChatBridge {
         return note.length() > 0 ? note.trim() : null;
     }
 
-    /** 按段落 + ~60 字自然断句把长文拆成气泡分段；短文本原样返回单段 */
+    /** 按段落 + ~120 字自然断句把长文拆成气泡分段（相邻短段合并）；短文本原样返回单段 */
+    private static final int SEG_MAX = 120;
+
     private static List<String> segment(String text) {
         List<String> out = new ArrayList<>();
         String t = text == null ? "" : text.trim();
@@ -774,17 +776,17 @@ public class PetChatBridge {
         for (String para : t.split("\n+")) {
             para = para.trim();
             if (para.isEmpty()) continue;
-            if (para.length() <= 60) {
+            if (para.length() <= SEG_MAX) {
                 out.add(para);
                 continue;
             }
             int start = 0;
             while (start < para.length()) {
-                int end = Math.min(start + 60, para.length());
+                int end = Math.min(start + SEG_MAX, para.length());
                 if (end < para.length()) {
                     // 尽量在标点/空格处断开，避免把词切断
                     int cut = -1;
-                    for (int i = end; i > start + 20; i--) {
+                    for (int i = end; i > start + 40; i--) {
                         char c = para.charAt(i);
                         if (c == ' ' || c == ',' || c == '.' || c == '!' || c == '?'
                                 || c == '，' || c == '。' || c == '！' || c == '？'
@@ -799,6 +801,19 @@ public class PetChatBridge {
                 start = end;
             }
         }
+        // 合并相邻短段：一屏气泡能放下就一起显示，减少「打完一段→停顿→下一段」的等待
+        List<String> merged = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String piece : out) {
+            if (cur.length() > 0 && cur.length() + 1 + piece.length() > SEG_MAX) {
+                merged.add(cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(piece);
+        }
+        if (cur.length() > 0) merged.add(cur.toString());
+        if (!merged.isEmpty()) out = merged;
         return out;
     }
 
