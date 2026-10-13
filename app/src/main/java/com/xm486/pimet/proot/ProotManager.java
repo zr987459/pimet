@@ -194,6 +194,36 @@ public final class ProotManager {
     }
 
     /**
+     * 兼容修复：上游 @earendil-works/pi-codemode 1.2.0 (2026-10-13) 移除了 MCP_TYPESCRIPT_PREAMBLE 导出，
+     * 而 pi-web 依赖的 pi-coding-agent 1.1.x 仍在引用，导致 Next.js 服务端报
+     * "does not provide an export named 'MCP_TYPESCRIPT_PREAMBLE'"。
+     * 仅当 pi-web 内的 pi-coding-agent 仍引用该导出、且 pi-codemode 缺失该导出时，才把 pi-web 内的 pi-codemode 降回 1.1.0。
+     * 返回值：0 无需修复；10 已修复；其他为失败。
+     */
+    public static int fixPiCodemodeCompat(Context context, String registry) {
+        String reg = (registry == null || registry.isEmpty()) ? "https://registry.npmmirror.com/" : registry;
+        if (!reg.endsWith("/")) reg = reg + "/";
+        String script = "REG=\"" + reg + "\"\n" +
+                "P=\"\"; for b in /usr/local/lib/node_modules/@agegr/pi-web /usr/lib/node_modules/@agegr/pi-web; do [ -d \"$b\" ] && P=\"$P $b\"; done\n" +
+                "[ -z \"$P\" ] && exit 0\n" +
+                "CA=$(find $P -type d -path '*node_modules/@earendil-works/pi-coding-agent' 2>/dev/null)\n" +
+                "[ -z \"$CA\" ] && exit 0\n" +
+                "grep -rqs --include=*.js MCP_TYPESCRIPT_PREAMBLE $CA || exit 0\n" +
+                "NEED=\"\"\n" +
+                "for d in $(find $P -type d -path '*node_modules/@earendil-works/pi-codemode' 2>/dev/null); do\n" +
+                "  grep -qs MCP_TYPESCRIPT_PREAMBLE \"$d/dist/declarations.js\" || NEED=\"$NEED $d\"\n" +
+                "done\n" +
+                "[ -z \"$NEED\" ] && exit 0\n" +
+                "cd /tmp && rm -f earendil-works-pi-codemode-1.1.0.tgz\n" +
+                "npm pack @earendil-works/pi-codemode@1.1.0 --registry=\"$REG\" >/dev/null 2>&1 || exit 2\n" +
+                "for d in $NEED; do\n" +
+                "  rm -rf \"$d\" && mkdir -p \"$d\" && tar xzf /tmp/earendil-works-pi-codemode-1.1.0.tgz -C \"$d\" --strip-components=1 || exit 3\n" +
+                "done\n" +
+                "exit 10\n";
+        return executeCommandSync(context, script);
+    }
+
+    /**
      * 针对 pi-web Service Worker 离线机制的深层防御：
      * 1. 延长 sw.js 内 NAVIGATION_TIMEOUT_MS（从苛刻的 2.5s 延长至 15s），适配手机移动端冷启动
      * 2. 在 offline.html 注入静默自动重连探活代码，一旦后端拉起立即自动刷新，杜绝用户反复手动点 Try again

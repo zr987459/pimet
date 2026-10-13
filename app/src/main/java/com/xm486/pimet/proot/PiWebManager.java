@@ -162,6 +162,18 @@ public final class PiWebManager {
                     }
                 }
 
+                // 上游依赖兼容修复 (pi-codemode 1.2.0 移除 MCP_TYPESCRIPT_PREAMBLE)
+                int compat = ProotManager.fixPiCodemodeCompat(context, registry);
+                if (compat == 10) {
+                    mainHandler.post(() -> {
+                        if (listener != null) listener.onLog("\u001B[32m✔ 已修复 pi-codemode 版本不兼容 (降回 1.1.0)\u001B[0m\n");
+                    });
+                } else if (compat != 0) {
+                    mainHandler.post(() -> {
+                        if (listener != null) listener.onLog("\u001B[33m⚠ pi-codemode 兼容修复失败 (code " + compat + ")，请检查网络后重试\u001B[0m\n");
+                    });
+                }
+
                 // 防御 Service Worker 离线误判与过早超时
                 ProotManager.optimizePiWebOffline(context);
 
