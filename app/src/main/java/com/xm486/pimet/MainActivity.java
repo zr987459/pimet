@@ -2994,6 +2994,9 @@ public class MainActivity extends AppCompatActivity {
                         null
                     );
 
+                    // 自愈：页面能滚动/缩放却点不动 = 前端 JS 没有激活（常见于 Pi-Web 升级后 Service Worker 仍提供旧脚本）
+                    schedulePiWebHydrationCheck(view, url);
+
                     // 深度自愈：检测页面是否由于 Node.js 启动延迟被 Service Worker 错误截获为 offline.html
                     view.evaluateJavascript(
                         "(function() { " +
@@ -3011,6 +3014,21 @@ public class MainActivity extends AppCompatActivity {
         });
 
         piWebWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                try {
+                    if (cm != null && cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                        String m = cm.message() == null ? "" : cm.message();
+                        if (m.contains("ChunkLoadError") || m.contains("Loading chunk")
+                                || m.contains("Failed to fetch dynamically imported module")
+                                || m.contains("Failed to load chunk")) {
+                            healPiWebPage("前端脚本加载失败");
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                return super.onConsoleMessage(cm);
+            }
+
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 if (newProgress < 100) {
@@ -3616,6 +3634,47 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }).start();
+    }
+
+    private long lastPiWebHealAt = 0;
+
+    private static final String PIWEB_HYDRATION_JS = "(function(){try{" +
+            "function hasReact(n){if(!n)return false;for(var k in n){if(k.indexOf('__react')===0)return true;}return false;}" +
+            "if(hasReact(document)||hasReact(document.documentElement)||hasReact(document.body))return 'ok';" +
+            "var all=document.querySelectorAll('button,a,input,textarea,[role=button]');" +
+            "for(var j=0;j<Math.min(all.length,40);j++){if(hasReact(all[j]))return 'ok';}" +
+            "return all.length?'dead':'empty';}catch(e){return 'err';}})()";
+
+    /** 页面加载完 6 秒后检查前端是否已激活（React 已挂载）；未激活则清缓存重载 */
+    private void schedulePiWebHydrationCheck(WebView view, String url) {
+        if (view == null || url == null) return;
+        view.postDelayed(() -> {
+            String cur = view.getUrl();
+            if (cur == null || !cur.equals(url)) return;
+            view.evaluateJavascript(PIWEB_HYDRATION_JS, r -> {
+                if ("\"dead\"".equals(r)) healPiWebPage("页面按钮未激活");
+            });
+        }, 6000);
+    }
+
+    /** 清除 WebView 缓存、注销 Service Worker 与 Cache Storage 后重新加载（3 分钟内最多一次，防止循环） */
+    private void healPiWebPage(String reason) {
+        runOnUiThread(() -> {
+            long now = System.currentTimeMillis();
+            if (now - lastPiWebHealAt < 180000L || piWebWebView == null) return;
+            lastPiWebHealAt = now;
+            Log.w("PiMet", "healPiWebPage: " + reason);
+            try {
+                piWebWebView.clearCache(true);
+            } catch (Throwable ignored) {}
+            Toast.makeText(MainActivity.this, "检测到网页" + reason + "，已清理缓存并重新加载", Toast.LENGTH_SHORT).show();
+            piWebWebView.evaluateJavascript("(function(){if(window.__pimetHealing)return;window.__pimetHealing=1;var p=[];" +
+                    "try{if(navigator.serviceWorker)p.push(navigator.serviceWorker.getRegistrations().then(function(rs){" +
+                    "return Promise.all(rs.map(function(r){return r.unregister();}));}));" +
+                    "if(window.caches)p.push(caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}));" +
+                    "}catch(e){}var done=false;function go(){if(done)return;done=true;location.reload();}" +
+                    "Promise.all(p).then(go,go);setTimeout(go,2500);})()", null);
+        });
     }
 
     private void handlePiWebOfflineDetected() {

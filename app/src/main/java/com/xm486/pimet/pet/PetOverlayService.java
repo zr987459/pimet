@@ -285,11 +285,23 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 boolean enabled = PetRegistry.getBooleanPref(PetOverlayService.this,
                         PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
                 if (enabled && !isPetHidden && overlayRoot != null && !cardVisible) {
-                    String msg = PetMemoryManager.generateProactiveMessage(PetOverlayService.this);
-                    showProactiveBubble(msg);
-                    if (petView != null) {
-                        petView.playOneShot("waving");
-                    }
+                    // 生成文案要探测服务端口（网络请求），放到后台线程，避免主线程网络异常导致误报「未启动」
+                    final OperitState.Snapshot snapNow = currentSnapshotForTarget();
+                    new Thread(() -> {
+                        String msg;
+                        try {
+                            msg = PetMemoryManager.generateProactiveMessage(PetOverlayService.this, currentTarget, snapNow);
+                        } catch (Throwable t) {
+                            return;
+                        }
+                        final String m = msg;
+                        proactiveHandler.post(() -> {
+                            if (isPetHidden || overlayRoot == null || cardVisible) return;
+                            if (chatBridge != null && chatBridge.isChatting()) return;
+                            showProactiveBubble(m);
+                            if (petView != null) petView.playOneShot("waving");
+                        });
+                    }, "pet-proactive").start();
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "proactiveRunnable error", t);
@@ -1581,6 +1593,15 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         Log.w(TAG, "monitor error: " + message);
     }
 
+    /** 当前监控目标的最新快照（可能为 null） */
+    private OperitState.Snapshot currentSnapshotForTarget() {
+        if (PetRegistry.TARGET_RIKKA.equals(currentTarget)) return rikkaSnap;
+        if (PetRegistry.TARGET_CLAWBENCH.equals(currentTarget)) return clawbenchSnap;
+        if (PetRegistry.TARGET_PIWEB.equals(currentTarget)) return piwebSnap;
+        if (PetRegistry.TARGET_OPERIT.equals(currentTarget)) return operitSnap;
+        return null;
+    }
+
     /** 使用当前目标 agent 的快照刷新桌宠 */
     private void recomputeState() {
         OperitState.Snapshot snap;
@@ -1618,12 +1639,27 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     private void applyPetState(OperitState.Snapshot snap) {
         if (petView == null) return;
 
-        // 状态变化：准确反映当前状态过渡（简练准确，杜绝跑任务时虚假提前宣告完成）
-        if (lastState != null && lastState != snap.state
+        // 状态变化：只播报真实发生的转折（完成/出错/中止/断连来自监控器的明确事件），
+        // 连接/重连时同步到的「空闲」不再当成「完成」
+        String tr = snap.transition;
+        if ("error".equals(tr)) {
+            String why = snap.errorMessage != null ? snap.errorMessage.replace('\n', ' ').trim() : "";
+            if (why.length() > 60) why = why.substring(0, 60) + "…";
+            showFailureBubble("出错了：" + (why.isEmpty() ? "任务异常" : why) + "\n点击气泡查看详情");
+        } else if ("completed".equals(tr)) {
+            if (chatBridge == null || !chatBridge.isChatting()) showCompletionBubble();
+        } else if ("aborted".equals(tr)) {
+            showStateBubbleText("⏹ 任务已中止");
+        } else if ("disconnected".equals(tr)) {
+            showFailureBubble("连不上 " + (snap.agentName != null ? snap.agentName : "服务") + " 了\n点击气泡打开看看");
+        } else if (lastState != null && lastState != snap.state
                 && snap.state != OperitState.UNKNOWN) {
-            showStateBubble(snap);
-            if (snap.state == OperitState.ERROR && lastState != OperitState.ERROR) {
-                showFailureBubble(null);
+            if (snap.state == OperitState.ERROR) {
+                if (lastState != OperitState.ERROR) showFailureBubble(null);
+            } else if (snap.state == OperitState.IDLE && PetRegistry.TARGET_PIWEB.equals(currentTarget)) {
+                // Pi-Web 的完成由 agent_end 明确给出；其余回落到空闲（重连/切会话）不播报
+            } else {
+                showStateBubble(snap);
             }
         }
         lastState = snap.state;
@@ -1636,6 +1672,18 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         } else {
             updateNotification("桌宠已隐藏（后台监控中 · 点击重新弹出）");
         }
+    }
+
+    private void showStateBubbleText(String text) {
+        if (bubbleView == null) return;
+        if (chatBridge != null && chatBridge.isChatting()) return;
+        bubbleHandler.removeCallbacks(bubbleHideRunnable);
+        bubbleView.setText(com.xm486.pimet.ui.StatusCardView.clean(text));
+        layoutChatBubble();
+        bubbleView.setVisibility(View.VISIBLE);
+        bubbleView.setAlpha(0f);
+        bubbleView.animate().alpha(1f).setDuration(180).start();
+        scheduleBubbleHide(2800);
     }
 
     /** 状态变化气泡：准确反映当前状态过渡，简明扼要，2.8s 自动优雅淡出 */

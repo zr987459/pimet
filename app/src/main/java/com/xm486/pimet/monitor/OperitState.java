@@ -63,6 +63,27 @@ public enum OperitState {
         public List<String> recentEvents; // 最近事件（用于状态卡）
         /** ClawBench 专用：当前 running 会话 id 列表（WS 订阅用） */
         public List<String> sessionIds;
+        /** 一次性状态转折（只出现在触发它的那次快照里）：completed / error / aborted / disconnected；null 表示普通状态刷新 */
+        public String transition;
+        /** 出错原因（transition=error 时） */
+        public String errorMessage;
+
+        /** 浅拷贝（状态卡与桌宠共用；转折字段不复制） */
+        public Snapshot copy() {
+            Snapshot c = new Snapshot();
+            c.state = state;
+            c.agentName = agentName;
+            c.model = model;
+            c.provider = provider;
+            c.inputTokens = inputTokens;
+            c.outputTokens = outputTokens;
+            c.lastTool = lastTool;
+            c.lastActiveTime = lastActiveTime;
+            c.operitRunning = operitRunning;
+            c.recentEvents = recentEvents != null ? new java.util.ArrayList<>(recentEvents) : new java.util.ArrayList<>();
+            c.sessionIds = sessionIds;
+            return c;
+        }
 
         public Snapshot() {
             state = OperitState.UNKNOWN;
