@@ -242,6 +242,12 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
         } catch (Throwable ignored) {}
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        try {
+            android.content.IntentFilter sf = new android.content.IntentFilter();
+            sf.addAction(Intent.ACTION_SCREEN_OFF);
+            sf.addAction(Intent.ACTION_SCREEN_ON);
+            registerReceiver(screenReceiver, sf);
+        } catch (Throwable ignored) {}
         createNotificationChannel();
         // Android 14+：startForeground 必须传入与 Manifest 一致的类型，否则崩溃
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -284,7 +290,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             try {
                 boolean enabled = PetRegistry.getBooleanPref(PetOverlayService.this,
                         PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
-                if (enabled && !isPetHidden && overlayRoot != null && !cardVisible) {
+                if (enabled && !screenOff && !isPetHidden && overlayRoot != null && !cardVisible) {
                     // 生成文案要探测服务端口（网络请求），放到后台线程，避免主线程网络异常导致误报「未启动」
                     final OperitState.Snapshot snapNow = currentSnapshotForTarget();
                     new Thread(() -> {
@@ -1456,16 +1462,51 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return currentTarget != null ? currentTarget : PetRegistry.TARGET_OPERIT;
     }
 
-    /** 确保所有后台监控源并发常驻运行 */
+    /** 屏幕熄灭时暂停监控与动画，亮屏恢复（省电） */
+    private volatile boolean screenOff = false;
+
+    /**
+     * 只运行当前监控目标的监控器，其余停掉（以前四个监控器同时常驻，RikkaHub 每秒、Operit 每 2 秒轮询，
+     * 后台持续占用 CPU/网络和电量）。切换目标时新监控器约 1 秒内拿到首个快照。
+     */
     public synchronized void ensureAllMonitorsRunning() {
-        startOperitMonitor();
-        startPiWebMonitor();
-        startClawBenchMonitor();
-        startRikkaMonitor();
+        String t = currentTarget != null ? currentTarget : PetRegistry.TARGET_OPERIT;
+        if (screenOff) {
+            stopMonitorsExcept(null);
+            return;
+        }
+        stopMonitorsExcept(t);
+        if (PetRegistry.TARGET_OPERIT.equals(t)) startOperitMonitor();
+        else if (PetRegistry.TARGET_PIWEB.equals(t)) startPiWebMonitor();
+        else if (PetRegistry.TARGET_CLAWBENCH.equals(t)) startClawBenchMonitor();
+        else if (PetRegistry.TARGET_RIKKA.equals(t)) startRikkaMonitor();
     }
+
+    private synchronized void stopMonitorsExcept(String keep) {
+        if (!PetRegistry.TARGET_OPERIT.equals(keep) && monitor != null) { monitor.stop(); monitor = null; }
+        if (!PetRegistry.TARGET_PIWEB.equals(keep) && piwebMonitor != null) { piwebMonitor.stop(); piwebMonitor = null; }
+        if (!PetRegistry.TARGET_CLAWBENCH.equals(keep) && clawbenchMonitor != null) { clawbenchMonitor.stop(); clawbenchMonitor = null; }
+        if (!PetRegistry.TARGET_RIKKA.equals(keep) && rikkaMonitor != null) { rikkaMonitor.stop(); rikkaMonitor = null; }
+    }
+
+    private final android.content.BroadcastReceiver screenReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent intent) {
+            boolean off = Intent.ACTION_SCREEN_OFF.equals(intent.getAction());
+            if (off == screenOff) return;
+            screenOff = off;
+            ensureAllMonitorsRunning();
+            if (petView != null) {
+                if (off) petView.stopTicker();
+                else if (!isPetHidden) petView.startTicker();
+            }
+            if (!off) recomputeState();
+        }
+    };
 
     /** 重启某个特定后台监控器（修改端口或配置时使用） */
     public synchronized void restartMonitor(String target) {
+        if (target == null || !target.equals(currentTarget)) return; // 非当前目标不运行监控器，下次切换时会按新配置启动
         if (PetRegistry.TARGET_OPERIT.equals(target)) {
             if (monitor != null) { monitor.stop(); monitor = null; }
             startOperitMonitor();
@@ -1834,6 +1875,9 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     @Override
     public void onDestroy() {
+        try {
+            unregisterReceiver(screenReceiver);
+        } catch (Throwable ignored) {}
         stopProactiveChatter();
         savePosition();
         PetRegistry.getPrefs(this).unregisterOnSharedPreferenceChangeListener(this);

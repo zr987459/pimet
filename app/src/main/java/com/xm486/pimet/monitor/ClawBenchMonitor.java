@@ -167,7 +167,8 @@ public class ClawBenchMonitor {
             Log.e(TAG, "tick failed", t);
         }
         if (running) {
-            handler.postDelayed(this::tick, POLL_INTERVAL_MS);
+            // 连不上时退避到 6 秒，在线时保持 3 秒
+            handler.postDelayed(this::tick, goneCount > 0 ? 6000L : POLL_INTERVAL_MS);
         }
     }
 
