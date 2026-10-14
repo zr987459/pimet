@@ -1102,6 +1102,15 @@ public final class ProotManager {
         argv.add(workDir != null ? workDir : "/root");
 
         // 最终要执行的 guest 命令
+        // LD_LIBRARY_PATH 只给宿主侧 proot 自己加载 libtalloc 用；不能漏进容器，
+        // 否则容器里每启动一个程序，动态链接器都先去这些安卓目录逐个找库（每次查找都被 proot 拦截翻译），
+        // bash 里跑 ls/git/grep 这类短命令会明显变慢，还可能误加载安卓的库。
+        File guestEnv = new File(rootfsDir, "usr/bin/env");
+        if (guestEnv.exists()) {
+            argv.add("/usr/bin/env");
+            argv.add("-u");
+            argv.add("LD_LIBRARY_PATH");
+        }
         if (guestCmd != null && !guestCmd.isEmpty()) {
             argv.addAll(guestCmd);
         } else {
