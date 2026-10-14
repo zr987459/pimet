@@ -386,6 +386,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView settingsStorageTv;
     private View btnClearNpmCache;
     private View btnResetContainer;
+    private com.xm486.pimet.ui.StorageCleanPanel storageCleanPanel;
     private TextView btnBatteryIgnoreOpt;
     private View btnAutoStartSettings;
     private TextView btnPrivilegeRoot;
@@ -469,8 +470,12 @@ public class MainActivity extends AppCompatActivity {
         // 初始化并启动 App 与 AI 宿主控制桥 (AppBridgeManager)
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
         com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).attachActivity(this);
-        PluginManager.ensureAndroidBridgeExtension(this);
-        com.xm486.pimet.pet.PetMemoryManager.ensurePetSubagentInstalled(this);
+        // 写容器内扩展/代理文件属于磁盘 I/O，放到后台线程，避免拖慢首屏
+        final android.content.Context appCtx = getApplicationContext();
+        new Thread(() -> {
+            PluginManager.ensureAndroidBridgeExtension(appCtx);
+            com.xm486.pimet.pet.PetMemoryManager.ensurePetSubagentInstalled(appCtx);
+        }, "pimet-ensure-ext").start();
     }
 
     private String getPiWebUrl() {
@@ -693,6 +698,13 @@ public class MainActivity extends AppCompatActivity {
         settingsStorageTv = findViewById(R.id.settingsStorageTv);
         btnClearNpmCache = findViewById(R.id.btnClearNpmCache);
         btnResetContainer = findViewById(R.id.btnResetContainer);
+        View btnStorageScan = findViewById(R.id.btnStorageScan);
+        LinearLayout storageScanContainer = findViewById(R.id.storageScanContainer);
+        if (btnStorageScan != null && storageScanContainer != null) {
+            storageCleanPanel = new com.xm486.pimet.ui.StorageCleanPanel(this, storageScanContainer,
+                    piWebWebView, this::refreshStorageSize);
+            btnStorageScan.setOnClickListener(v -> storageCleanPanel.scan());
+        }
         btnBatteryIgnoreOpt = findViewById(R.id.btnBatteryIgnoreOpt);
         btnAutoStartSettings = findViewById(R.id.btnAutoStartSettings);
         btnPrivilegeRoot = findViewById(R.id.btnPrivilegeRoot);
@@ -719,6 +731,23 @@ public class MainActivity extends AppCompatActivity {
         tabSettings.setOnClickListener(v -> switchTab(3));
     }
 
+    /** 底栏线性图标与标签同色（选中=强调色，未选中=次要文字色），颜色全部来自当前主题调色板。 */
+    private void syncTabIconColors() {
+        int[][] pairs = {
+                {R.id.tabLaunchIcon, R.id.tabLaunchText},
+                {R.id.tabPiWebIcon, R.id.tabPiWebText},
+                {R.id.tabPluginsIcon, R.id.tabPluginsText},
+                {R.id.tabSettingsIcon, R.id.tabSettingsText},
+        };
+        for (int[] pair : pairs) {
+            View icon = findViewById(pair[0]);
+            View label = findViewById(pair[1]);
+            if (icon instanceof TextView && label instanceof TextView) {
+                ((TextView) icon).setTextColor(((TextView) label).getCurrentTextColor());
+            }
+        }
+    }
+
     public void switchTab(int index) {
         viewLaunch.setVisibility(index == 0 ? View.VISIBLE : View.GONE);
         viewPiWeb.setVisibility(index == 1 ? View.VISIBLE : View.GONE);
@@ -735,6 +764,7 @@ public class MainActivity extends AppCompatActivity {
         tabPiWebText.setTextColor(index == 1 ? activeColor : normalColor);
         if (tabPluginsText != null) tabPluginsText.setTextColor(index == 2 ? activeColor : normalColor);
         tabSettingsText.setTextColor(index == 3 ? activeColor : normalColor);
+        syncTabIconColors();
 
         if (index == 0) {
             checkServiceStatus();
@@ -894,7 +924,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout item = new LinearLayout(this);
             item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
-            item.setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6));
+            item.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
             item.setBackground(selected ? ThemeManager.createPrimaryButtonDrawable(this, palette, 8f) : ThemeManager.createSunkenDrawable(this, palette, 8f));
 
             ImageView iv = new ImageView(this);
@@ -916,7 +946,7 @@ public class MainActivity extends AppCompatActivity {
             tv.setMaxLines(1);
             tv.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(thumbSize + dpToPx(8), LinearLayout.LayoutParams.WRAP_CONTENT);
-            tvLp.topMargin = dpToPx(3);
+            tvLp.topMargin = dpToPx(4);
             item.addView(tv, tvLp);
 
             item.setOnClickListener(v -> {
@@ -945,7 +975,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void confirmDeletePet(PetRegistry.PetInfo pet) {
         String typeDesc = pet.external ? "外部导入" : "内置角色";
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("删除桌宠形象")
                 .setMessage("确定要删除「" + pet.displayName + "」（" + typeDesc + "）吗？\n\n"
                         + (pet.external ? "本地导入的角色素材将被彻底清除。" : "内置角色删除后可在角色商城中恢复。"))
@@ -973,7 +1003,7 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < pets.size(); i++) {
             names[i] = pets.get(i).displayName + " (" + pets.get(i).dir + ")";
         }
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🐾 选择切换桌宠伙伴")
                 .setItems(names, (dialog, which) -> {
                     PetRegistry.PetInfo selected = pets.get(which);
@@ -1057,14 +1087,24 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private OperitState mainLastPetState = null;
+
+    /**
+     * 主界面自己的 Pi-Web 状态监听：只在界面可见时运行（onPause 停止），重复进入不再重建连接；
+     * 只播报真实转折（开始思考/调用工具/完成/出错），不再把每个 SSE 事件或重连时的「空闲」当成「任务完成」。
+     */
     public void initPetMonitor() {
         int port = PiMetConfig.getWebPort(this);
+        if (piWebMonitor != null && piWebMonitor.isRunning() && piWebMonitorPort == port) return;
         if (piWebMonitor != null) {
             piWebMonitor.stop();
         }
+        piWebMonitorPort = port;
         piWebMonitor = new PiWebMonitor(this, port, new PiWebMonitor.Listener() {
             @Override
             public void onSnapshot(OperitState.Snapshot snapshot) {
+                OperitState prev = mainLastPetState;
+                mainLastPetState = snapshot.state;
                 lastPetSnapshot = snapshot;
                 updateFloatingPetChatCardStatus();
                 if (!PetRegistry.isPetEnabled(MainActivity.this) && !isFullscreen) {
@@ -1073,6 +1113,22 @@ public class MainActivity extends AppCompatActivity {
                 if (floatingPetView != null) {
                     floatingPetView.updateState(snapshot.state);
                 }
+                String tr = snapshot.transition;
+                if ("error".equals(tr)) {
+                    if (floatingPetView != null) floatingPetView.playOneShot("failed");
+                    showPetBubble("😱 任务出错啦: " + (TextUtils.isEmpty(snapshot.errorMessage) ? "未知错误" : snapshot.errorMessage));
+                    return;
+                }
+                if ("completed".equals(tr)) {
+                    if (floatingPetView != null) floatingPetView.playOneShot("jumping");
+                    showPetBubble("🎉 任务完成！随时待命");
+                    return;
+                }
+                if ("aborted".equals(tr)) {
+                    showPetBubble("⏹ 任务已中止");
+                    return;
+                }
+                if (prev == snapshot.state) return; // 同一状态的后续事件不重复播报
                 switch (snapshot.state) {
                     case THINKING:
                         showPetBubble("🤔 Agent 正在深度思考中...");
@@ -1084,15 +1140,6 @@ public class MainActivity extends AppCompatActivity {
                     case RESPONDING:
                         showPetBubble("💬 Agent 正在组织回复...");
                         break;
-                    case IDLE:
-                        if (floatingPetView != null) {
-                            floatingPetView.playOneShot("jumping");
-                        }
-                        showPetBubble("🎉 任务完成！随时待命");
-                        break;
-                    case ERROR:
-                        showPetBubble("😱 任务出错啦: " + snapshot.lastTool);
-                        break;
                     default:
                         break;
                 }
@@ -1102,6 +1149,21 @@ public class MainActivity extends AppCompatActivity {
             public void onError(String message) {}
         });
         piWebMonitor.start();
+    }
+
+    private int piWebMonitorPort = -1;
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 后台时停掉主界面的监听与网页渲染（桌宠悬浮窗有自己的监控，不受影响）
+        if (piWebMonitor != null) {
+            piWebMonitor.stop();
+            piWebMonitor = null;
+        }
+        try {
+            if (piWebWebView != null) piWebWebView.onPause();
+        } catch (Throwable ignored) {}
     }
 
     public void showPetMenuDialog() {
@@ -1118,10 +1180,10 @@ public class MainActivity extends AppCompatActivity {
         }
 
         try {
-            AlertDialog.Builder builder = new AlertDialog.Builder(this);
+            AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
             LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+            root.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
 
             // ---- 顶栏：标题 + ✕ 关闭 ----
             LinearLayout topBar = new LinearLayout(this);
@@ -1131,15 +1193,15 @@ public class MainActivity extends AppCompatActivity {
             TextView title = new TextView(this);
             title.setText("🐾 桌宠控制中心");
             title.setTextColor(0xFFF0F6FC);
-            title.setTextSize(12.5f);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setTextSize(12f);
+            title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             topBar.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
             TextView closeBtn = new TextView(this);
             closeBtn.setText("✕");
             closeBtn.setTextColor(0xFF8B949E);
             closeBtn.setTextSize(13f);
-            closeBtn.setPadding(dpToPx(6), dpToPx(2), dpToPx(4), dpToPx(2));
+            closeBtn.setPadding(dpToPx(8), dpToPx(2), dpToPx(4), dpToPx(2));
             closeBtn.setOnClickListener(v -> {
                 if (petHudDialog != null) petHudDialog.dismiss();
             });
@@ -1151,8 +1213,8 @@ public class MainActivity extends AppCompatActivity {
             div1.setBackgroundColor(0x2230363D);
             LinearLayout.LayoutParams divLp1 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
-            divLp1.topMargin = dpToPx(6);
-            divLp1.bottomMargin = dpToPx(6);
+            divLp1.topMargin = dpToPx(8);
+            divLp1.bottomMargin = dpToPx(8);
             root.addView(div1, divLp1);
 
             // ---- 监控目标标签行 (Operit / pi-web / ClawBench / RikkaHub) 学习自 DevPetM 架构 ----
@@ -1188,7 +1250,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout.LayoutParams divLp2 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
             divLp2.topMargin = dpToPx(8);
-            divLp2.bottomMargin = dpToPx(6);
+            divLp2.bottomMargin = dpToPx(8);
             root.addView(div2, divLp2);
 
             // ---- 角色形象切换器 ◀ 名字 ▶ ----
@@ -1210,8 +1272,8 @@ public class MainActivity extends AppCompatActivity {
             TextView tvPetName = new TextView(this);
             tvPetName.setGravity(Gravity.CENTER);
             tvPetName.setTextColor(0xFFF0F6FC);
-            tvPetName.setTextSize(11.5f);
-            tvPetName.setTypeface(Typeface.DEFAULT_BOLD);
+            tvPetName.setTextSize(12f);
+            tvPetName.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             tvPetName.setText((petIdx[0] + 1) + "/" + allPets.size() + " " + (allPets.isEmpty() ? curPetDir : allPets.get(petIdx[0]).displayName));
 
             TextView btnNext = createHudChip("▶", 0x223B82F6, 0xFF58A6FF, null);
@@ -1254,7 +1316,7 @@ public class MainActivity extends AppCompatActivity {
             // ---- 才艺互动芯片 (跳舞 / 挥手 / 翻跟斗) ----
             LinearLayout actionChipsRow = new LinearLayout(this);
             actionChipsRow.setOrientation(LinearLayout.HORIZONTAL);
-            actionChipsRow.setPadding(0, dpToPx(6), 0, 0);
+            actionChipsRow.setPadding(0, dpToPx(8), 0, 0);
 
             TextView btnDance = createHudChip("💃 跳舞", 0x228B5CF6, 0xFFC4B5FD, v -> {
                 if (floatingPetView != null) {
@@ -1288,7 +1350,7 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout.LayoutParams divLp3 = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(1));
             divLp3.topMargin = dpToPx(8);
-            divLp3.bottomMargin = dpToPx(6);
+            divLp3.bottomMargin = dpToPx(8);
             root.addView(div3, divLp3);
 
             // ---- 快捷工具栏按钮 ----
@@ -1354,7 +1416,7 @@ public class MainActivity extends AppCompatActivity {
 
                 GradientDrawable bg = new GradientDrawable();
                 bg.setColor(0xF4181A22);
-                bg.setCornerRadius(dpToPx(13));
+                bg.setCornerRadius(dpToPx(12));
                 bg.setStroke(dpToPx(1), 0x33475569);
                 window.setBackgroundDrawable(bg);
             }
@@ -1394,9 +1456,9 @@ public class MainActivity extends AppCompatActivity {
         boolean isActive = targetKey.equals(activeTarget);
         TextView chip = new TextView(this);
         chip.setText("⏳ " + displayName + "...");
-        chip.setTextSize(10.5f);
+        chip.setTextSize(11f);
         chip.setGravity(Gravity.CENTER);
-        chip.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+        chip.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
         applyHudChipStyle(chip, isActive, false);
 
         // 毫秒级异步端口探测
@@ -1409,6 +1471,7 @@ public class MainActivity extends AppCompatActivity {
         // 点击切换监控与对话目标
         chip.setOnClickListener(v -> {
             PetRegistry.setStringPref(MainActivity.this, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+            PetRegistry.applyTargetPet(MainActivity.this, targetKey); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(MainActivity.this);
                 if (PetRegistry.TARGET_PIWEB.equals(targetKey)) cfg.mode = ChatConfig.MODE_PIWEB;
@@ -1472,7 +1535,7 @@ public class MainActivity extends AppCompatActivity {
         tv.setTextColor(textColor);
         tv.setTextSize(11f);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(dpToPx(6), dpToPx(5), dpToPx(6), dpToPx(5));
+        tv.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
 
         GradientDrawable n = new GradientDrawable();
         n.setColor(bgColor);
@@ -1640,12 +1703,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showCustomPortsDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
         builder.setTitle("🌐 自定义多服务端口配置");
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(18), dpToPx(12), dpToPx(18), dpToPx(12));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         EditText etPiWeb = createPortDialogRow(layout, "Pi-Web 工作台端口:", String.valueOf(PiMetConfig.getWebPort(this)));
         EditText etOperit = createPortDialogRow(layout, "Operit 伴侣服务端口:", String.valueOf(PetRegistry.getOperitPort(this)));
@@ -1688,7 +1751,7 @@ public class MainActivity extends AppCompatActivity {
         tv.setText(label);
         tv.setTextColor(0xFFCBD5E1);
         tv.setTextSize(12f);
-        tv.setPadding(0, dpToPx(6), 0, dpToPx(2));
+        tv.setPadding(0, dpToPx(8), 0, dpToPx(2));
         parent.addView(tv);
 
         LinearLayout row = new LinearLayout(this);
@@ -1705,7 +1768,7 @@ public class MainActivity extends AppCompatActivity {
         et.setPadding(dpToPx(8), 0, dpToPx(8), 0);
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(0xFF0D1117);
-        bg.setCornerRadius(dpToPx(4));
+        bg.setCornerRadius(dpToPx(6));
         bg.setStroke(dpToPx(1), 0x33475569);
         et.setBackground(bg);
         row.addView(et);
@@ -1715,10 +1778,10 @@ public class MainActivity extends AppCompatActivity {
         btnTest.setTextColor(0xFFC9D1D9);
         btnTest.setTextSize(11f);
         btnTest.setGravity(Gravity.CENTER);
-        btnTest.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        btnTest.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
         GradientDrawable tbg = new GradientDrawable();
         tbg.setColor(0x2230363D);
-        tbg.setCornerRadius(dpToPx(4));
+        tbg.setCornerRadius(dpToPx(6));
         tbg.setStroke(dpToPx(1), 0x22FFFFFF);
         btnTest.setBackground(tbg);
         LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
@@ -1727,7 +1790,7 @@ public class MainActivity extends AppCompatActivity {
         row.addView(btnTest, btnLp);
 
         TextView tvStatus = new TextView(this);
-        tvStatus.setTextSize(10.5f);
+        tvStatus.setTextSize(11f);
         tvStatus.setTextColor(0xFF8B949E);
         tvStatus.setVisibility(View.GONE);
         tvStatus.setPadding(dpToPx(2), dpToPx(2), 0, 0);
@@ -1852,6 +1915,50 @@ public class MainActivity extends AppCompatActivity {
         togglePetChatCard(true);
     }
 
+    // ---- 聊天卡「停止」打断 ----
+    private volatile boolean petChatRunning = false;
+    private volatile boolean petChatCancelled = false;
+    private volatile HttpURLConnection petChatConn;
+    private volatile String petChatSessionId;
+
+    private void setPetChatRunning(boolean running) {
+        petChatRunning = running;
+        mainHandler.post(() -> {
+            if (btnSendFloatPetChat instanceof TextView) {
+                ((TextView) btnSendFloatPetChat).setText(running ? "停止" : "发送");
+            }
+        });
+    }
+
+    /** 打断当前 Pi-Web 回复：通知 Agent abort 并断开事件流 */
+    private void interruptPetChat() {
+        petChatCancelled = true;
+        final HttpURLConnection c = petChatConn;
+        final String sid = petChatSessionId;
+        final int port = PiMetConfig.getWebPort(this);
+        new Thread(() -> {
+            if (sid != null) {
+                HttpURLConnection a = null;
+                try {
+                    a = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/api/agent/" + sid).openConnection();
+                    a.setRequestMethod("POST");
+                    a.setDoOutput(true);
+                    a.setConnectTimeout(2000);
+                    a.setReadTimeout(3000);
+                    a.setRequestProperty("Content-Type", "application/json");
+                    a.getOutputStream().write("{\"type\":\"abort\"}".getBytes(StandardCharsets.UTF_8));
+                    a.getResponseCode();
+                } catch (Throwable ignored) {
+                } finally {
+                    if (a != null) try { a.disconnect(); } catch (Throwable ignored) {}
+                }
+            }
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) {}
+        }).start();
+        setPetChatRunning(false);
+        showPetBubble("⏹ 已打断");
+    }
+
     private void sendPetChatMessage(String question) {
         if (TextUtils.isEmpty(question)) return;
         String q = question.trim();
@@ -1891,6 +1998,7 @@ public class MainActivity extends AppCompatActivity {
         // 2. 快捷指令切换目标与模式
         if (q.equalsIgnoreCase("#piweb")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_PIWEB); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_PIWEB;
@@ -1901,6 +2009,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#operit")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_OPERIT);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_OPERIT); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_OPERIT;
@@ -1911,6 +2020,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#clawbench")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CLAWBENCH);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_CLAWBENCH); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_CLAWBENCH;
@@ -1921,6 +2031,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (q.equalsIgnoreCase("#api")) {
             PetRegistry.setStringPref(this, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_CUSTOM_API);
+            PetRegistry.applyTargetPet(this, PetRegistry.TARGET_CUSTOM_API); // 切到该监控绑定的桌宠
             try {
                 ChatConfig cfg = ChatConfig.load(this);
                 cfg.mode = ChatConfig.MODE_CUSTOM_API;
@@ -2027,6 +2138,10 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             try {
                 if (PetRegistry.TARGET_PIWEB.equals(activeTarget)) {
+                    petChatCancelled = false;
+                    petChatSessionId = null;
+                    setPetChatRunning(true);
+                    try {
                     int piwebPort = PiMetConfig.getWebPort(MainActivity.this);
                     if (!PortDetector.isPortOpen("127.0.0.1", piwebPort, 450)) {
                         mainHandler.post(() -> showPetBubble("⚠️ Pi-Web 未在端口 " + piwebPort + " 启动，请点击上方「🚀 直达工作台」启动服务~"));
@@ -2095,11 +2210,14 @@ public class MainActivity extends AppCompatActivity {
                         return;
                     }
 
+                    petChatSessionId = sessionId;
+                    if (petChatCancelled) return;
                     mainHandler.post(() -> showPetBubble("💭 Pi-Web Agent 正在思考中..."));
 
                     // 2. 监听 SSE 事件流实时更新桌宠动画与气泡
                     URL sseUrl = new URL("http://127.0.0.1:" + piwebPort + "/api/agent/" + sessionId + "/events");
                     HttpURLConnection sseConn = (HttpURLConnection) sseUrl.openConnection();
+                    petChatConn = sseConn;
                     sseConn.setRequestProperty("Accept", "text/event-stream");
                     sseConn.setConnectTimeout(4000);
                     sseConn.setReadTimeout(75000);
@@ -2144,10 +2262,14 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (Throwable ignored) {}
                             }
                         }
+                    } catch (Throwable readErr) {
+                        if (!petChatCancelled) throw readErr;
                     } finally {
                         sseConn.disconnect();
+                        petChatConn = null;
                     }
 
+                    if (petChatCancelled) return;
                     mainHandler.post(() -> {
                         if (floatingPetView != null) floatingPetView.playOneShot("jumping");
                         if (answer.length() > 0) {
@@ -2157,6 +2279,9 @@ public class MainActivity extends AppCompatActivity {
                         }
                     });
                     return;
+                    } finally {
+                        if (!petChatCancelled) setPetChatRunning(false);
+                    }
                 }
                 if (PetRegistry.TARGET_OPERIT.equals(activeTarget)) {
                     int operitPort = PetRegistry.getOperitPort(MainActivity.this);
@@ -2358,11 +2483,14 @@ public class MainActivity extends AppCompatActivity {
         boolean enabled = running;
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         if (launchPetStatusTv != null) {
-            launchPetStatusTv.setText(enabled ? "状态: 已开启" : "状态: 已关闭");
+            launchPetStatusTv.setText(enabled ? "运行中" : "已关闭");
             launchPetStatusTv.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetStateBadge != null) {
             launchPetStateBadge.setText(enabled ? "已开" : "已关");
+            launchPetStateBadge.setBackground(enabled
+                    ? ThemeManager.createBadgeDrawable(this, palette, ThemeManager.RADIUS_SMALL)
+                    : ThemeManager.createSecondaryButtonDrawable(this, palette, ThemeManager.RADIUS_SMALL));
             launchPetStateBadge.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
         }
         if (launchPetIconTv != null) {
@@ -2511,7 +2639,7 @@ public class MainActivity extends AppCompatActivity {
             refreshSettingsPortFields();
             updateLaunchStatusUI(isPiWebAlive);
             if (isPiWebAlive && oldPort != newPort) {
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("🔄 重启 Pi-Web 服务生效")
                         .setMessage("启动端口已由 " + oldPort + " 调整为 " + newPort + "。\n当前服务正在旧端口运行，是否立即重启服务？")
                         .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
@@ -2532,9 +2660,9 @@ public class MainActivity extends AppCompatActivity {
         input.setSelection(input.getText().length());
         input.setTextColor(0xFFF0F6FC);
         input.setBackgroundColor(0xFF0D1117);
-        input.setPadding(dpToPx(12), dpToPx(10), dpToPx(12), dpToPx(10));
+        input.setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12));
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🌐 自定义 Pi-Web 启动端口")
                 .setMessage("请输入 1024 ~ 65535 范围内的端口号：")
                 .setView(input)
@@ -2579,7 +2707,7 @@ public class MainActivity extends AppCompatActivity {
                 btnLaunchStop.setAlpha(1.0f);
                 btnLaunchStop.setBackground(ThemeManager.createDangerButtonDrawable(this, palette, 8f));
                 if (btnLaunchStop instanceof TextView) {
-                    ((TextView) btnLaunchStop).setTextColor(0xFFFFFFFF);
+                    ((TextView) btnLaunchStop).setTextColor(ThemeManager.statusDangerColor(palette));
                 }
             }
             if (btnLaunchRestart != null) {
@@ -2661,9 +2789,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshLaunchLog();
 
                 // 核心预加载：服务一就绪，后台立刻触发静默渲染，用户点击进入工作台秒开呈现
-                if (piWebWebView != null) {
-                    piWebWebView.loadUrl(getPiWebUrl());
-                }
+                warmThenLoadPiWeb(false);
             }
 
             @Override
@@ -2728,9 +2854,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshLaunchLog();
 
                 // 核心预加载：服务就绪瞬间立即静默加载 WebView，进入工作台 0 秒呈现
-                if (piWebWebView != null) {
-                    piWebWebView.loadUrl(getPiWebUrl());
-                }
+                warmThenLoadPiWeb(false);
             }
 
             @Override
@@ -2841,14 +2965,18 @@ public class MainActivity extends AppCompatActivity {
         webSettings.setSupportZoom(true);
         webSettings.setBuiltInZoomControls(true);
         webSettings.setDisplayZoomControls(false);
+        // 双指布局缩放（重排适配屏宽，25%–300%），与悬浮球缩放按钮共用同一缩放值
+        com.xm486.pimet.ui.WebPinchZoom.attach(piWebWebView, (pct, committed) -> {
+            if (btnFloatZoom != null) btnFloatZoom.setText(pct + "%");
+        });
         webSettings.setAllowFileAccess(true);
         webSettings.setAllowContentAccess(true);
         webSettings.setAllowFileAccessFromFileURLs(true);
         webSettings.setAllowUniversalAccessFromFileURLs(true);
 
         // 初始化网页缩放
-        int savedZoom = PiMetConfig.getWebZoom(this);
-        webSettings.setTextZoom(savedZoom);
+        int savedZoom = com.xm486.pimet.ui.WebPinchZoom.getZoom(this);
+        webSettings.setTextZoom(100);
         btnFloatZoom.setText(savedZoom + "%");
 
         // 注册通用网页翻译原生桥接 (支持任意网页、多引擎、绕过CORS)
@@ -2872,9 +3000,16 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                super.onPageCommitVisible(view, url);
+                com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 ThemeManager.syncThemeToWebView(view, MainActivity.this);
+                com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
                     // 清理历史残留的输入草稿缓存，防止旧消息重复回填至输入框
                     view.evaluateJavascript(
@@ -2887,11 +3022,15 @@ public class MainActivity extends AppCompatActivity {
                         null
                     );
 
+                    // 自愈：页面能滚动/缩放却点不动 = 前端 JS 没有激活（常见于 Pi-Web 升级后 Service Worker 仍提供旧脚本）
+                    schedulePiWebHydrationCheck(view, url);
+
                     // 深度自愈：检测页面是否由于 Node.js 启动延迟被 Service Worker 错误截获为 offline.html
                     view.evaluateJavascript(
                         "(function() { " +
                         "  var h1 = document.querySelector('h1'); " +
-                        "  return (document.title.indexOf('offline') !== -1 || (h1 && h1.innerText.indexOf('offline') !== -1)); " +
+                        "  var t = (document.title + ' ' + (h1 ? h1.innerText : '')).toLowerCase(); " +
+                        "  return t.indexOf('offline') !== -1; " +
                         "})()",
                         result -> {
                             if ("true".equalsIgnoreCase(result)) {
@@ -2904,6 +3043,21 @@ public class MainActivity extends AppCompatActivity {
         });
 
         piWebWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                try {
+                    if (cm != null && cm.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                        String m = cm.message() == null ? "" : cm.message();
+                        if (m.contains("ChunkLoadError") || m.contains("Loading chunk")
+                                || m.contains("Failed to fetch dynamically imported module")
+                                || m.contains("Failed to load chunk")) {
+                            healPiWebPage("前端脚本加载失败");
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                return super.onConsoleMessage(cm);
+            }
+
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 if (newProgress < 100) {
@@ -3162,6 +3316,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (btnSendFloatPetChat != null) {
             btnSendFloatPetChat.setOnClickListener(v -> {
+                if (petChatRunning) {
+                    interruptPetChat();
+                    return;
+                }
                 String q = inputFloatPetChat != null ? inputFloatPetChat.getText().toString().trim() : "";
                 if (q.isEmpty()) return;
                 if (inputFloatPetChat != null) inputFloatPetChat.setText("");
@@ -3227,6 +3385,13 @@ public class MainActivity extends AppCompatActivity {
             floatingMenuVertical.setVisibility(View.GONE);
             openExternalBrowser();
         });
+        View btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
+        if (btnFloatTerminal != null) {
+            btnFloatTerminal.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                com.xm486.pimet.terminal.FloatingTerminal.toggle(MainActivity.this);
+            });
+        }
         piWebWakeBtn.setOnClickListener(v -> startPiWebService());
     }
 
@@ -3246,114 +3411,153 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showZoomDialog() {
-        int currentZoom = PiMetConfig.getWebZoom(this);
+        int currentZoom = com.xm486.pimet.ui.WebPinchZoom.getZoom(this);
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
+        final int minZ = com.xm486.pimet.ui.WebPinchZoom.MIN_ZOOM;
+        final int maxZ = com.xm486.pimet.ui.WebPinchZoom.MAX_ZOOM;
+        final int onPrimary = palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF;
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(20), dpToPx(16), dpToPx(20), dpToPx(16));
+        layout.setPadding(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16));
         layout.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
 
         TextView title = new TextView(this);
-        title.setText("🔍 工作台显示缩放调节");
-        title.setTextSize(15f);
-        title.setTypeface(null, Typeface.BOLD);
+        title.setText("工作台显示缩放");
+        title.setTextSize(16f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         title.setTextColor(palette.text);
         layout.addView(title);
 
         TextView tvVal = new TextView(this);
-        tvVal.setText("当前缩放比例: " + currentZoom + "%");
+        tvVal.setText("当前 " + currentZoom + "% · 也可双指缩放");
         tvVal.setTextSize(13f);
         tvVal.setTextColor(palette.accent);
         tvVal.setPadding(0, dpToPx(8), 0, dpToPx(12));
         layout.addView(tvVal);
 
-        // 步进按钮行 [-10%] [重置 100%] [+10%]
-        LinearLayout stepRow = new LinearLayout(this);
-        stepRow.setOrientation(LinearLayout.HORIZONTAL);
-        stepRow.setGravity(Gravity.CENTER);
-
-        TextView btnMinus = new TextView(this);
-        btnMinus.setText("➖ 缩小 10%");
-        btnMinus.setTextColor(palette.text);
-        btnMinus.setTextSize(12f);
-        btnMinus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnMinus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-
-        TextView btnReset = new TextView(this);
-        btnReset.setText("🔄 100%");
-        btnReset.setTextColor(palette.accent);
-        btnReset.setTextSize(12f);
-        btnReset.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnReset.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        resetLp.leftMargin = dpToPx(8);
-        resetLp.rightMargin = dpToPx(8);
-        btnReset.setLayoutParams(resetLp);
-
-        TextView btnPlus = new TextView(this);
-        btnPlus.setText("➕ 放大 10%");
-        btnPlus.setTextColor(palette.text);
-        btnPlus.setTextSize(12f);
-        btnPlus.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
-        btnPlus.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
-
-        stepRow.addView(btnMinus);
-        stepRow.addView(btnReset);
-        stepRow.addView(btnPlus);
-        layout.addView(stepRow);
-
-        // 常用预设行: 80% | 100% | 125% | 150% | 200%
+        // 固定预设（100% 即重置）
         LinearLayout presetRow = new LinearLayout(this);
         presetRow.setOrientation(LinearLayout.HORIZONTAL);
         presetRow.setGravity(Gravity.CENTER);
-        presetRow.setPadding(0, dpToPx(12), 0, 0);
 
-        int[] presets = {80, 100, 125, 150, 175, 200};
+        final int[] presets = {50, 75, 100, 125, 150};
         final List<TextView> presetViews = new ArrayList<>();
-        for (int p : presets) {
-            final int presetVal = p;
+        final Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            int z = com.xm486.pimet.ui.WebPinchZoom.getZoom(MainActivity.this);
+            tvVal.setText("当前 " + z + "% · 也可双指缩放");
+            for (int i = 0; i < presets.length; i++) {
+                boolean active = presets[i] == z;
+                presetViews.get(i).setTextColor(active ? onPrimary : palette.textMuted);
+                presetViews.get(i).setBackground(active
+                        ? ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f)
+                        : ThemeManager.createSecondaryButtonDrawable(MainActivity.this, palette, 6f));
+            }
+        };
+        for (int i = 0; i < presets.length; i++) {
+            final int presetVal = presets[i];
             TextView pBtn = new TextView(this);
             pBtn.setText(presetVal + "%");
-            pBtn.setTextSize(11f);
-            pBtn.setTextColor(presetVal == currentZoom ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
-            pBtn.setBackground(presetVal == currentZoom ? ThemeManager.createPrimaryButtonDrawable(this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-            pBtn.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
-            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            pLp.rightMargin = dpToPx(4);
+            pBtn.setTextSize(12f);
+            pBtn.setSingleLine(true);
+            pBtn.setGravity(Gravity.CENTER);
+            pBtn.setPadding(0, dpToPx(8), 0, dpToPx(8));
+            LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) pLp.leftMargin = dpToPx(6);
             pBtn.setLayoutParams(pLp);
             pBtn.setOnClickListener(v -> {
                 applyWebZoom(presetVal);
-                tvVal.setText("当前缩放比例: " + presetVal + "%");
-                for (int i = 0; i < presets.length; i++) {
-                    boolean active = presets[i] == presetVal;
-                    presetViews.get(i).setTextColor(active ? (palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF) : palette.textMuted);
-                    presetViews.get(i).setBackground(active ? ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f) : ThemeManager.createSecondaryButtonDrawable(MainActivity.this, palette, 6f));
-                }
+                refresh[0].run();
             });
             presetViews.add(pBtn);
             presetRow.addView(pBtn);
         }
         layout.addView(presetRow);
 
+        // 自定义数值：输入百分比后点「应用」
+        LinearLayout customRow = new LinearLayout(this);
+        customRow.setOrientation(LinearLayout.HORIZONTAL);
+        customRow.setGravity(Gravity.CENTER_VERTICAL);
+        customRow.setPadding(0, dpToPx(12), 0, 0);
+
+        android.widget.EditText etCustom = new android.widget.EditText(this);
+        etCustom.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etCustom.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(3)});
+        etCustom.setSingleLine(true);
+        etCustom.setHint("自定义 " + minZ + "–" + maxZ);
+        etCustom.setTextSize(13f);
+        etCustom.setTextColor(palette.text);
+        etCustom.setHintTextColor(palette.textDim);
+        etCustom.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        etCustom.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
+        etCustom.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        customRow.addView(etCustom, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView pct = new TextView(this);
+        pct.setText("%");
+        pct.setTextSize(13f);
+        pct.setTextColor(palette.textMuted);
+        pct.setPadding(dpToPx(6), 0, dpToPx(8), 0);
+        customRow.addView(pct);
+
+        TextView btnApply = new TextView(this);
+        btnApply.setText("应用");
+        btnApply.setTextSize(12f);
+        btnApply.setSingleLine(true);
+        btnApply.setTextColor(palette.accent);
+        btnApply.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
+        btnApply.setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8));
+        customRow.addView(btnApply);
+        layout.addView(customRow);
+
+        final Runnable applyCustom = () -> {
+            String txt = etCustom.getText() == null ? "" : etCustom.getText().toString().trim();
+            int v;
+            try {
+                v = Integer.parseInt(txt);
+            } catch (NumberFormatException e) {
+                Toast.makeText(MainActivity.this, "请输入 " + minZ + "–" + maxZ + " 之间的数字", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int z = com.xm486.pimet.ui.WebPinchZoom.clamp(v);
+            if (z != v) {
+                Toast.makeText(MainActivity.this, "已限制在 " + minZ + "–" + maxZ + "%，应用 " + z + "%", Toast.LENGTH_SHORT).show();
+            }
+            applyWebZoom(z);
+            etCustom.setText(String.valueOf(z));
+            etCustom.setSelection(etCustom.getText().length());
+            refresh[0].run();
+        };
+        btnApply.setOnClickListener(v -> applyCustom.run());
+        etCustom.setOnEditorActionListener((v, actionId, ev) -> {
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                applyCustom.run();
+                return true;
+            }
+            return false;
+        });
+
+        refresh[0].run();
+
         // 完成按键
         TextView btnDone = new TextView(this);
         btnDone.setText("完成");
         btnDone.setTextSize(13f);
-        btnDone.setTypeface(null, Typeface.BOLD);
+        btnDone.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         btnDone.setGravity(Gravity.CENTER);
-        btnDone.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+        btnDone.setTextColor(onPrimary);
         btnDone.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 8f));
-        btnDone.setPadding(0, dpToPx(10), 0, dpToPx(10));
+        btnDone.setPadding(0, dpToPx(12), 0, dpToPx(12));
         LinearLayout.LayoutParams doneLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         doneLp.topMargin = dpToPx(16);
         btnDone.setLayoutParams(doneLp);
         layout.addView(btnDone);
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setView(layout)
                 .create();
         if (dialog.getWindow() != null) {
@@ -3361,31 +3565,18 @@ public class MainActivity extends AppCompatActivity {
         }
         btnDone.setOnClickListener(v -> dialog.dismiss());
 
-        btnMinus.setOnClickListener(v -> {
-            int z = Math.max(50, PiMetConfig.getWebZoom(this) - 10);
-            applyWebZoom(z);
-            tvVal.setText("当前缩放比例: " + z + "%");
-        });
-        btnReset.setOnClickListener(v -> {
-            applyWebZoom(100);
-            tvVal.setText("当前缩放比例: 100%");
-        });
-        btnPlus.setOnClickListener(v -> {
-            int z = Math.min(300, PiMetConfig.getWebZoom(this) + 10);
-            applyWebZoom(z);
-            tvVal.setText("当前缩放比例: " + z + "%");
-        });
-
         dialog.show();
     }
 
     private void applyWebZoom(int zoom) {
-        PiMetConfig.setWebZoom(this, zoom);
+        int z = com.xm486.pimet.ui.WebPinchZoom.clamp(zoom);
         if (piWebWebView != null) {
-            piWebWebView.getSettings().setTextZoom(zoom);
+            z = com.xm486.pimet.ui.WebPinchZoom.setZoom(piWebWebView, z);
+        } else {
+            PiMetConfig.setWebZoom(this, z);
         }
         if (btnFloatZoom != null) {
-            btnFloatZoom.setText(zoom + "%");
+            btnFloatZoom.setText(z + "%");
         }
     }
 
@@ -3440,9 +3631,10 @@ public class MainActivity extends AppCompatActivity {
 
         // 关键秒开优化：若服务已知在运行，或者 WebView 已在目标地址，主线程同步直接切出工作台，毫秒级即现！
         if (isPiWebAlive || (piWebWebView != null && piWebWebView.getUrl() != null && piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-            showPiWebOffline(false);
             if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-                piWebWebView.loadUrl(url);
+                warmThenLoadPiWeb(true);
+            } else if (!isPiWebLoading) {
+                showPiWebOffline(false);
             }
         }
 
@@ -3462,11 +3654,15 @@ public class MainActivity extends AppCompatActivity {
             mainHandler.post(() -> {
                 isPiWebAlive = isReady;
                 if (isReady) {
-                    showPiWebOffline(false);
                     if (piWebWebView != null && (piWebWebView.getUrl() == null || !piWebWebView.getUrl().startsWith("http://127.0.0.1:" + port))) {
-                        piWebWebView.loadUrl(url);
+                        warmThenLoadPiWeb(true);
+                    } else if (!isPiWebLoading) {
+                        showPiWebOffline(false);
                     }
                     // 目标网页已正确加载，切勿调用 reload()，以完整保留 WebView 内存状态
+                } else if (isPiWebActionInProgress || isOfflineRecovering) {
+                    // 服务正在启动：显示「正在加载」并等首页就绪，而不是「未在运行」
+                    warmThenLoadPiWeb(true);
                 } else {
                     showPiWebOffline(true);
                 }
@@ -3474,38 +3670,123 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    private long lastPiWebHealAt = 0;
+
+    private static final String PIWEB_HYDRATION_JS = "(function(){try{" +
+            "function hasReact(n){if(!n)return false;for(var k in n){if(k.indexOf('__react')===0)return true;}return false;}" +
+            "var tt=((document.title||'')+' '+((document.querySelector('h1')||{}).innerText||'')).toLowerCase();" +
+            "if(tt.indexOf('offline')!==-1)return 'offline';" +
+            "if(hasReact(document)||hasReact(document.documentElement)||hasReact(document.body))return 'ok';" +
+            "var all=document.querySelectorAll('button,a,input,textarea,[role=button]');" +
+            "for(var j=0;j<Math.min(all.length,40);j++){if(hasReact(all[j]))return 'ok';}" +
+            "return all.length?'dead':'empty';}catch(e){return 'err';}})()";
+
+    /** 页面加载完 6 秒后检查前端是否已激活（React 已挂载）；未激活则清缓存重载 */
+    private void schedulePiWebHydrationCheck(WebView view, String url) {
+        if (view == null || url == null) return;
+        view.postDelayed(() -> {
+            String cur = view.getUrl();
+            if (cur == null || !cur.equals(url)) return;
+            view.evaluateJavascript(PIWEB_HYDRATION_JS, r -> {
+                if ("\"offline\"".equals(r)) handlePiWebOfflineDetected();
+                else if ("\"dead\"".equals(r)) healPiWebPage("页面按钮未激活");
+            });
+        }, 6000);
+    }
+
+    /** 清除 WebView 缓存、注销 Service Worker 与 Cache Storage 后重新加载（3 分钟内最多一次，防止循环） */
+    private void healPiWebPage(String reason) {
+        // 服务还没就绪时页面本来就不可用：交给离线自动重连，不清缓存（否则下次加载更慢）
+        final int port = PiMetConfig.getWebPort(this);
+        new Thread(() -> {
+            boolean ready = ProotManager.isPiWebHttpReady(port);
+            mainHandler.post(() -> {
+                if (!ready) handlePiWebOfflineDetected();
+                else doHealPiWebPage(reason);
+            });
+        }, "piweb-heal-check").start();
+    }
+
+    private void doHealPiWebPage(String reason) {
+        runOnUiThread(() -> {
+            long now = System.currentTimeMillis();
+            if (now - lastPiWebHealAt < 180000L || piWebWebView == null) return;
+            lastPiWebHealAt = now;
+            Log.w("PiMet", "healPiWebPage: " + reason);
+            try {
+                piWebWebView.clearCache(true);
+            } catch (Throwable ignored) {}
+            Toast.makeText(MainActivity.this, "检测到网页" + reason + "，已清理缓存并重新加载", Toast.LENGTH_SHORT).show();
+            piWebWebView.evaluateJavascript("(function(){if(window.__pimetHealing)return;window.__pimetHealing=1;var p=[];" +
+                    "try{if(navigator.serviceWorker)p.push(navigator.serviceWorker.getRegistrations().then(function(rs){" +
+                    "return Promise.all(rs.map(function(r){return r.unregister();}));}));" +
+                    "if(window.caches)p.push(caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}));" +
+                    "}catch(e){}var done=false;function go(){if(done)return;done=true;location.reload();}" +
+                    "Promise.all(p).then(go,go);setTimeout(go,2500);})()", null);
+        });
+    }
+
     private void handlePiWebOfflineDetected() {
+        // 离线页是 Service Worker 在首页 8 秒没响应时给的兜底：盖上「正在加载」，预热首页后自动重载
+        warmThenLoadPiWeb(true);
+    }
+
+    private volatile boolean isPiWebLoading = false;
+    private TextView piWebOfflineTitleTv;
+
+    /** 后台等首页能出首字节再加载 WebView；showUi=true 时期间显示原生「正在加载」而不是离线页 */
+    private void warmThenLoadPiWeb(boolean showUi) {
+        if (showUi) showPiWebLoading();
         if (isOfflineRecovering) return;
         isOfflineRecovering = true;
-        int port = PiMetConfig.getWebPort(this);
-        // 如果服务实际在运行或刚拉起，静默轮询并在就绪后自动重新加载，摆脱手动点击 Try again
+        final int port = PiMetConfig.getWebPort(this);
         new Thread(() -> {
+            boolean ok = false;
             try {
-                for (int i = 0; i < 15; i++) {
-                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-                    if (ProotManager.isPiWebHttpReady(port)) {
-                        mainHandler.post(() -> {
-                            if (piWebWebView != null) {
-                                String url = getPiWebUrl();
-                                String cur = piWebWebView.getUrl();
-                                if (cur == null || !cur.startsWith("http://127.0.0.1:" + port)) {
-                                    piWebWebView.loadUrl(url);
-                                } else {
-                                    piWebWebView.reload();
-                                }
-                                showPiWebOffline(false);
-                            }
-                        });
-                        break;
-                    }
+                long deadline = System.currentTimeMillis() + 150000L;
+                while (System.currentTimeMillis() < deadline && !isFinishing() && !isDestroyed()) {
+                    if (ProotManager.warmPiWebPage(port)) { ok = true; break; }
+                    try { Thread.sleep(700); } catch (InterruptedException ignored) {}
                 }
             } finally {
                 isOfflineRecovering = false;
             }
-        }).start();
+            final boolean ready = ok;
+            mainHandler.post(() -> {
+                if (piWebWebView == null) return;
+                if (ready) {
+                    String url = getPiWebUrl();
+                    String cur = piWebWebView.getUrl();
+                    if (cur == null || !cur.startsWith("http://127.0.0.1:" + port)) piWebWebView.loadUrl(url);
+                    else piWebWebView.reload();
+                    if (isPiWebLoading) showPiWebOffline(false);
+                } else if (isPiWebLoading) {
+                    showPiWebOffline(true);
+                }
+            });
+        }, "piweb-warmup").start();
+    }
+
+    private void showPiWebLoading() {
+        if (piWebOfflineCard == null || piWebWebView == null) return;
+        isPiWebLoading = true;
+        piWebOfflineCard.setVisibility(View.VISIBLE);
+        piWebWebView.setVisibility(View.INVISIBLE);
+        if (piWebOfflineTitleTv == null && piWebOfflineSubTv != null
+                && piWebOfflineSubTv.getParent() instanceof android.view.ViewGroup) {
+            android.view.ViewGroup pg = (android.view.ViewGroup) piWebOfflineSubTv.getParent();
+            int idx = pg.indexOfChild(piWebOfflineSubTv);
+            if (idx > 0 && pg.getChildAt(idx - 1) instanceof TextView) piWebOfflineTitleTv = (TextView) pg.getChildAt(idx - 1);
+        }
+        if (piWebOfflineTitleTv != null) piWebOfflineTitleTv.setText("Pi-Web 正在加载…");
+        if (piWebOfflineSubTv != null) piWebOfflineSubTv.setText("服务刚启动，首屏准备好后会自动进入");
+        if (piWebWakeBtn != null) piWebWakeBtn.setVisibility(View.GONE);
     }
 
     private void showPiWebOffline(boolean offline) {
+        isPiWebLoading = false;
+        if (piWebOfflineTitleTv != null) piWebOfflineTitleTv.setText("Pi-Web 服务未在运行");
+        if (piWebWakeBtn != null) piWebWakeBtn.setVisibility(View.VISIBLE);
         piWebOfflineCard.setVisibility(offline ? View.VISIBLE : View.GONE);
         piWebWebView.setVisibility(offline ? View.GONE : View.VISIBLE);
         int port = PiMetConfig.getWebPort(this);
@@ -3582,7 +3863,7 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "所有自定义端口与凭证已保存并生效！", Toast.LENGTH_SHORT).show();
 
                     if (oldPort != pwPort && isPiWebAlive) {
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("🔄 重启 Pi-Web 服务生效")
                                 .setMessage("Pi-Web 启动端口已由 " + oldPort + " 调整为 " + pwPort + "。\n当前服务正在旧端口运行，是否立即重启服务应用新端口？")
                                 .setPositiveButton("立即重启", (d, w) -> restartPiWebService())
@@ -3620,7 +3901,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnResetContainer.setOnClickListener(v -> {
-            new AlertDialog.Builder(this)
+            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                     .setTitle("重置 Linux 容器？")
                     .setMessage("此操作将彻底删除内置 PRoot 容器文件系统，所有已安装的 npm 包及数据将被清空。")
                     .setPositiveButton("确认重置", (dialog, which) -> {
@@ -3675,7 +3956,7 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "打开 Shizuku 失败", Toast.LENGTH_SHORT).show();
                 }
             } else {
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("⚡ Shizuku 特权未安装")
                         .setMessage("Shizuku 可通过无线调试 (ADB) 免 Root 为应用赋予系统级 ADB 权限。\n\n是否打开 Shizuku 官方主页下载？")
                         .setPositiveButton("前往下载", (dialog, which) -> {
@@ -3845,7 +4126,7 @@ public class MainActivity extends AppCompatActivity {
                 break;
             }
         }
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("⏱️ 调节桌宠主动关怀活跃度")
                 .setSingleChoiceItems(options, selected, (d, which) -> {
                     d.dismiss();
@@ -3881,7 +4162,7 @@ public class MainActivity extends AppCompatActivity {
                             settingsPiWebVersionTv.setText("已安装: v" + info.currentVersion + (info.hasUpdate ? " (有新版: v" + info.latestVersion + ")" : " (最新)"));
                         }
                         if (info.hasUpdate) {
-                            new AlertDialog.Builder(this)
+                            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                     .setTitle("🎉 发现 Pi-Web 工作台新版本 (v" + info.latestVersion + ")")
                                     .setMessage("【当前已安装】v" + info.currentVersion +
                                             "\n【最新可用版本】v" + info.latestVersion +
@@ -3893,7 +4174,7 @@ public class MainActivity extends AppCompatActivity {
                                     .setNegativeButton("稍后再说", null)
                                     .show();
                         } else {
-                            new AlertDialog.Builder(this)
+                            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                     .setTitle("✔ Pi-Web 工作台已是最新")
                                     .setMessage("当前版本: v" + info.currentVersion + "\n已是 npm 镜像源上的最新稳定版本，无需更新。")
                                     .setPositiveButton("确定", null)
@@ -3921,7 +4202,7 @@ public class MainActivity extends AppCompatActivity {
                                 "【更新内容】\n" + (info.changelog != null && !info.changelog.isEmpty() ? info.changelog : "常规体验与底层稳定性优化") +
                                 "\n\n【说明】更新采用安全覆盖安装，完整保留现有所有数据、配置、会话与桌宠。";
 
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("✨ 发现 PiMet 客户端新版本 " + info.latestVersion)
                                 .setMessage(msg)
                                 .setPositiveButton("📥 本地下载", (d, w) -> {
@@ -3937,7 +4218,7 @@ public class MainActivity extends AppCompatActivity {
                     } else if (info != null) {
                         String routeTip = (info.bestRouteName != null ? info.bestRouteName : "优选线路") +
                                 (info.routeLatencyMs > 0 ? " (" + info.routeLatencyMs + "ms)" : "");
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle("✔ 当前已是最新版本")
                                 .setMessage("当前安装版本: v" + info.currentVersion + "\n已连通线路: " + routeTip +
                                         "\n\n暂无可用新版本，若需备份或在其他设备安装，可复制安装包下载链接。")
@@ -3969,7 +4250,7 @@ public class MainActivity extends AppCompatActivity {
         tvStage.setText("正在准备升级环境...");
         tvStage.setTextColor(0xFFF0F6FC);
         tvStage.setTextSize(13f);
-        tvStage.setTypeface(null, Typeface.BOLD);
+        tvStage.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         layout.addView(tvStage);
 
         ProgressBar pBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -3977,8 +4258,8 @@ public class MainActivity extends AppCompatActivity {
         pBar.setProgress(5);
         LinearLayout.LayoutParams pbParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(6));
-        pbParams.topMargin = dpToPx(10);
-        pbParams.bottomMargin = dpToPx(6);
+        pbParams.topMargin = dpToPx(12);
+        pbParams.bottomMargin = dpToPx(8);
         pBar.setLayoutParams(pbParams);
         layout.addView(pBar);
 
@@ -4001,17 +4282,17 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(120));
         logScrollView.setLayoutParams(svParams);
         logScrollView.setBackgroundColor(0xFF161B22);
-        logScrollView.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        logScrollView.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
 
         TextView tvLiveLog = new TextView(this);
         tvLiveLog.setTextColor(0xFF7EE787);
-        tvLiveLog.setTextSize(10f);
+        tvLiveLog.setTextSize(11f);
         tvLiveLog.setTypeface(Typeface.MONOSPACE);
         tvLiveLog.setText("[info] 启动更新流水线...\n");
         logScrollView.addView(tvLiveLog);
         layout.addView(logScrollView);
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        AlertDialog dialog = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("🚀 Pi-Web 平滑增量升级")
                 .setView(layout)
                 .setCancelable(false)
@@ -4046,7 +4327,7 @@ public class MainActivity extends AppCompatActivity {
                 if (settingsPiWebVersionTv != null) {
                     settingsPiWebVersionTv.setText("已安装版本: v" + newVer);
                 }
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("✨ 升级成功")
                         .setMessage("Pi-Web 工作台已成功平滑升级至 v" + newVer + "！\n所有本地配置与工程数据完整保留。")
                         .setPositiveButton("确定", (d, w) -> {
@@ -4058,7 +4339,7 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 tvStage.setText("❌ 升级失败");
                 tvStage.setTextColor(0xFFF85149);
-                new AlertDialog.Builder(this)
+                new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("升级失败")
                         .setMessage(message != null ? message : "更新过程中遇到错误，请检查网络或稍后重试。")
                         .setPositiveButton("确定", null)
@@ -4108,6 +4389,11 @@ public class MainActivity extends AppCompatActivity {
         updateMenuItemState(menuItemTheme, menuTitleTheme, menuArrowTheme, category == SETTINGS_CAT_THEME);
 
         applySettingsCardsVisibility();
+
+        if (category == SETTINGS_CAT_THEME) {
+            // 首帧即按当前生效配色与选中项渲染外观选项，杜绝首次打开时的深色占位闪烁
+            updateThemeUIState();
+        }
 
         if (viewSettingsSubWindow != null) {
             viewSettingsSubWindow.setVisibility(View.VISIBLE);
@@ -4214,7 +4500,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                 if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
-                    new AlertDialog.Builder(this)
+                    new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                             .setTitle("⚡ 开启后台高保活模式")
                             .setMessage("检测到系统尚未为 PiMet 开启电池白名单。\n\n为保证在外部浏览器使用 Pi-Web 或息屏时后台服务不被系统冻结杀掉，建议允许忽略电池优化。")
                             .setPositiveButton("立即开启", (dialog, which) -> requestBatteryOptimizationExemption())
@@ -4319,7 +4605,7 @@ public class MainActivity extends AppCompatActivity {
         String clip = getClipboardText();
         String preview = TextUtils.isEmpty(clip) ? "（剪贴板为空）" : (clip.length() > 60 ? clip.substring(0, 60) + "..." : clip);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("📋 剪贴板操作")
                 .setMessage("当前剪贴板内容：\n" + preview)
                 .setItems(new String[]{
@@ -4404,13 +4690,13 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dpToPx(12), dpToPx(9), dpToPx(12), dpToPx(9));
+        row.setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8));
         row.setClickable(true);
         row.setFocusable(true);
         row.setBackground(isSelected ? ThemeManager.createSelectedOptionDrawable(this, palette, 8f) : ThemeManager.createSecondaryButtonDrawable(this, palette, 8f));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dpToPx(6);
+        lp.topMargin = dpToPx(8);
         row.setLayoutParams(lp);
 
         LinearLayout textCol = new LinearLayout(this);
@@ -4420,14 +4706,14 @@ public class MainActivity extends AppCompatActivity {
         TextView titleTv = new TextView(this);
         titleTv.setText(title);
         titleTv.setTextColor(isSelected ? palette.accent : palette.text);
-        titleTv.setTextSize(12.5f);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        titleTv.setTextSize(12f);
+        titleTv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         textCol.addView(titleTv);
 
         TextView subTv = new TextView(this);
         subTv.setText(subtitle);
         subTv.setTextColor(palette.textMuted);
-        subTv.setTextSize(10.5f);
+        subTv.setTextSize(11f);
         textCol.addView(subTv);
 
         row.addView(textCol);
@@ -4439,15 +4725,15 @@ public class MainActivity extends AppCompatActivity {
             speedBadge.setText(speedStr);
             speedBadge.setTextColor(speedStr.contains("FAIL") ? 0xFFF85149 : palette.accent);
             speedBadge.setTextSize(11f);
-            speedBadge.setPadding(dpToPx(6), 0, dpToPx(8), 0);
+            speedBadge.setPadding(dpToPx(8), 0, dpToPx(8), 0);
             row.addView(speedBadge);
         }
 
         TextView checkTv = new TextView(this);
         checkTv.setText(isSelected ? "✔" : "");
         checkTv.setTextColor(palette.accent);
-        checkTv.setTextSize(15f);
-        checkTv.setTypeface(Typeface.DEFAULT_BOLD);
+        checkTv.setTextSize(16f);
+        checkTv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         row.addView(checkTv);
 
         row.setOnClickListener(v -> {
@@ -4646,6 +4932,33 @@ public class MainActivity extends AppCompatActivity {
             if (resultCode == RESULT_OK && data != null) {
                 handleImportToContainer(data);
             }
+        } else if (requestCode == REQUEST_CODE_EXPORT_DOCUMENT) {
+            java.util.function.Consumer<Uri> cb = pendingExportCallback;
+            pendingExportCallback = null;
+            if (cb != null) {
+                cb.accept(resultCode == RESULT_OK && data != null ? data.getData() : null);
+            }
+        }
+    }
+
+    // ================= 文件浏览器：单独导出到手机存储 (系统文档选择器) =================
+    public static final int REQUEST_CODE_EXPORT_DOCUMENT = 2002;
+    private java.util.function.Consumer<Uri> pendingExportCallback;
+
+    /** 调起系统「保存到」选择器，用户选定位置后回调目标 Uri（取消回调 null）。 */
+    public boolean launchCreateDocument(String fileName, String mime, java.util.function.Consumer<Uri> callback) {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mime != null ? mime : "application/octet-stream");
+        intent.putExtra(Intent.EXTRA_TITLE, fileName);
+        try {
+            pendingExportCallback = callback;
+            startActivityForResult(intent, REQUEST_CODE_EXPORT_DOCUMENT);
+            return true;
+        } catch (Exception e) {
+            pendingExportCallback = null;
+            Toast.makeText(this, "未能调起系统文件保存器: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            return false;
         }
     }
 
@@ -4871,7 +5184,7 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
-        card.setPadding(dpToPx(14), dpToPx(12), dpToPx(14), dpToPx(12));
+        card.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dpToPx(8);
@@ -4885,7 +5198,7 @@ public class MainActivity extends AppCompatActivity {
         title.setText(item.name);
         title.setTextColor(palette.text);
         title.setTextSize(14f);
-        title.setTypeface(null, Typeface.BOLD);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
         title.setLayoutParams(tLp);
         header.addView(title);
@@ -4895,18 +5208,18 @@ public class MainActivity extends AppCompatActivity {
         badge.setTextColor(palette.accent);
         badge.setTextSize(11f);
         badge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        badge.setPadding(dpToPx(6), dpToPx(2), dpToPx(6), dpToPx(2));
+        badge.setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2));
         header.addView(badge);
 
         TextView stateBadge = new TextView(this);
         stateBadge.setText(item.enabled ? "已启用" : "已停用");
         stateBadge.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
-        stateBadge.setTextSize(10.5f);
+        stateBadge.setTextSize(11f);
         stateBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        stateBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+        stateBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
         LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sbLp.leftMargin = dpToPx(6);
+        sbLp.leftMargin = dpToPx(8);
         stateBadge.setLayoutParams(sbLp);
         header.addView(stateBadge);
 
@@ -4919,12 +5232,12 @@ public class MainActivity extends AppCompatActivity {
                 vBadge.setText("v" + item.version);
                 vBadge.setTextColor(palette.textMuted);
             }
-            vBadge.setTextSize(10.5f);
+            vBadge.setTextSize(11f);
             vBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-            vBadge.setPadding(dpToPx(5), dpToPx(1), dpToPx(5), dpToPx(1));
+            vBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
             LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            vbLp.leftMargin = dpToPx(6);
+            vbLp.leftMargin = dpToPx(8);
             vBadge.setLayoutParams(vbLp);
             header.addView(vBadge);
         }
@@ -4946,7 +5259,7 @@ public class MainActivity extends AppCompatActivity {
         desc.setLineSpacing(dpToPx(2), 1f);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        dLp.topMargin = dpToPx(6);
+        dLp.topMargin = dpToPx(8);
         desc.setLayoutParams(dLp);
         card.addView(desc);
 
@@ -4962,10 +5275,10 @@ public class MainActivity extends AppCompatActivity {
         TextView btnToggle = new TextView(this);
         btnToggle.setText(item.enabled ? "🟢 启停: 开" : "⏸ 启停: 关");
         btnToggle.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E));
-        btnToggle.setTextSize(11.5f);
-        btnToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        btnToggle.setTextSize(12f);
+        btnToggle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         btnToggle.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnToggle.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnToggle.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnToggle.setOnClickListener(v -> {
             boolean nextState = !item.enabled;
             boolean ok = PluginManager.setPluginEnabled(this, item, nextState);
@@ -4985,9 +5298,9 @@ public class MainActivity extends AppCompatActivity {
         TextView btnConfig = new TextView(this);
         btnConfig.setText("⚙️ 配置/详情");
         btnConfig.setTextColor(palette.text);
-        btnConfig.setTextSize(11.5f);
+        btnConfig.setTextSize(12f);
         btnConfig.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnConfig.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnConfig.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnConfig.setOnClickListener(v -> showEditPluginConfigDialog(item));
         actions.addView(btnConfig);
 
@@ -4999,9 +5312,9 @@ public class MainActivity extends AppCompatActivity {
             TextView btnUpdate = new TextView(this);
             btnUpdate.setText(item.latestVersion.isEmpty() ? "🆙 更新插件" : ("🆙 升级至 v" + item.latestVersion));
             btnUpdate.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
-            btnUpdate.setTextSize(11.5f);
+            btnUpdate.setTextSize(12f);
             btnUpdate.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-            btnUpdate.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+            btnUpdate.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
             btnUpdate.setOnClickListener(v -> {
                 Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
                 new Thread(() -> {
@@ -5023,11 +5336,11 @@ public class MainActivity extends AppCompatActivity {
         TextView btnDelete = new TextView(this);
         btnDelete.setText("🗑️ 移除");
         btnDelete.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
-        btnDelete.setTextSize(11.5f);
+        btnDelete.setTextSize(12f);
         btnDelete.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnDelete.setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5));
+        btnDelete.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
         btnDelete.setOnClickListener(v -> {
-            new AlertDialog.Builder(this)
+            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                     .setTitle("确认移除插件")
                     .setMessage("确定要从容器中删除 " + item.name + " (" + item.getTypeName() + ") 吗？")
                     .setPositiveButton("移除", (d, w) -> {
@@ -5056,7 +5369,7 @@ public class MainActivity extends AppCompatActivity {
                 "🤖 新建 Subagent 子智能体 (.md)",
                 "📄 编辑 settings.json (全局配置)"
         };
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("添加生态配置")
                 .setItems(options, (dialog, which) -> {
                     switch (which) {
@@ -5084,7 +5397,7 @@ public class MainActivity extends AppCompatActivity {
     private void showAddMcpDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText nameInput = createDialogInput("服务名称 (如 fetch 或 mt)", false);
         final EditText cmdInput = createDialogInput("命令或 HTTP URL (如 npx, uvx, 或 http://127.0.0.1:8788/mcp)", false);
@@ -5100,7 +5413,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("环境变量 / Headers (JSON 格式):"));
         layout.addView(envInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("添加 MCP 外部服务")
                 .setView(layout)
                 .setPositiveButton("保存并生效", (dialog, which) -> {
@@ -5131,7 +5444,7 @@ public class MainActivity extends AppCompatActivity {
     private void showAddSkillDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText nameInput = createDialogInput("技能目录名 (如 code-review)", false);
         final EditText contentInput = createDialogInput("# 技能描述与流程规范\n\n## When to use\n...", true);
@@ -5142,7 +5455,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("SKILL.md Markdown 内容:"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("新建 Skill 专家技能")
                 .setView(layout)
                 .setPositiveButton("保存", (dialog, which) -> {
@@ -5167,7 +5480,7 @@ public class MainActivity extends AppCompatActivity {
     private void showEditGlobalSettingsDialog() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         String currentJson = PluginManager.getGlobalSettings(this);
         final EditText contentInput = createDialogInput("", true);
@@ -5178,7 +5491,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("编辑 ~/.pi/agent/settings.json:"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("全局 settings.json 配置")
                 .setView(layout)
                 .setPositiveButton("保存", (dialog, which) -> {
@@ -5205,7 +5518,7 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(10));
+        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
         final EditText contentInput = createDialogInput("", true);
         contentInput.setText(content);
@@ -5215,7 +5528,7 @@ public class MainActivity extends AppCompatActivity {
         layout.addView(createDialogLabel("配置/内容 (" + item.getTypeName() + "):"));
         layout.addView(contentInput);
 
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("配置: " + item.name)
                 .setView(layout)
                 .setNeutralButton("🔍 校验语法", (dialog, which) -> {
@@ -5242,10 +5555,10 @@ public class MainActivity extends AppCompatActivity {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(0xFF8B949E);
-        tv.setTextSize(11.5f);
+        tv.setTextSize(12f);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dpToPx(6);
+        lp.topMargin = dpToPx(8);
         lp.bottomMargin = dpToPx(2);
         tv.setLayoutParams(lp);
         return tv;
@@ -5258,7 +5571,7 @@ public class MainActivity extends AppCompatActivity {
         et.setHintTextColor(0xFF484F58);
         et.setTextSize(12f);
         et.setBackgroundColor(0xFF0D1117);
-        et.setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6));
+        et.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
         if (multiline) {
             et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             et.setGravity(Gravity.TOP | Gravity.START);
@@ -5319,6 +5632,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        try {
+            if (piWebWebView != null) piWebWebView.onResume();
+        } catch (Throwable ignored) {}
         initPetMonitor();
         applyPetParams();
         boolean isPetRunning = PetOverlayService.isRunning();
@@ -5359,7 +5675,8 @@ public class MainActivity extends AppCompatActivity {
         try {
             Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         } catch (Throwable ignored) {}
-
+        // 页面已销毁：丢弃尚未执行的界面回调，避免后台线程回来后操作已销毁的视图
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     // ---------------- 拖动物理手感参数设置 (8 项原生交互滑块) ----------------
@@ -5370,7 +5687,7 @@ public class MainActivity extends AppCompatActivity {
             {"空气摩擦", PetRegistry.KEY_FRICTION, 0, 100, PetRegistry.DEFAULT_FRICTION, "%"},
             {"停稳阈值", PetRegistry.KEY_STOP_SPEED, 10, 200, PetRegistry.DEFAULT_STOP_SPEED, "px/s"},
             {"聊天框宽度", PetRegistry.KEY_CARD_WIDTH, 140, 360, PetRegistry.DEFAULT_CARD_WIDTH, "dp"},
-            {"设置框宽度", PetRegistry.KEY_MENU_WIDTH, 140, 320, PetRegistry.DEFAULT_MENU_WIDTH, "dp"},
+            {"菜单大小", PetRegistry.KEY_MENU_SCALE, 150, 250, PetRegistry.DEFAULT_MENU_SCALE, "%"},
             {"窗口紧凑度", PetRegistry.KEY_CARD_SCALE, 40, 120, PetRegistry.DEFAULT_CARD_SCALE, "%"},
     };
 
@@ -5396,11 +5713,11 @@ public class MainActivity extends AppCompatActivity {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(0, dpToPx(3), 0, dpToPx(3));
+            row.setPadding(0, dpToPx(4), 0, dpToPx(4));
 
             final TextView label = new TextView(this);
             label.setText(name);
-            label.setTextSize(11.5f);
+            label.setTextSize(12f);
             label.setTextColor(palette.textMuted);
             label.setMaxLines(1);
             row.addView(label, new LinearLayout.LayoutParams(
@@ -5408,7 +5725,7 @@ public class MainActivity extends AppCompatActivity {
 
             final TextView valueText = new TextView(this);
             valueText.setText(cur + " " + unit);
-            valueText.setTextSize(11.5f);
+            valueText.setTextSize(12f);
             valueText.setTypeface(Typeface.MONOSPACE);
             valueText.setTextColor(palette.accent);
             valueText.setGravity(Gravity.END);
@@ -5461,6 +5778,10 @@ public class MainActivity extends AppCompatActivity {
                 badgeText += " (" + (effPalette.isDark ? "当前夜间" : "当前日间") + ")";
             }
             tvCurrentThemeBadge.setText(badgeText);
+            tvCurrentThemeBadge.setBackground(ThemeManager.createBadgeDrawable(this, effPalette, ThemeManager.RADIUS_PILL));
+            tvCurrentThemeBadge.setTextColor(effPalette.accent);
+            tvCurrentThemeBadge.setSingleLine(true);
+            tvCurrentThemeBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
         }
 
         updateThemeOptionRow(themeRowAuto, tvThemeTitleAuto, tvThemeCheckAuto, ThemeManager.THEME_AUTO.equals(currentPref), effPalette);
@@ -5507,6 +5828,7 @@ public class MainActivity extends AppCompatActivity {
         if (viewLaunch != null) ThemeManager.applyThemeToHierarchy(viewLaunch, palette);
         if (viewPlugins != null) ThemeManager.applyThemeToHierarchy(viewPlugins, palette);
         if (viewSettings != null) ThemeManager.applyThemeToHierarchy(viewSettings, palette);
+        if (storageCleanPanel != null) storageCleanPanel.rerender();
         if (viewSettingsSubWindow != null) ThemeManager.applyThemeToHierarchy(viewSettingsSubWindow, palette);
 
         if (bottomNavBar != null) {
@@ -5527,6 +5849,7 @@ public class MainActivity extends AppCompatActivity {
             tabSettingsText.setTextColor(((viewSettings != null && viewSettings.getVisibility() == View.VISIBLE)
                     || (viewSettingsSubWindow != null && viewSettingsSubWindow.getVisibility() == View.VISIBLE)) ? activeTabColor : normalTabColor);
         }
+        syncTabIconColors();
 
         View headerView = findViewById(R.id.viewSettingsSubHeader);
         if (headerView != null) {
@@ -5593,6 +5916,10 @@ public class MainActivity extends AppCompatActivity {
         if (piWebWebView != null) {
             ThemeManager.syncThemeToWebView(piWebWebView, this);
         }
+
+        // 外观页选项卡与当前主题徽章：必须在整树递归着色之后按当前选择重绘，
+        // 否则首次进入外观页时会残留布局 XML 中的深色默认底与「深色 (Dark)」占位徽章。
+        updateThemeUIState();
     }
 
     @Override
@@ -5620,7 +5947,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void confirmAndImportBackupUri(Uri uri) {
-        new AlertDialog.Builder(this)
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("⚠️ 确认无损还原备份包？")
                 .setMessage("即将从所选外部文件无损恢复全部数据与配置。\n包含聊天记忆、子代理、插件生态、端口及应用偏好。\n是否继续？")
                 .setPositiveButton("立即还原", (d, w) -> {
@@ -5631,7 +5958,7 @@ public class MainActivity extends AppCompatActivity {
                         holder.tvDetail.setText(logLine);
                     }, (success, restoredCount, msg) -> {
                         holder.dialog.dismiss();
-                        new AlertDialog.Builder(this)
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                                 .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
                                 .setMessage(msg)
                                 .setPositiveButton("确定", null)
@@ -5650,7 +5977,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private BackupProgressHolder showBackupProgressDialog(String title) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(0xFF0D1117);
@@ -5660,8 +5987,8 @@ public class MainActivity extends AppCompatActivity {
         TextView tvTitle = new TextView(this);
         tvTitle.setText(title);
         tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvStage = new TextView(this);
@@ -5682,7 +6009,7 @@ public class MainActivity extends AppCompatActivity {
         TextView tvDetail = new TextView(this);
         tvDetail.setText("");
         tvDetail.setTextColor(0xFF8B949E);
-        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvDetail.setTypeface(Typeface.MONOSPACE);
         tvDetail.setSingleLine(true);
         tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);

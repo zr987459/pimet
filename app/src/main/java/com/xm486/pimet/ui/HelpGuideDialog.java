@@ -72,10 +72,10 @@ public class HelpGuideDialog {
 
         try {
             this.palette = ThemeManager.getEffectivePalette(context);
-            AlertDialog.Builder builder = new AlertDialog.Builder(context);
+            AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
             LinearLayout root = new LinearLayout(context);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(14), dp(12), dp(14), dp(12));
+            root.setPadding(dp(16), dp(12), dp(16), dp(12));
 
             GradientDrawable rootBg = new GradientDrawable();
             rootBg.setColor(palette.bgPanel);
@@ -94,15 +94,15 @@ public class HelpGuideDialog {
             TextView tvTitle = new TextView(context);
             tvTitle.setText("📖 PiMet 全功能使用与操作手册");
             tvTitle.setTextColor(palette.text);
-            tvTitle.setTextSize(14.5f);
-            tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+            tvTitle.setTextSize(14f);
+            tvTitle.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             titleCol.addView(tvTitle);
 
             TextView tvSub = new TextView(context);
             tvSub.setText("桌宠插话 · 手机控制 · 工作台与终端 · 插件启停 · 备份自愈");
             tvSub.setTextColor(palette.textMuted);
-            tvSub.setTextSize(10f);
-            tvSub.setPadding(0, dp(1), 0, 0);
+            tvSub.setTextSize(11f);
+            tvSub.setPadding(0, dp(2), 0, 0);
             titleCol.addView(tvSub);
 
             header.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -141,7 +141,7 @@ public class HelpGuideDialog {
 
             contentContainer = new LinearLayout(context);
             contentContainer.setOrientation(LinearLayout.VERTICAL);
-            contentContainer.setPadding(0, dp(4), 0, dp(6));
+            contentContainer.setPadding(0, dp(4), 0, dp(8));
             scroll.addView(contentContainer);
 
             LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
@@ -194,12 +194,12 @@ public class HelpGuideDialog {
         TextView tab = new TextView(context);
         tab.setText(title);
         tab.setTextSize(11f);
-        tab.setTypeface(Typeface.DEFAULT_BOLD);
-        tab.setPadding(dp(10), dp(5), dp(10), dp(5));
+        tab.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        tab.setPadding(dp(12), dp(4), dp(12), dp(4));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = dp(6);
+        lp.rightMargin = dp(8);
         tab.setLayoutParams(lp);
 
         tab.setOnClickListener(v -> switchTab(tabIndex));
@@ -273,7 +273,7 @@ public class HelpGuideDialog {
         // 按钮行：探测主工作区会话
         LinearLayout btnRow = new LinearLayout(context);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setPadding(0, dp(6), 0, dp(4));
+        btnRow.setPadding(0, dp(8), 0, dp(4));
 
         Button testSessionBtn = createActionButton("🔍 探测主工作区活跃会话", palette.accent, v -> {
             String activeId = PetMemoryManager.getActiveMainSessionId(context);
@@ -296,7 +296,8 @@ public class HelpGuideDialog {
 
         addSectionHeader("1. 前置授权与关键防杀保活设置");
         boolean isRunning = PiMetAccessibilityService.isRunning();
-        addBulletPoint("无障碍辅助权限", isRunning ? "🟢 已授权并正常运行" : "🔴 尚未开启（点击下方按钮前往授权）");
+        addBulletPoint("无障碍辅助权限", PiMetAccessibilityService.describeState(context));
+        addBulletPoint("开关是灰色的？", "Android 13 起，非应用商店安装的应用需先到「应用信息」右上角 ⋮ →「允许受限制的设置」，再回到无障碍开启「PiMet 手机自动化」。");
         addBulletPoint("厂商系统防杀保活（极其关键）", "小米/华为/OPPO/vivo等系统常自动关闭无障碍服务。请务必在系统设置中将 PiMet 设为「电池无限制 / 允许自启动」，并在手机多任务界面将 PiMet 卡片加锁！");
 
         addSectionHeader("2. 自然语言操作手机指令示例");
@@ -308,16 +309,16 @@ public class HelpGuideDialog {
                        "• ! 返回桌面 / ! 返回上一页 / ! 截图 (物理系统键模拟)");
 
         addSectionHeader("3. AI 智能体 Agent 工具联动");
-        addBulletPoint("phone_control 工具", "主工作区 Agent 内置了 phone_control 专用工具，能够自主调用 inspect、tap、swipe、input、key 完成复杂多步的手机跨 App 操作。");
+        addBulletPoint("phone_control 工具", "Pi-Web Agent 内置 phone_control 工具：inspect 读屏、find 查找、tap / long_press 按文字或坐标点击、swipe / scroll 翻页、input 输入（可回车提交）、key 系统按键、launch 打开应用、screenshot 截图（Android 11+）、wait_for 等待元素出现。失败时会返回具体原因。");
 
         // 快捷授权按钮
         LinearLayout btnRow = new LinearLayout(context);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setPadding(0, dp(6), 0, dp(4));
+        btnRow.setPadding(0, dp(8), 0, dp(4));
 
         Button authBtn = createActionButton(isRunning ? "⚙️ 打开系统无障碍设置" : "🚀 去开启手机自动化无障碍服务", palette.accent, v -> {
             PiMetAccessibilityService.openAccessibilitySettings(context);
-            Toast.makeText(context, "请在已安装的服务中找到「PiMet 手机自动化服务」并开启", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "在「已下载的应用」中找到「PiMet 手机自动化」并开启", Toast.LENGTH_LONG).show();
         });
         btnRow.addView(authBtn);
         contentContainer.addView(btnRow);
@@ -380,7 +381,7 @@ public class HelpGuideDialog {
 
         addSectionHeader("1. 常见故障排查");
         addBulletPoint("Q: 插话提示「暂无活跃主工作区会话」？", "A: 说明 Web 工作台暂无正在执行的会话，请先进入 Pi-Web 工作台发送一条消息开启任务，桌宠即可自动感知并绑定。");
-        addBulletPoint("Q: 手机自动化点击无效或断开？", "A: 确认已开启「PiMet 手机自动化服务」，且在系统电池优化中将 PiMet 设为「无限制」，并在任务列表锁定。");
+        addBulletPoint("Q: 手机自动化点击无效或断开？", "A: 确认无障碍里「PiMet 手机自动化」已开启且设置页显示「已连接」（显示未连接就关掉重开），且在系统电池优化中将 PiMet 设为「无限制」，并在任务列表锁定。");
         addBulletPoint("Q: 提示端口冲突无法启动？", "A: 可能是旧进程残留或端口被占，在主页切换到「详细日志」查看具体端口，进入「设置 -> 端口管理」修改端口后重启。");
         addBulletPoint("Q: 桌宠不见了？", "A: 主页点击「桌宠开关」重新开启；确保已授权「显示在其他应用上层」悬浮窗权限。");
 
@@ -400,8 +401,8 @@ public class HelpGuideDialog {
         tv.setText(title);
         tv.setTextColor(palette.accent);
         tv.setTextSize(13f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(0, dp(2), 0, dp(1));
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        tv.setPadding(0, dp(2), 0, dp(2));
         contentContainer.addView(tv);
     }
 
@@ -409,7 +410,7 @@ public class HelpGuideDialog {
         TextView tv = new TextView(context);
         tv.setText(desc);
         tv.setTextColor(palette.textMuted);
-        tv.setTextSize(10f);
+        tv.setTextSize(11f);
         tv.setPadding(0, 0, 0, dp(8));
         contentContainer.addView(tv);
     }
@@ -418,9 +419,9 @@ public class HelpGuideDialog {
         TextView tv = new TextView(context);
         tv.setText(header);
         tv.setTextColor(palette.text);
-        tv.setTextSize(11.5f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(0, dp(6), 0, dp(2));
+        tv.setTextSize(12f);
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        tv.setPadding(0, dp(8), 0, dp(2));
         contentContainer.addView(tv);
     }
 
@@ -432,15 +433,15 @@ public class HelpGuideDialog {
         TextView tvLabel = new TextView(context);
         tvLabel.setText("• " + label);
         tvLabel.setTextColor(palette.isDark ? 0xFF79C0FF : 0xFF0969DA);
-        tvLabel.setTextSize(10.5f);
-        tvLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvLabel.setTextSize(11f);
+        tvLabel.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         row.addView(tvLabel);
 
         TextView tvDetail = new TextView(context);
         tvDetail.setText(detail);
         tvDetail.setTextColor(palette.text);
-        tvDetail.setTextSize(10f);
-        tvDetail.setPadding(dp(8), dp(1), 0, 0);
+        tvDetail.setTextSize(11f);
+        tvDetail.setPadding(dp(8), dp(2), 0, 0);
         row.addView(tvDetail);
 
         contentContainer.addView(row);
@@ -452,7 +453,7 @@ public class HelpGuideDialog {
         tv.setTextColor(palette.isDark ? 0xFF7EE787 : 0xFF1A7F37);
         tv.setTextSize(9.5f);
         tv.setTypeface(Typeface.MONOSPACE);
-        tv.setPadding(dp(8), dp(6), dp(8), dp(6));
+        tv.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(palette.bgSunken);
@@ -462,7 +463,7 @@ public class HelpGuideDialog {
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(3);
+        lp.topMargin = dp(4);
         lp.bottomMargin = dp(4);
         tv.setLayoutParams(lp);
 
@@ -473,8 +474,8 @@ public class HelpGuideDialog {
         Button btn = new Button(context);
         btn.setText(text);
         btn.setTextColor(palette.accentContrast);
-        btn.setTextSize(10.5f);
-        btn.setTypeface(Typeface.DEFAULT_BOLD);
+        btn.setTextSize(11f);
+        btn.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         btn.setPadding(dp(12), dp(4), dp(12), dp(4));
         btn.setMinHeight(dp(30));
         btn.setMinimumHeight(dp(30));

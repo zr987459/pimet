@@ -22,6 +22,11 @@
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
+        <!-- 手机自动化 launch：按应用名查找可启动的应用 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application
@@ -29,6 +34,7 @@
         android:allowBackup="true"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
@@ -107,6 +113,7 @@
         <!-- 原生无障碍自动化服务 (供大模型/桌宠操控手机) -->
         <service
             android:name=".automation.PiMetAccessibilityService"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
             <intent-filter>

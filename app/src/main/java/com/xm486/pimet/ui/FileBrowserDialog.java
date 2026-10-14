@@ -37,6 +37,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.BackupManager;
+import com.xm486.pimet.ThemeManager;
 import com.xm486.pimet.proot.ProotManager;
 
 import java.io.BufferedReader;
@@ -51,6 +52,11 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 内部全量文件浏览器弹窗 (FileBrowserDialog)
@@ -71,6 +77,7 @@ public class FileBrowserDialog {
     private ListView listView;
     private FileAdapter adapter;
     private final List<FileItem> fileItems = new ArrayList<>();
+    private final ThemeManager.ThemePalette pal;
 
     public static class FileItem {
         public final File file;
@@ -81,6 +88,10 @@ public class FileBrowserDialog {
         public final long size;
         public final long lastModified;
         public final int childCount;
+        /** 目录递归占用（字节），-1 = 计算中。 */
+        public volatile long dirSize = -1;
+        /** 分类（CAT_*）。 */
+        public int category = 6;
 
         public FileItem(File file, File rootfs) {
             this.file = file;
@@ -143,6 +154,7 @@ public class FileBrowserDialog {
 
     public FileBrowserDialog(Context context) {
         this.context = context;
+        this.pal = ThemeManager.getEffectivePalette(context);
         File rootfs = ProotManager.getRootfsDir(context);
         if (rootfs != null && rootfs.exists()) {
             this.rootDir = rootfs;
@@ -158,53 +170,260 @@ public class FileBrowserDialog {
         return (int) (v * context.getResources().getDisplayMetrics().density + 0.5f);
     }
 
+    // =========================================================================
+    // 分类规则（按本应用实际使用的容器路径）
+    // =========================================================================
+
+    public static final int CAT_DEP = 0, CAT_PLUGIN = 1, CAT_CHAT = 2, CAT_PROGRAM = 3,
+            CAT_CONFIG = 4, CAT_PROJECT = 5, CAT_OTHER = 6;
+    public static final String[] CAT_NAMES = {"依赖", "插件", "聊天/会话", "程序", "配置", "项目", "其他"};
+    private static final String[] CAT_ICONS = {"📦", "🧩", "💬", "🚀", "⚙", "📝", "📁"};
+
+    private static final String[] DEP_SEGMENTS = {
+            "node_modules", ".npm", ".cache", ".gradle", ".pnpm-store", ".yarn", ".m2", ".cargo",
+            ".rustup", "__pycache__", "site-packages", "dist-packages", ".android", ".node-gyp",
+            ".bun", ".deno", ".pnpm", ".npm-global", ".nvm"
+    };
+
+    /**
+     * 按路径判断类别。rel 为相对容器根的路径（如 /root/.pi/agent/npm），不在容器内时为 null（仅按名称判断）。
+     * 规则依据：PiWebManager（usr/local/lib/node_modules/@agegr/pi-web、usr/local/bin）、
+     * PluginManager（.pi/agent/npm|extensions|skills）、PetMemoryManager（.pi/agent/sessions、pet_memory.json、
+     * pi-web-session-*.json）、BackupManager（root/pi-cwd 工作区、custom_pets）。
+     */
+    public static int categorize(String rel, String name, boolean isDir) {
+        String n = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        String p = rel == null ? null : rel.toLowerCase(Locale.ROOT);
+        if (p != null && !p.startsWith("/")) p = "/" + p;
+
+        // 1. 程序本体：pi-web 应用包（位于 node_modules 内，需先于依赖判断）
+        if (p != null && p.contains("/node_modules/@agegr/pi-web")) return CAT_PROGRAM;
+        if (p != null && p.contains("/node_modules/@agegr") && n.equals("@agegr")) return CAT_PROGRAM;
+
+        // 2. 插件：pi 代理插件/扩展/技能、自定义桌宠皮肤
+        if (p != null && (p.startsWith("/root/.pi/agent/npm") || p.startsWith("/root/.pi/agent/extensions")
+                || p.startsWith("/root/.pi/agent/skills") || p.contains("/plugins") || p.contains("/custom_pets"))) {
+            return CAT_PLUGIN;
+        }
+        if (n.equals("plugins") || n.equals("extensions") || n.equals("custom_pets") || n.equals("skills")) return CAT_PLUGIN;
+
+        // 3. 聊天/会话：会话记录、桌宠记忆、pi-web 会话索引与状态
+        if (p != null && p.contains("/sessions")) return CAT_CHAT;
+        if (n.equals("sessions") || n.contains("session") || n.contains("chat") || n.contains("conversation")
+                || n.contains("memory") || n.endsWith(".jsonl")) {
+            return CAT_CHAT;
+        }
+
+        // 4. 依赖：包管理器缓存与第三方模块
+        if (p != null) {
+            for (String seg : DEP_SEGMENTS) {
+                if (p.contains("/" + seg + "/") || p.endsWith("/" + seg)) return CAT_DEP;
+            }
+            if (p.startsWith("/var/cache") || p.startsWith("/var/lib/apt") || p.startsWith("/var/lib/dpkg")
+                    || p.startsWith("/usr/include") || p.startsWith("/usr/lib/python")) {
+                return CAT_DEP;
+            }
+        } else {
+            for (String seg : DEP_SEGMENTS) {
+                if (n.equals(seg)) return CAT_DEP;
+            }
+        }
+
+        // 5. 项目：用户工作区代码
+        if (p != null && (p.startsWith("/root/pi-cwd") || p.startsWith("/root/shared"))) return CAT_PROJECT;
+        if (n.equals("pi-cwd")) return CAT_PROJECT;
+
+        // 6. 程序：系统与运行时（rootfs 核心、二进制、.local/bin）
+        if (p != null && (p.equals("/usr") || p.startsWith("/usr/") || p.equals("/bin") || p.startsWith("/bin/")
+                || p.equals("/sbin") || p.startsWith("/sbin/") || p.equals("/lib") || p.startsWith("/lib/")
+                || p.startsWith("/lib64") || p.startsWith("/libx32") || p.startsWith("/lib32")
+                || p.startsWith("/opt") || p.startsWith("/boot") || p.startsWith("/root/.local"))) {
+            return CAT_PROGRAM;
+        }
+
+        // 7. 配置：/etc、.config、pi 代理设置、点文件与配置类文件
+        if (p != null && (p.equals("/etc") || p.startsWith("/etc/") || p.startsWith("/root/.config")
+                || p.startsWith("/root/.pi"))) {
+            return CAT_CONFIG;
+        }
+        String ext = getFileExt(n);
+        if (n.startsWith(".") && !n.endsWith(".log")) return CAT_CONFIG;
+        if (!isDir && (ext.equals("json") || ext.equals("yaml") || ext.equals("yml") || ext.equals("toml")
+                || ext.equals("ini") || ext.equals("conf") || ext.equals("cfg") || ext.equals("rc")
+                || ext.equals("properties") || ext.equals("env"))) {
+            return CAT_CONFIG;
+        }
+        return CAT_OTHER;
+    }
+
+    private String relPath(File f) {
+        File rootfs = ProotManager.getRootfsDir(context);
+        if (rootfs == null || f == null) return null;
+        String rp = rootfs.getAbsolutePath();
+        String ap = f.getAbsolutePath();
+        if (ap.equals(rp)) return "/";
+        if (ap.startsWith(rp + "/")) return ap.substring(rp.length());
+        return null;
+    }
+
+    // =========================================================================
+    // 目录大小（du 磁盘占用，与首页「存储占用」同一算法；不跟随符号链接）
+    // =========================================================================
+
+    private static final long SIZE_TTL_MS = 5 * 60 * 1000L;
+    private static final Map<String, long[]> SIZE_CACHE = new ConcurrentHashMap<>();
+    private final ExecutorService sizeExecutor = Executors.newSingleThreadExecutor();
+    private int loadGeneration = 0;
+
+    private static Long cachedSize(String path) {
+        long[] v = SIZE_CACHE.get(path);
+        if (v == null) return null;
+        if (System.currentTimeMillis() - v[1] > SIZE_TTL_MS) {
+            SIZE_CACHE.remove(path);
+            return null;
+        }
+        return v[0];
+    }
+
+    private static void putSize(String path, long size) {
+        SIZE_CACHE.put(path, new long[]{size, System.currentTimeMillis()});
+    }
+
+    /** 一次 `du -k -d 1 dir` 得到当前目录总占用和每个直接子目录占用（KB×1024，不跟随符号链接）。 */
+    private static Map<String, Long> duDepth1(File dir) {
+        Map<String, Long> out = new HashMap<>();
+        Process process = null;
+        try {
+            ProcessBuilder pb = new ProcessBuilder("du", "-k", "-d", "1", dir.getAbsolutePath());
+            pb.redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")));
+            process = pb.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    int tab = line.indexOf('\t');
+                    if (tab <= 0) continue;
+                    try {
+                        long kb = Long.parseLong(line.substring(0, tab).trim());
+                        String path = line.substring(tab + 1).trim();
+                        while (path.length() > 1 && path.endsWith("/")) path = path.substring(0, path.length() - 1);
+                        out.put(path, kb * 1024L);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+            process.waitFor();
+        } catch (Throwable ignored) {
+        } finally {
+            if (process != null) {
+                try { process.destroy(); } catch (Throwable ignored) {}
+            }
+        }
+        return out;
+    }
+
+    /** 后台计算各子目录与当前目录的递归占用（带缓存），完成后刷新列表与分类汇总。 */
+    private void computeSizes(final int gen, final File dir, final List<FileItem> items, boolean force) {
+        final String dirPath = dir.getAbsolutePath();
+        sizeExecutor.execute(() -> {
+            Map<String, Long> du = null;
+            boolean need = force || cachedSize(dirPath) == null;
+            if (!need) {
+                for (FileItem it : items) {
+                    if (it.isDirectory && !it.isSymlink && cachedSize(it.file.getAbsolutePath()) == null) {
+                        need = true;
+                        break;
+                    }
+                }
+            }
+            if (need) {
+                du = duDepth1(dir);
+                for (Map.Entry<String, Long> e : du.entrySet()) putSize(e.getKey(), e.getValue());
+            }
+            long sumChildren = 0;
+            for (FileItem it : items) {
+                if (gen != loadGeneration) return;
+                if (it.isDirectory && !it.isSymlink) {
+                    String path = it.file.getAbsolutePath();
+                    Long s = cachedSize(path);
+                    if (s == null) {
+                        // du 不可用或无权限：退回到安全递归计算（不跟随符号链接）
+                        s = ProotManager.getDirectorySize(it.file);
+                        putSize(path, s);
+                    }
+                    it.dirSize = s;
+                    sumChildren += s;
+                } else if (!it.isDirectory) {
+                    sumChildren += it.size;
+                }
+            }
+            Long total = cachedSize(dirPath);
+            if (total == null || total <= 0) {
+                total = sumChildren;
+                putSize(dirPath, total);
+            }
+            final long fTotal = total;
+            mainHandler.post(() -> {
+                if (gen != loadGeneration) return;
+                currentTotalSize = fTotal;
+                sortItems(allItems);
+                applyFilter();
+            });
+        });
+    }
+
+    // =========================================================================
+    // 主界面
+    // =========================================================================
+
+    private final List<FileItem> allItems = new ArrayList<>();
+    private int activeCategory = -1; // -1 = 全部
+    private long currentTotalSize = -1;
+    private LinearLayout categoryBar;
+
     public void show() {
         if (dialog != null && dialog.isShowing()) return;
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
-        root.setPadding(dp(12), dp(12), dp(12), dp(12));
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
+        root.setPadding(dp(14), dp(14), dp(14), dp(12));
 
-        // ---- 1. 顶栏：标题 + 上级 + 刷新 + 关闭 ----
-        LinearLayout header = new LinearLayout(context);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-
+        // ---- 1. 标题独占一行 ----
         TextView tvTitle = new TextView(context);
         tvTitle.setText("📁 内部文件浏览器");
-        tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        header.addView(tvTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tvTitle.setTextColor(pal.text);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        tvTitle.setSingleLine(true);
+        tvTitle.setEllipsize(TextUtils.TruncateAt.END);
+        root.addView(tvTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView btnUp = buildActionBtn("⬆️ 上级", 0x223B82F6, 0xFF93C5FD, v -> navigateUp());
-        header.addView(btnUp);
-
-        View spaceH1 = new View(context);
-        header.addView(spaceH1, new LinearLayout.LayoutParams(dp(6), 1));
-
-        TextView btnRefresh = buildActionBtn("🔄 刷新", 0x2210B981, 0xFFA7F3D0, v -> refresh());
-        header.addView(btnRefresh);
-
-        View spaceH2 = new View(context);
-        header.addView(spaceH2, new LinearLayout.LayoutParams(dp(6), 1));
-
-        TextView btnBackup = buildActionBtn("📦 迁移备份", 0x228B5CF6, 0xFFC4B5FD, v -> showBackupMigrationDialog());
-        header.addView(btnBackup);
-
-        View spaceH3 = new View(context);
-        header.addView(spaceH3, new LinearLayout.LayoutParams(dp(6), 1));
-
-        TextView btnClose = buildActionBtn("✕ 关闭", 0x22EF4444, 0xFFFCA5A5, v -> {
+        // ---- 2. 操作按钮行（等宽、单行） ----
+        LinearLayout actions = new LinearLayout(context);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        TextView btnUp = buildActionBtn("⬆ 上级", 0, 0, v -> navigateUp());
+        TextView btnRefresh = buildActionBtn("🔄 刷新", 0, 0, v -> refresh());
+        TextView btnBackup = buildActionBtn("📦 迁移备份", 0, 0, v -> showBackupMigrationDialog());
+        TextView btnClose = buildActionBtn("✕ 关闭", 0, COLOR_DANGER_HINT, v -> {
             if (dialog != null) dialog.dismiss();
         });
-        header.addView(btnClose);
+        TextView[] acts = {btnUp, btnRefresh, btnBackup, btnClose};
+        for (int i = 0; i < acts.length; i++) {
+            acts[i].setGravity(Gravity.CENTER);
+            acts[i].setPadding(dp(4), dp(8), dp(4), dp(8));
+            LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    i == 2 ? 1.3f : 1f);
+            if (i > 0) alp.leftMargin = dp(6);
+            actions.addView(acts[i], alp);
+        }
+        LinearLayout.LayoutParams actLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        actLp.topMargin = dp(10);
+        root.addView(actions, actLp);
 
-        root.addView(header);
-
-        // ---- 2. 快捷路径芯片横条 ----
+        // ---- 3. 快捷路径芯片横条 ----
         HorizontalScrollView hsv = new HorizontalScrollView(context);
         hsv.setHorizontalScrollBarEnabled(false);
         LinearLayout shortcutBar = new LinearLayout(context);
@@ -255,18 +474,14 @@ public class FileBrowserDialog {
         hsv.addView(shortcutBar);
         root.addView(hsv);
 
-        // ---- 3. 当前路径导航指示与摘要卡片 ----
+        // ---- 4. 当前路径与摘要卡片 ----
         LinearLayout pathCard = new LinearLayout(context);
         pathCard.setOrientation(LinearLayout.VERTICAL);
-        pathCard.setPadding(dp(10), dp(8), dp(10), dp(8));
-        GradientDrawable pcd = new GradientDrawable();
-        pcd.setColor(0xFF161B22);
-        pcd.setCornerRadius(dp(6));
-        pcd.setStroke(dp(1), 0xFF30363D);
-        pathCard.setBackground(pcd);
+        pathCard.setPadding(dp(12), dp(8), dp(12), dp(8));
+        pathCard.setBackground(ThemeManager.createSunkenDrawable(context, pal, 8f));
 
         tvCurrentPath = new TextView(context);
-        tvCurrentPath.setTextColor(0xFF58A6FF);
+        tvCurrentPath.setTextColor(pal.accent);
         tvCurrentPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvCurrentPath.setTypeface(Typeface.MONOSPACE);
         tvCurrentPath.setSingleLine(false);
@@ -282,18 +497,26 @@ public class FileBrowserDialog {
         pathCard.addView(tvCurrentPath);
 
         tvPathSummary = new TextView(context);
-        tvPathSummary.setTextColor(0xFF8B949E);
-        tvPathSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-        tvPathSummary.setPadding(0, dp(3), 0, 0);
+        tvPathSummary.setTextColor(pal.textMuted);
+        tvPathSummary.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tvPathSummary.setPadding(0, dp(4), 0, 0);
         pathCard.addView(tvPathSummary);
 
         LinearLayout.LayoutParams pcLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         pcLp.topMargin = dp(2);
-        pcLp.bottomMargin = dp(8);
         root.addView(pathCard, pcLp);
 
-        // ---- 4. 文件列表 ListView ----
+        // ---- 5. 分类汇总（点按筛选） ----
+        HorizontalScrollView catScroll = new HorizontalScrollView(context);
+        catScroll.setHorizontalScrollBarEnabled(false);
+        categoryBar = new LinearLayout(context);
+        categoryBar.setOrientation(LinearLayout.HORIZONTAL);
+        categoryBar.setPadding(0, dp(8), 0, dp(8));
+        catScroll.addView(categoryBar);
+        root.addView(catScroll);
+
+        // ---- 6. 文件列表 ----
         listView = new ListView(context);
         listView.setDivider(null);
         listView.setDividerHeight(dp(4));
@@ -302,6 +525,7 @@ public class FileBrowserDialog {
         listView.setAdapter(adapter);
 
         listView.setOnItemClickListener((parent, view, position, id) -> {
+            if (position < 0 || position >= fileItems.size()) return;
             FileItem item = fileItems.get(position);
             if (item.isDirectory) {
                 navigateTo(item.resolvedTarget != null ? item.resolvedTarget : item.file);
@@ -326,17 +550,19 @@ public class FileBrowserDialog {
         builder.setView(root);
         dialog = builder.create();
         dialog.setCanceledOnTouchOutside(true);
-
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawableResource(android.R.color.transparent);
-            WindowManager.LayoutParams lp = window.getAttributes();
-            lp.width = (int) (context.getResources().getDisplayMetrics().widthPixels * 0.94f);
-            lp.height = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.86f);
-            window.setAttributes(lp);
-        }
+        dialog.setOnDismissListener(d -> {
+            loadGeneration++;
+            sizeExecutor.shutdownNow();
+        });
 
         dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            // 在 show() 之后设置窗口尺寸，避免被 AlertDialog 默认宽度覆盖
+            window.setBackgroundDrawableResource(android.R.color.transparent);
+            android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+            window.setLayout((int) (dm.widthPixels * 0.96f), (int) (dm.heightPixels * 0.88f));
+        }
         loadCurrentDir();
     }
 
@@ -348,11 +574,13 @@ public class FileBrowserDialog {
         File target = resolveSymlink(rootDir, dir);
         if (target != null && target.exists() && target.isDirectory()) {
             this.currentDir = target;
+            activeCategory = -1;
             loadCurrentDir();
             return;
         }
         if (dir.exists() && dir.isDirectory()) {
             this.currentDir = dir;
+            activeCategory = -1;
             loadCurrentDir();
             return;
         }
@@ -364,6 +592,7 @@ public class FileBrowserDialog {
             File parent = currentDir.getParentFile();
             if (parent != null && parent.exists()) {
                 currentDir = parent;
+                activeCategory = -1;
                 loadCurrentDir();
             } else {
                 Toast.makeText(context, "已是根目录", Toast.LENGTH_SHORT).show();
@@ -372,90 +601,172 @@ public class FileBrowserDialog {
     }
 
     private void refresh() {
-        loadCurrentDir();
+        loadCurrentDir(true);
     }
 
     private void loadCurrentDir() {
+        loadCurrentDir(false);
+    }
+
+    private void loadCurrentDir(boolean force) {
         if (currentDir == null) return;
+        final int gen = ++loadGeneration;
+        final File dir = currentDir;
 
-        // 计算相对根路径的友好显示名
-        String displayPath;
-        File rootfs = ProotManager.getRootfsDir(context);
-        if (rootfs != null && currentDir.getAbsolutePath().startsWith(rootfs.getAbsolutePath())) {
-            String sub = currentDir.getAbsolutePath().substring(rootfs.getAbsolutePath().length());
-            displayPath = sub.isEmpty() ? "/" : sub;
-        } else {
-            displayPath = currentDir.getAbsolutePath();
-        }
-
+        String displayPath = relPath(dir);
+        if (displayPath == null) displayPath = dir.getAbsolutePath();
         if (tvCurrentPath != null) {
             tvCurrentPath.setText("路径: " + displayPath);
         }
+        currentTotalSize = -1;
 
         new Thread(() -> {
-            File[] files = currentDir.listFiles();
+            File[] files = dir.listFiles();
             List<FileItem> list = new ArrayList<>();
-            long dirTotalSize = 0;
-            int dirCount = 0;
-            int fileCount = 0;
-
             if (files != null) {
-                // 排序：文件夹优先，接着按名称不区分大小写升序
-                Arrays.sort(files, (f1, f2) -> {
-                    if (f1.isDirectory() && !f2.isDirectory()) return -1;
-                    if (!f1.isDirectory() && f2.isDirectory()) return 1;
-                    return f1.getName().compareToIgnoreCase(f2.getName());
-                });
-
                 for (File f : files) {
                     FileItem item = new FileItem(f, rootDir);
-                    list.add(item);
-                    if (item.isDirectory) {
-                        dirCount++;
-                    } else {
-                        fileCount++;
+                    item.category = categorize(relPath(f), item.name, item.isDirectory);
+                    if (item.isDirectory && !item.isSymlink && !force) {
+                        Long c = cachedSize(f.getAbsolutePath());
+                        if (c != null) item.dirSize = c;
                     }
-                    dirTotalSize += item.size;
+                    list.add(item);
                 }
             }
-
-            final int fDirCount = dirCount;
-            final int fFileCount = fileCount;
-            final long fTotalSize = dirTotalSize;
-
+            sortItems(list);
             mainHandler.post(() -> {
-                fileItems.clear();
-                fileItems.addAll(list);
-                if (adapter != null) adapter.notifyDataSetChanged();
-                if (tvPathSummary != null) {
-                    if (fFileCount == 0 && fDirCount > 0) {
-                        tvPathSummary.setText(String.format(Locale.getDefault(),
-                                "📊 %d 个目录 · 0 个直接文件 · (长按项目可查看深度属性与递归大小)",
-                                fDirCount));
-                    } else {
-                        tvPathSummary.setText(String.format(Locale.getDefault(),
-                                "📊 %d 个目录 · %d 个文件 · 直接文件共 %s · (长按项目可查看详情)",
-                                fDirCount, fFileCount, formatSize(fTotalSize)));
-                    }
+                if (gen != loadGeneration) return;
+                allItems.clear();
+                allItems.addAll(list);
+                if (!force) {
+                    Long cachedTotal = cachedSize(dir.getAbsolutePath());
+                    if (cachedTotal != null) currentTotalSize = cachedTotal;
                 }
+                applyFilter();
                 if (list.isEmpty()) {
-                    Toast.makeText(context, "当前目录为空", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(context, files == null ? "无权限读取此目录" : "当前目录为空", Toast.LENGTH_SHORT).show();
                 }
             });
+            if (!list.isEmpty() && !sizeExecutor.isShutdown()) {
+                try {
+                    computeSizes(gen, dir, list, force);
+                } catch (Throwable ignored) {}
+            } else if (list.isEmpty()) {
+                mainHandler.post(() -> {
+                    if (gen != loadGeneration) return;
+                    currentTotalSize = 0;
+                    applyFilter();
+                });
+            }
         }).start();
     }
+
+    /** 已知大小（文件长度 / 目录递归占用），未知返回 -1。 */
+    private static long itemSize(FileItem it) {
+        if (!it.isDirectory) return it.size;
+        if (it.isSymlink) return 0;
+        return it.dirSize;
+    }
+
+    /** 排序：按类别，再按大小降序（未计算完的目录排在后面并按名称）。 */
+    private static void sortItems(List<FileItem> list) {
+        Collections.sort(list, (a, b) -> {
+            if (a.category != b.category) return Integer.compare(a.category, b.category);
+            long sa = itemSize(a), sb = itemSize(b);
+            if (sa >= 0 && sb >= 0 && sa != sb) return Long.compare(sb, sa);
+            if (sa >= 0 && sb < 0) return -1;
+            if (sa < 0 && sb >= 0) return 1;
+            return a.name.compareToIgnoreCase(b.name);
+        });
+    }
+
+    /** 按当前选中的类别筛选列表，并刷新摘要与分类汇总条。 */
+    private void applyFilter() {
+        fileItems.clear();
+        int dirCount = 0, fileCount = 0;
+        long[] catSize = new long[CAT_NAMES.length];
+        int[] catCount = new int[CAT_NAMES.length];
+        boolean pending = false;
+        for (FileItem it : allItems) {
+            if (it.isDirectory) dirCount++; else fileCount++;
+            catCount[it.category]++;
+            long s = itemSize(it);
+            if (s < 0) pending = true; else catSize[it.category] += s;
+            if (activeCategory < 0 || it.category == activeCategory) fileItems.add(it);
+        }
+        if (adapter != null) adapter.notifyDataSetChanged();
+
+        if (tvPathSummary != null) {
+            String total = currentTotalSize >= 0 ? formatSize(currentTotalSize) : "计算中…";
+            tvPathSummary.setText(String.format(Locale.getDefault(),
+                    "📊 %d 个目录 · %d 个文件 · 共 %s（含子目录，长按项目看详情）", dirCount, fileCount, total));
+        }
+
+        if (categoryBar != null) {
+            categoryBar.removeAllViews();
+            categoryBar.addView(buildCategoryChip("📑 全部 · " + allItems.size(), activeCategory < 0, v -> {
+                activeCategory = -1;
+                applyFilter();
+            }));
+            for (int c = 0; c < CAT_NAMES.length; c++) {
+                if (catCount[c] == 0) continue;
+                final int cat = c;
+                String sizeStr = (pending && catSize[c] == 0) ? "计算中…" : formatSize(catSize[c]) + (pending ? "+" : "");
+                TextView chip = buildCategoryChip(CAT_ICONS[c] + " " + CAT_NAMES[c] + " · " + sizeStr,
+                        activeCategory == cat, v -> {
+                            activeCategory = (activeCategory == cat) ? -1 : cat;
+                            applyFilter();
+                        });
+                chip.setOnLongClickListener(v -> {
+                    exportCategory(cat);
+                    return true;
+                });
+                categoryBar.addView(chip);
+            }
+            if (activeCategory >= 0 && catCount[activeCategory] > 0) {
+                final int cat = activeCategory;
+                categoryBar.addView(buildCategoryChip("📤 导出此类", false, v -> exportCategory(cat)));
+            }
+        }
+    }
+
+    private TextView buildCategoryChip(String text, boolean selected, View.OnClickListener l) {
+        TextView tv = new TextView(context);
+        tv.setText(text);
+        tv.setTextColor(selected ? pal.accent : pal.text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tv.setSingleLine(true);
+        tv.setPadding(dp(10), dp(5), dp(10), dp(5));
+        tv.setBackground(selected
+                ? ThemeManager.createSelectedOptionDrawable(context, pal, 12f)
+                : ThemeManager.createSecondaryButtonDrawable(context, pal, 12f));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(6);
+        tv.setLayoutParams(lp);
+        tv.setOnClickListener(l);
+        return tv;
+    }
+
+    /** 文字色传入 COLOR_DANGER_HINT 时为低调危险样式；其余按钮统一为极简次级按钮（bg / textColor 参数为兼容旧调用保留）。 */
+    private static final int COLOR_DANGER_HINT = 0xFFFCA5A5;
+    private static final int COLOR_MUTED_HINT_BG = 0x2230363D;
 
     private TextView buildActionBtn(String text, int bg, int textColor, View.OnClickListener l) {
         TextView tv = new TextView(context);
         tv.setText(text);
-        tv.setTextColor(textColor);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(dp(8), dp(4), dp(8), dp(4));
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(bg);
-        gd.setCornerRadius(dp(5));
-        tv.setBackground(gd);
+        boolean danger = textColor == COLOR_DANGER_HINT;
+        boolean muted = bg == COLOR_MUTED_HINT_BG;
+        tv.setTextColor(danger ? ThemeManager.statusDangerColor(pal) : (muted ? pal.textMuted : pal.text));
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        tv.setSingleLine(true);
+        tv.setEllipsize(TextUtils.TruncateAt.END);
+        tv.setPadding(dp(10), dp(6), dp(10), dp(6));
+        tv.setBackground(danger
+                ? ThemeManager.createDangerButtonDrawable(context, pal, ThemeManager.RADIUS_CONTROL)
+                : ThemeManager.createSecondaryButtonDrawable(context, pal, ThemeManager.RADIUS_CONTROL));
         tv.setOnClickListener(l);
         return tv;
     }
@@ -463,13 +774,12 @@ public class FileBrowserDialog {
     private TextView buildChipBtn(String text, View.OnClickListener l) {
         TextView tv = new TextView(context);
         tv.setText(text);
-        tv.setTextColor(0xFFC9D1D9);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
-        tv.setPadding(dp(8), dp(3), dp(8), dp(3));
-        GradientDrawable gd = new GradientDrawable();
-        gd.setColor(0xFF21262D);
-        gd.setCornerRadius(dp(12));
-        gd.setStroke(dp(1), 0xFF30363D);
+        tv.setTextColor(pal.text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        tv.setSingleLine(true);
+        tv.setPadding(dp(10), dp(5), dp(10), dp(5));
+        GradientDrawable gd = ThemeManager.createSecondaryButtonDrawable(context, pal, 12f);
+        gd.setStroke(Math.max(1, dp(1) / 2), pal.border);
         tv.setBackground(gd);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -479,13 +789,9 @@ public class FileBrowserDialog {
         return tv;
     }
 
+    /** 1024 进制：B / KB / MB / GB / TB，与首页存储占用一致。 */
     public static String formatSize(long bytes) {
-        if (bytes <= 0) return "0 B";
-        final String[] units = new String[]{"B", "KB", "MB", "GB", "TB"};
-        int digitGroups = (int) (Math.log10(bytes) / Math.log10(1024));
-        if (digitGroups >= units.length) digitGroups = units.length - 1;
-        return String.format(Locale.getDefault(), "%.1f %s",
-                bytes / Math.pow(1024, digitGroups), units[digitGroups]);
+        return ProotManager.formatSize(bytes);
     }
 
     private class FileAdapter extends BaseAdapter {
@@ -500,43 +806,70 @@ public class FileBrowserDialog {
                 row = new LinearLayout(context);
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(10), dp(8), dp(10), dp(8));
-                GradientDrawable gd = new GradientDrawable();
-                gd.setColor(0xFF161B22);
-                gd.setCornerRadius(dp(6));
-                row.setBackground(gd);
+                row.setPadding(dp(12), dp(8), dp(12), dp(8));
+                row.setBackground(ThemeManager.createSunkenDrawable(context, pal, 8f));
 
                 TextView icon = new TextView(context);
                 icon.setTag("icon");
                 icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
-                row.addView(icon, new LinearLayout.LayoutParams(dp(26), ViewGroup.LayoutParams.WRAP_CONTENT));
+                icon.setTextColor(pal.textMuted);
+                row.addView(icon, new LinearLayout.LayoutParams(dp(28), ViewGroup.LayoutParams.WRAP_CONTENT));
 
                 LinearLayout textCol = new LinearLayout(context);
                 textCol.setOrientation(LinearLayout.VERTICAL);
 
                 TextView name = new TextView(context);
                 name.setTag("name");
-                name.setTextColor(0xFFF0F6FC);
-                name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
-                name.setTypeface(Typeface.DEFAULT_BOLD);
+                name.setTextColor(pal.text);
+                name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+                name.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
                 name.setSingleLine(true);
                 name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
                 textCol.addView(name);
 
                 TextView meta = new TextView(context);
                 meta.setTag("meta");
-                meta.setTextColor(0xFF8B949E);
-                meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                meta.setTextColor(pal.textMuted);
+                meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                meta.setSingleLine(true);
+                meta.setEllipsize(TextUtils.TruncateAt.END);
                 meta.setPadding(0, dp(2), 0, 0);
                 textCol.addView(meta);
 
                 row.addView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+                TextView size = new TextView(context);
+                size.setTag("size");
+                size.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+                size.setSingleLine(true);
+                size.setGravity(Gravity.END);
+                LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                slp.leftMargin = dp(8);
+                row.addView(size, slp);
+
+                TextView export = new TextView(context);
+                export.setTag("export");
+                export.setText("📤");
+                export.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                export.setTextColor(pal.textMuted);
+                export.setGravity(Gravity.CENTER);
+                export.setFocusable(false);
+                export.setContentDescription("导出");
+                export.setTooltipText("导出");
+                export.setPadding(dp(6), dp(6), dp(6), dp(6));
+                LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(dp(32), dp(32));
+                elp.leftMargin = dp(4);
+                row.addView(export, elp);
+
                 TextView arrow = new TextView(context);
                 arrow.setTag("arrow");
-                arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-                arrow.setTextColor(0xFF484F58);
-                row.addView(arrow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+                arrow.setTextColor(pal.textDim);
+                LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                alp.leftMargin = dp(6);
+                row.addView(arrow, alp);
             } else {
                 row = (LinearLayout) convertView;
             }
@@ -545,18 +878,31 @@ public class FileBrowserDialog {
             TextView icon = row.findViewWithTag("icon");
             TextView name = row.findViewWithTag("name");
             TextView meta = row.findViewWithTag("meta");
+            TextView size = row.findViewWithTag("size");
             TextView arrow = row.findViewWithTag("arrow");
+            TextView export = row.findViewWithTag("export");
+            export.setOnClickListener(v -> exportItem(item));
 
             name.setText(item.name);
             String timeStr = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date(item.lastModified));
+            String cat = CAT_NAMES[item.category];
 
             if (item.isDirectory) {
                 icon.setText(item.isSymlink ? "🔗" : "📁");
-                name.setTextColor(item.isSymlink ? 0xFF79C0FF : 0xFF58A6FF);
-                meta.setText(String.format(Locale.getDefault(), "[%s · %d 项]  ·  %s",
-                        item.isSymlink ? "快捷链接目录" : "文件夹", item.childCount, timeStr));
+                name.setTextColor(pal.accent);
+                meta.setText(String.format(Locale.getDefault(), "%s · %s · %d 项 · %s",
+                        cat, item.isSymlink ? "链接目录" : "文件夹", item.childCount, timeStr));
+                if (item.isSymlink) {
+                    size.setText("链接");
+                    size.setTextColor(pal.textDim);
+                } else if (item.dirSize >= 0) {
+                    size.setText(formatSize(item.dirSize));
+                    size.setTextColor(pal.text);
+                } else {
+                    size.setText("计算中…");
+                    size.setTextColor(pal.textDim);
+                }
                 arrow.setText("›");
-                arrow.setTextColor(0xFF58A6FF);
             } else {
                 String ext = getFileExt(item.name);
                 if (isScriptOrCode(ext)) {
@@ -566,14 +912,315 @@ public class FileBrowserDialog {
                 } else {
                     icon.setText("📄");
                 }
-                name.setTextColor(0xFFE6EDF3);
-                meta.setText(String.format(Locale.getDefault(), "大小: %s  ·  %s", formatSize(item.size), timeStr));
-                arrow.setText("🔍");
-                arrow.setTextColor(0xFF8B949E);
+                name.setTextColor(pal.text);
+                meta.setText(String.format(Locale.getDefault(), "%s · %s", cat, timeStr));
+                size.setText(formatSize(item.size));
+                size.setTextColor(pal.text);
+                arrow.setText("");
             }
 
             return row;
         }
+    }
+
+    // =========================================================================
+    // 单独导出：单个文件 / 文件夹 / 整个分类 → 手机存储（系统保存器）或分享
+    // =========================================================================
+
+    private static String mimeFor(String name) {
+        String ext = getFileExt(name);
+        if (ext.isEmpty()) return "application/octet-stream";
+        if (ext.equals("zip")) return "application/zip";
+        String m = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return m != null ? m : "application/octet-stream";
+    }
+
+    private static String safeName(String n) {
+        String s = n == null ? "export" : n.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (s.startsWith(".")) s = s.substring(1);
+        return s.isEmpty() ? "export" : s;
+    }
+
+    /** 统计待打包的总字节数（不跟随符号链接）。 */
+    private static long walkSize(File f, java.util.concurrent.atomic.AtomicBoolean cancel) {
+        if (cancel.get() || f == null || ProotManager.isSymbolicLink(f)) return 0;
+        if (!f.isDirectory()) return f.length();
+        long t = 0;
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) t += walkSize(k, cancel);
+        }
+        return t;
+    }
+
+    /** 导出入口：label 为显示名，sources 为要导出的文件/文件夹（分类导出时为多个）。 */
+    private void showExportOptions(String label, List<File> sources) {
+        if (sources == null || sources.isEmpty()) {
+            Toast.makeText(context, "没有可导出的项目", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final boolean singleFile = sources.size() == 1 && sources.get(0).isFile();
+        final String outName = singleFile ? sources.get(0).getName() : safeName(label) + ".zip";
+
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
+        root.setPadding(dp(16), dp(16), dp(16), dp(14));
+
+        TextView title = new TextView(context);
+        title.setText("📤 导出「" + label + "」");
+        title.setTextColor(pal.text);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        root.addView(title);
+
+        TextView sub = new TextView(context);
+        sub.setText((singleFile ? "导出为原文件：" : "打包为 zip：") + outName);
+        sub.setTextColor(pal.textMuted);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+        sub.setPadding(0, dp(4), 0, dp(12));
+        root.addView(sub);
+
+        AlertDialog d = new com.xm486.pimet.ui.Icons.DialogBuilder(context).setView(root).create();
+
+        TextView btnSave = buildActionBtn("💾 保存到手机（选择位置）", 0, 0, v -> {
+            d.dismiss();
+            exportToDocument(outName, singleFile, sources);
+        });
+        btnSave.setGravity(Gravity.CENTER);
+        btnSave.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        root.addView(btnSave, l1);
+
+        TextView btnShare = buildActionBtn("📤 分享 / 发送", 0, 0, v -> {
+            d.dismiss();
+            exportAndShare(outName, singleFile, sources);
+        });
+        btnShare.setGravity(Gravity.CENTER);
+        btnShare.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams l2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        l2.topMargin = dp(8);
+        root.addView(btnShare, l2);
+
+        TextView btnCancel = buildActionBtn("取消", COLOR_MUTED_HINT_BG, 0, v -> d.dismiss());
+        btnCancel.setGravity(Gravity.CENTER);
+        btnCancel.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout.LayoutParams l3 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        l3.topMargin = dp(8);
+        root.addView(btnCancel, l3);
+
+        if (d.getWindow() != null) d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        d.show();
+    }
+
+    private void exportToDocument(String outName, boolean singleFile, List<File> sources) {
+        if (!(context instanceof com.xm486.pimet.MainActivity)) {
+            Toast.makeText(context, "当前页面不支持选择保存位置，已改为分享", Toast.LENGTH_SHORT).show();
+            exportAndShare(outName, singleFile, sources);
+            return;
+        }
+        String mime = singleFile ? mimeFor(outName) : "application/zip";
+        ((com.xm486.pimet.MainActivity) context).launchCreateDocument(outName, mime, uri -> {
+            if (uri == null) return; // 用户取消
+            runExport("📤 正在导出 " + outName, singleFile, sources, () -> {
+                java.io.OutputStream os = context.getContentResolver().openOutputStream(uri, "w");
+                if (os == null) throw new java.io.IOException("无法写入所选位置");
+                return os;
+            }, (bytes, skipped) -> {
+                Toast.makeText(context, "已导出到所选位置：" + outName + " · " + formatSize(bytes)
+                        + (skipped > 0 ? "（" + skipped + " 个无权限文件已跳过）" : ""), Toast.LENGTH_LONG).show();
+            }, () -> {
+                try {
+                    android.provider.DocumentsContract.deleteDocument(context.getContentResolver(), uri);
+                } catch (Throwable ignored) {}
+            });
+        });
+    }
+
+    private void exportAndShare(String outName, boolean singleFile, List<File> sources) {
+        if (singleFile) {
+            shareFile(sources.get(0), mimeFor(outName));
+            return;
+        }
+        File dir = new File(context.getCacheDir(), "export");
+        // 清理上次分享留下的临时包，避免缓存越积越大
+        File[] old = dir.listFiles();
+        if (old != null) for (File f : old) f.delete();
+        dir.mkdirs();
+        final File out = new File(dir, outName);
+        runExport("📦 正在打包 " + outName, false, sources, () -> new java.io.FileOutputStream(out),
+                (bytes, skipped) -> {
+                    if (skipped > 0) {
+                        Toast.makeText(context, skipped + " 个无权限文件已跳过", Toast.LENGTH_SHORT).show();
+                    }
+                    shareFile(out, "application/zip");
+                }, out::delete);
+    }
+
+    private void shareFile(File file, String mime) {
+        try {
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, context.getPackageName() + ".fileprovider", file);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType(mime);
+            share.putExtra(Intent.EXTRA_STREAM, uri);
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(share, "分享 " + file.getName() + "（" + formatSize(file.length()) + "）");
+            if (!(context instanceof android.app.Activity)) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(chooser);
+        } catch (Throwable t) {
+            Toast.makeText(context, "分享失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private interface StreamOpener { java.io.OutputStream open() throws Exception; }
+    private interface ExportDone { void done(long bytes, int skipped); }
+
+    /** 后台流式导出（单文件直接复制；文件夹/分类边读边写 zip），带进度与取消，不阻塞界面。 */
+    private void runExport(String title, boolean singleFile, List<File> sources, StreamOpener opener,
+                           ExportDone onDone, Runnable onAbortCleanup) {
+        final java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean(false);
+        ProgressDialogHolder holder = showBackupProgressDialog(title);
+        TextView btnCancel = buildActionBtn("取消", 0, COLOR_DANGER_HINT, v -> cancel.set(true));
+        btnCancel.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(12);
+        if (holder.tvDetail.getParent() instanceof LinearLayout) {
+            ((LinearLayout) holder.tvDetail.getParent()).addView(btnCancel, clp);
+        }
+
+        new Thread(() -> {
+            final long[] done = {0};
+            final int[] skipped = {0};
+            long total = 0;
+            for (File f : sources) total += walkSize(f, cancel);
+            final long fTotal = Math.max(1, total);
+            final long[] lastUi = {0};
+            Runnable progress = () -> {
+                long now = System.currentTimeMillis();
+                if (now - lastUi[0] < 150) return;
+                lastUi[0] = now;
+                final int pct = (int) Math.min(100, done[0] * 100 / fTotal);
+                final String detail = formatSize(done[0]) + " / " + formatSize(fTotal);
+                mainHandler.post(() -> {
+                    holder.progressBar.setProgress(pct);
+                    holder.tvStage.setText("已处理 " + pct + "%");
+                    holder.tvDetail.setText(detail);
+                });
+            };
+            String error = null;
+            try (java.io.OutputStream raw = opener.open();
+                 java.io.BufferedOutputStream os = new java.io.BufferedOutputStream(raw, 64 * 1024)) {
+                byte[] buf = new byte[64 * 1024];
+                if (singleFile) {
+                    try (FileInputStream in = new FileInputStream(sources.get(0))) {
+                        int n;
+                        while ((n = in.read(buf)) > 0) {
+                            if (cancel.get()) break;
+                            os.write(buf, 0, n);
+                            done[0] += n;
+                            progress.run();
+                        }
+                    }
+                } else {
+                    java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(os);
+                    zos.setLevel(java.util.zip.Deflater.BEST_SPEED);
+                    for (File src : sources) {
+                        if (cancel.get()) break;
+                        zipInto(zos, src, src.getName(), buf, cancel, done, skipped, progress);
+                    }
+                    zos.finish();
+                    zos.flush();
+                }
+                os.flush();
+            } catch (SecurityException se) {
+                error = "没有权限写入/读取：" + se.getMessage();
+            } catch (Throwable t) {
+                error = t.getMessage() != null ? t.getMessage() : t.toString();
+            }
+            final String fError = error;
+            final boolean cancelled = cancel.get();
+            mainHandler.post(() -> {
+                try { holder.dialog.dismiss(); } catch (Throwable ignored) {}
+                if (cancelled || fError != null) {
+                    if (onAbortCleanup != null) {
+                        try { onAbortCleanup.run(); } catch (Throwable ignored) {}
+                    }
+                    Toast.makeText(context, cancelled ? "已取消导出" : "导出失败: " + fError, Toast.LENGTH_LONG).show();
+                } else {
+                    onDone.done(done[0], skipped[0]);
+                }
+            });
+        }).start();
+    }
+
+    private void zipInto(java.util.zip.ZipOutputStream zos, File f, String entry, byte[] buf,
+                         java.util.concurrent.atomic.AtomicBoolean cancel, long[] done, int[] skipped,
+                         Runnable progress) throws java.io.IOException {
+        if (cancel.get() || ProotManager.isSymbolicLink(f)) return;
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids == null) {
+                skipped[0]++;
+                return;
+            }
+            if (kids.length == 0) {
+                zos.putNextEntry(new java.util.zip.ZipEntry(entry + "/"));
+                zos.closeEntry();
+                return;
+            }
+            for (File k : kids) {
+                if (cancel.get()) return;
+                zipInto(zos, k, entry + "/" + k.getName(), buf, cancel, done, skipped, progress);
+            }
+            return;
+        }
+        FileInputStream in;
+        try {
+            in = new FileInputStream(f);
+        } catch (Throwable t) {
+            skipped[0]++;
+            return;
+        }
+        try {
+            java.util.zip.ZipEntry ze = new java.util.zip.ZipEntry(entry);
+            ze.setTime(f.lastModified());
+            zos.putNextEntry(ze);
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                if (cancel.get()) break;
+                zos.write(buf, 0, n);
+                done[0] += n;
+                progress.run();
+            }
+            zos.closeEntry();
+        } finally {
+            try { in.close(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** 导出当前目录下某一类别的全部项目。 */
+    private void exportCategory(int cat) {
+        List<File> files = new ArrayList<>();
+        for (FileItem it : allItems) {
+            if (it.category == cat && !it.isSymlink) files.add(it.file);
+        }
+        String dirName = currentDir != null ? currentDir.getName() : "";
+        showExportOptions((dirName.isEmpty() ? "" : dirName + "-") + CAT_NAMES[cat].replace("/", "-"), files);
+    }
+
+    private void exportItem(FileItem item) {
+        if (item == null) return;
+        File src = item.isSymlink && item.resolvedTarget != null ? item.resolvedTarget : item.file;
+        if (!src.canRead()) {
+            Toast.makeText(context, "无权限读取：" + item.name, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<File> one = new ArrayList<>();
+        one.add(src);
+        showExportOptions(item.name, one);
     }
 
     private static String getFileExt(String name) {
@@ -595,24 +1242,24 @@ public class FileBrowserDialog {
      */
     private void showItemDetailDialog(FileItem item) {
         if (item == null || item.file == null) return;
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
 
         TextView tvTitle = new TextView(context);
         tvTitle.setText(item.isDirectory ? "📁 目录详细属性" : "📄 文件详细属性");
-        tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(pal.text);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         View divider = new View(context);
-        divider.setBackgroundColor(0xFF30363D);
+        divider.setBackgroundColor(pal.border);
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
-        dlp.topMargin = dp(10);
-        dlp.bottomMargin = dp(10);
+        dlp.topMargin = dp(12);
+        dlp.bottomMargin = dp(12);
         root.addView(divider, dlp);
 
         createDetailRow(root, "名称", item.name);
@@ -642,7 +1289,7 @@ public class FileBrowserDialog {
         LinearLayout btnRow = new LinearLayout(context);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         btnRow.setGravity(Gravity.END);
-        btnRow.setPadding(0, dp(14), 0, 0);
+        btnRow.setPadding(0, dp(16), 0, 0);
 
         AlertDialog d = builder.setView(root).create();
 
@@ -685,27 +1332,41 @@ public class FileBrowserDialog {
             btnRow.addView(sp2, new LinearLayout.LayoutParams(dp(8), 1));
         }
 
-        TextView btnClose = buildActionBtn("关闭", 0x2230363D, 0xFF8B949E, v -> d.dismiss());
+        TextView btnExport = buildActionBtn("📤 导出", 0, 0, v -> {
+            d.dismiss();
+            exportItem(item);
+        });
+        btnRow.addView(btnExport);
+        View spE = new View(context);
+        btnRow.addView(spE, new LinearLayout.LayoutParams(dp(8), 1));
+
+        TextView btnClose = buildActionBtn("关闭", 0x2230363D, pal.textMuted, v -> d.dismiss());
         btnRow.addView(btnClose);
 
-        root.addView(btnRow);
+        // 按钮较多时可横向滑动，避免大字号下挤压换行
+        HorizontalScrollView btnScroll = new HorizontalScrollView(context);
+        btnScroll.setHorizontalScrollBarEnabled(false);
+        btnScroll.setFillViewport(true);
+        btnScroll.addView(btnRow, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(btnScroll);
+        if (d.getWindow() != null) d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
         d.show();
     }
 
     private TextView createDetailRow(LinearLayout parent, String label, String value) {
         TextView tvLabel = new TextView(context);
         tvLabel.setText(label + ":");
-        tvLabel.setTextColor(0xFF8B949E);
+        tvLabel.setTextColor(pal.textMuted);
         tvLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvLabel.setPadding(0, dp(4), 0, 0);
         parent.addView(tvLabel);
 
         TextView tvVal = new TextView(context);
         tvVal.setText(value);
-        tvVal.setTextColor(0xFFE6EDF3);
+        tvVal.setTextColor(pal.text);
         tvVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvVal.setTypeface(Typeface.MONOSPACE);
-        tvVal.setPadding(0, dp(1), 0, dp(4));
+        tvVal.setPadding(0, dp(2), 0, dp(4));
         tvVal.setTextIsSelectable(true);
         parent.addView(tvVal);
         return tvVal;
@@ -717,10 +1378,10 @@ public class FileBrowserDialog {
     private void showFilePreviewDialog(File file) {
         if (file == null || !file.exists() || file.isDirectory()) return;
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
         root.setPadding(dp(12), dp(12), dp(12), dp(12));
 
         // 顶栏
@@ -730,9 +1391,9 @@ public class FileBrowserDialog {
 
         TextView title = new TextView(context);
         title.setText("📄 " + file.getName());
-        title.setTextColor(0xFFF0F6FC);
+        title.setTextColor(pal.text);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView btnCopy = buildActionBtn("📋 复制路径", 0x223B82F6, 0xFF93C5FD, v -> {
@@ -750,8 +1411,8 @@ public class FileBrowserDialog {
         TextView tvMeta = new TextView(context);
         tvMeta.setText(String.format(Locale.getDefault(), "大小: %s (%d bytes)  ·  路径: %s",
                 formatSize(file.length()), file.length(), file.getAbsolutePath()));
-        tvMeta.setTextColor(0xFF8B949E);
-        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvMeta.setTextColor(pal.textMuted);
+        tvMeta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvMeta.setPadding(0, dp(4), 0, dp(8));
         root.addView(tvMeta);
 
@@ -770,15 +1431,15 @@ public class FileBrowserDialog {
         // 内容显示区（限制只读前 64KB 文本，避免超大文件卡死）
         ScrollView sv = new ScrollView(context);
         TextView tvContent = new TextView(context);
-        tvContent.setTextColor(0xFFC9D1D9);
+        tvContent.setTextColor(pal.text);
         tvContent.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvContent.setTypeface(Typeface.MONOSPACE);
         tvContent.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         GradientDrawable cbg = new GradientDrawable();
-        cbg.setColor(0xFF161B22);
+        cbg.setColor(pal.bgSunken);
         cbg.setCornerRadius(dp(6));
-        cbg.setStroke(dp(1), 0xFF30363D);
+        cbg.setStroke(dp(1), pal.border);
         tvContent.setBackground(cbg);
 
         if (isZip) {
@@ -839,22 +1500,22 @@ public class FileBrowserDialog {
     }
 
     private ProgressDialogHolder showBackupProgressDialog(String title) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
 
         TextView tvTitle = new TextView(context);
         tvTitle.setText(title);
-        tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(pal.text);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvStage = new TextView(context);
         tvStage.setText("准备中...");
-        tvStage.setTextColor(0xFF58A6FF);
+        tvStage.setTextColor(pal.accent);
         tvStage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
         tvStage.setPadding(0, dp(8), 0, dp(4));
         root.addView(tvStage);
@@ -869,8 +1530,8 @@ public class FileBrowserDialog {
 
         TextView tvDetail = new TextView(context);
         tvDetail.setText("");
-        tvDetail.setTextColor(0xFF8B949E);
-        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        tvDetail.setTextColor(pal.textMuted);
+        tvDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvDetail.setTypeface(Typeface.MONOSPACE);
         tvDetail.setSingleLine(true);
         tvDetail.setEllipsize(TextUtils.TruncateAt.MIDDLE);
@@ -899,24 +1560,24 @@ public class FileBrowserDialog {
     }
 
     public void showBackupMigrationDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
 
         TextView tvTitle = new TextView(context);
         tvTitle.setText("📦 PiMet 配置与数据无损迁移");
-        tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(pal.text);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvDesc = new TextView(context);
         tvDesc.setText("支持将当前的聊天记忆、子代理、插件生态、端口及全部偏好设置打包导出为 zip 文件，或将备份包无损还原至当前环境。");
-        tvDesc.setTextColor(0xFF8B949E);
-        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-        tvDesc.setPadding(0, dp(4), 0, dp(14));
+        tvDesc.setTextColor(pal.textMuted);
+        tvDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        tvDesc.setPadding(0, dp(4), 0, dp(16));
         root.addView(tvDesc);
 
         final AlertDialog[] diagRef = new AlertDialog[1];
@@ -926,7 +1587,7 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             performExportBackup();
         });
-        btnExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnExport.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnExport.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         elp.bottomMargin = dp(8);
@@ -937,7 +1598,7 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             showCustomExportDialog();
         });
-        btnCustomExport.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnCustomExport.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnCustomExport.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams celp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         celp.bottomMargin = dp(8);
@@ -960,7 +1621,7 @@ public class FileBrowserDialog {
                 );
             }
         });
-        btnPick.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnPick.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnPick.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         plp.bottomMargin = dp(8);
@@ -971,13 +1632,13 @@ public class FileBrowserDialog {
             if (diagRef[0] != null) diagRef[0].dismiss();
             showRestorePicker();
         });
-        btnScan.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btnScan.setPadding(dp(12), dp(12), dp(12), dp(12));
         btnScan.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         slp.bottomMargin = dp(8);
         root.addView(btnScan, slp);
 
-        TextView btnClose = buildActionBtn("取消", 0x2230363D, 0xFF8B949E, v -> {
+        TextView btnClose = buildActionBtn("取消", 0x2230363D, pal.textMuted, v -> {
             if (diagRef[0] != null) diagRef[0].dismiss();
         });
         btnClose.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -1019,24 +1680,24 @@ public class FileBrowserDialog {
         }, (success, file, message) -> {
             holder.dialog.dismiss();
 
-            AlertDialog.Builder resB = new AlertDialog.Builder(context);
+            AlertDialog.Builder resB = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
             LinearLayout r = new LinearLayout(context);
             r.setOrientation(LinearLayout.VERTICAL);
-            r.setBackgroundColor(0xFF0D1117);
+            r.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
             r.setPadding(dp(16), dp(16), dp(16), dp(16));
 
             TextView t = new TextView(context);
             t.setText(success ? "✔ 备份导出成功" : "❌ 备份导出失败");
-            t.setTextColor(success ? 0xFF3FB950 : 0xFFF85149);
-            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setTextColor(success ? ThemeManager.statusSuccessColor(pal) : ThemeManager.statusDangerColor(pal));
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+            t.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             r.addView(t);
 
             TextView msg = new TextView(context);
             msg.setText(message);
-            msg.setTextColor(0xFFC9D1D9);
-            msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            msg.setPadding(0, dp(8), 0, dp(14));
+            msg.setTextColor(pal.text);
+            msg.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            msg.setPadding(0, dp(8), 0, dp(16));
             r.addView(msg);
 
             final AlertDialog[] resDiagRef = new AlertDialog[1];
@@ -1048,7 +1709,7 @@ public class FileBrowserDialog {
                 btnShare.setPadding(dp(12), dp(8), dp(12), dp(8));
                 btnShare.setGravity(Gravity.CENTER);
                 LinearLayout.LayoutParams splp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                splp.bottomMargin = dp(6);
+                splp.bottomMargin = dp(8);
                 r.addView(btnShare, splp);
 
                 TextView btnCopy = buildActionBtn("📋 复制备份路径", 0x223B82F6, 0xFF93C5FD, v -> {
@@ -1061,13 +1722,13 @@ public class FileBrowserDialog {
                 btnCopy.setPadding(dp(12), dp(8), dp(12), dp(8));
                 btnCopy.setGravity(Gravity.CENTER);
                 LinearLayout.LayoutParams cplp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                cplp.bottomMargin = dp(6);
+                cplp.bottomMargin = dp(8);
                 r.addView(btnCopy, cplp);
 
                 loadCurrentDir();
             }
 
-            TextView btnOk = buildActionBtn("确定", 0x2230363D, 0xFF8B949E, v -> {
+            TextView btnOk = buildActionBtn("确定", 0x2230363D, pal.textMuted, v -> {
                 if (resDiagRef[0] != null) resDiagRef[0].dismiss();
             });
             btnOk.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -1082,24 +1743,24 @@ public class FileBrowserDialog {
     }
 
     public void showCustomExportDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         ScrollView scroll = new ScrollView(context);
         LinearLayout root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF0D1117);
+        root.setBackground(ThemeManager.createCardDrawable(context, pal, 14f));
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
         scroll.addView(root);
 
         TextView tvTitle = new TextView(context);
         tvTitle.setText("⚙️ 自选备份导出设置");
-        tvTitle.setTextColor(0xFFF0F6FC);
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setTextColor(pal.text);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        tvTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         root.addView(tvTitle);
 
         TextView tvSub = new TextView(context);
         tvSub.setText("请勾选需要导出的数据模块，并选择备份保存的目标目录：");
-        tvSub.setTextColor(0xFF8B949E);
+        tvSub.setTextColor(pal.textMuted);
         tvSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         tvSub.setPadding(0, dp(4), 0, dp(12));
         root.addView(tvSub);
@@ -1141,8 +1802,8 @@ public class FileBrowserDialog {
                 cwdSubLayout.setPadding(dp(16), dp(4), 0, dp(8));
                 TextView tvCwdSubHint = new TextView(context);
                 tvCwdSubHint.setText("可选：细粒度指定要导出的工程子目录 (不勾选则默认全部)：");
-                tvCwdSubHint.setTextColor(0xFF58A6FF);
-                tvCwdSubHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                tvCwdSubHint.setTextColor(pal.accent);
+                tvCwdSubHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
                 cwdSubLayout.addView(tvCwdSubHint);
 
                 for (File sp : subProjects) {
@@ -1173,22 +1834,22 @@ public class FileBrowserDialog {
 
         TextView tvTargetDirPath = new TextView(context);
         tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
-        tvTargetDirPath.setTextColor(0xFF58A6FF);
+        tvTargetDirPath.setTextColor(pal.accent);
         tvTargetDirPath.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        tvTargetDirPath.setPadding(dp(8), dp(6), dp(8), dp(6));
+        tvTargetDirPath.setPadding(dp(8), dp(8), dp(8), dp(8));
         GradientDrawable pathBg = new GradientDrawable();
-        pathBg.setColor(0xFF161B22);
-        pathBg.setCornerRadius(dp(4));
-        pathBg.setStroke(dp(1), 0xFF30363D);
+        pathBg.setColor(pal.bgSunken);
+        pathBg.setCornerRadius(dp(6));
+        pathBg.setStroke(dp(1), pal.border);
         tvTargetDirPath.setBackground(pathBg);
         root.addView(tvTargetDirPath);
 
         // 目标目录快速切换按钮组
         LinearLayout dirBtnRow = new LinearLayout(context);
         dirBtnRow.setOrientation(LinearLayout.HORIZONTAL);
-        dirBtnRow.setPadding(0, dp(6), 0, dp(10));
+        dirBtnRow.setPadding(0, dp(8), 0, dp(12));
 
-        TextView btnUseCurrent = buildActionBtn("📍 设为当前浏览目录", 0x22388BFD, 0xFF79C0FF, v -> {
+        TextView btnUseCurrent = buildActionBtn("📍 设为当前浏览目录", 0x22388BFD, pal.accent, v -> {
             if (currentDir != null && currentDir.canWrite()) {
                 selectedTargetDir[0] = currentDir;
                 tvTargetDirPath.setText("📂 " + selectedTargetDir[0].getAbsolutePath());
@@ -1210,7 +1871,7 @@ public class FileBrowserDialog {
             }
         });
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        dlp.leftMargin = dp(6);
+        dlp.leftMargin = dp(8);
         dirBtnRow.addView(btnUseDownloads, dlp);
 
         TextView btnUseAppExport = buildActionBtn("📦 内部默认目录", 0x228B5CF6, 0xFFC4B5FD, v -> {
@@ -1219,7 +1880,7 @@ public class FileBrowserDialog {
             Toast.makeText(context, "已设为内部备份目录", Toast.LENGTH_SHORT).show();
         });
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        alp.leftMargin = dp(6);
+        alp.leftMargin = dp(8);
         dirBtnRow.addView(btnUseAppExport, alp);
 
         root.addView(dirBtnRow);
@@ -1230,14 +1891,14 @@ public class FileBrowserDialog {
 
         EditText etCustomPaths = new EditText(context);
         etCustomPaths.setHint("如: root/my_scripts, etc (可选)");
-        etCustomPaths.setHintTextColor(0xFF484F58);
-        etCustomPaths.setTextColor(0xFFC9D1D9);
+        etCustomPaths.setHintTextColor(pal.textDim);
+        etCustomPaths.setTextColor(pal.text);
         etCustomPaths.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         etCustomPaths.setPadding(dp(8), dp(8), dp(8), dp(8));
         GradientDrawable etBg = new GradientDrawable();
-        etBg.setColor(0xFF161B22);
-        etBg.setCornerRadius(dp(4));
-        etBg.setStroke(dp(1), 0xFF30363D);
+        etBg.setColor(pal.bgSunken);
+        etBg.setCornerRadius(dp(6));
+        etBg.setStroke(dp(1), pal.border);
         etCustomPaths.setBackground(etBg);
         root.addView(etCustomPaths);
 
@@ -1248,11 +1909,11 @@ public class FileBrowserDialog {
         actRow.setOrientation(LinearLayout.HORIZONTAL);
         actRow.setPadding(0, dp(16), 0, 0);
 
-        TextView btnCancel = buildActionBtn("取消", 0x2230363D, 0xFF8B949E, v -> {
+        TextView btnCancel = buildActionBtn("取消", 0x2230363D, pal.textMuted, v -> {
             if (customDiagRef[0] != null) customDiagRef[0].dismiss();
         });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        clp.rightMargin = dp(6);
+        clp.rightMargin = dp(8);
         actRow.addView(btnCancel, clp);
 
         TextView btnConfirm = buildActionBtn("🚀 开始打包导出", 0x22238636, 0xFF7EE787, v -> {
@@ -1312,10 +1973,10 @@ public class FileBrowserDialog {
     private TextView createSectionHeader(String title) {
         TextView tv = new TextView(context);
         tv.setText(title);
-        tv.setTextColor(0xFFE6EDF3);
+        tv.setTextColor(pal.text);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setPadding(0, dp(10), 0, dp(4));
+        tv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        tv.setPadding(0, dp(12), 0, dp(4));
         return tv;
     }
 
@@ -1327,14 +1988,14 @@ public class FileBrowserDialog {
             ssb.append("\n");
             int start = ssb.length();
             ssb.append(subtitle);
-            ssb.setSpan(new ForegroundColorSpan(0xFF8B949E), start, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ssb.setSpan(new ForegroundColorSpan(pal.textMuted), start, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             ssb.setSpan(new RelativeSizeSpan(0.85f), start, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         cb.setText(ssb);
         cb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        cb.setTextColor(0xFFF0F6FC);
+        cb.setTextColor(pal.text);
         cb.setChecked(checked);
-        cb.setPadding(dp(4), dp(3), dp(4), dp(3));
+        cb.setPadding(dp(4), dp(4), dp(4), dp(4));
         return cb;
     }
 
@@ -1369,7 +2030,7 @@ public class FileBrowserDialog {
         } catch (Throwable ignored) {}
 
         if (zipCandidates.isEmpty()) {
-            new AlertDialog.Builder(context)
+            new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                     .setTitle("未发现备份包")
                     .setMessage("当前浏览目录及系统 Downloads 文件夹中未发现 .zip 格式备份文件。\n\n提示：您可在文件浏览器中先导航至包含备份包的文件夹，点击该 .zip 文件即可一键无损还原。")
                     .setPositiveButton("我知道了", null)
@@ -1383,7 +2044,7 @@ public class FileBrowserDialog {
             names[i] = f.getName() + " (" + formatSize(f.length()) + ")";
         }
 
-        new AlertDialog.Builder(context)
+        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                 .setTitle("选择要导入还原的备份包")
                 .setItems(names, (d, which) -> {
                     if (which >= 0 && which < zipCandidates.size()) {
@@ -1400,7 +2061,7 @@ public class FileBrowserDialog {
             return;
         }
 
-        new AlertDialog.Builder(context)
+        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                 .setTitle("⚠️ 确认无损还原备份包？")
                 .setMessage("即将从以下文件还原全量数据：\n" + zipFile.getName() + " (" + formatSize(zipFile.length()) + ")\n\n包含内容：\n• 桌面宠物聊天记忆与好感度\n• 全部子代理配置与技能生态\n• NPM 插件与扩展依赖清单\n• 本地多服务端口与偏好设置\n\n现有环境的同名配置将被安全覆盖同步。是否继续？")
                 .setPositiveButton("立即还原", (d, which) -> {
@@ -1412,7 +2073,7 @@ public class FileBrowserDialog {
                     }, (success, restoredCount, message) -> {
                         holder.dialog.dismiss();
 
-                        new AlertDialog.Builder(context)
+                        new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                                 .setTitle(success ? "🎉 还原完成" : "❌ 还原失败")
                                 .setMessage(message + (success ? "\n\n建议重启相关后台服务或刷新界面以使所有新配置完全生效。" : ""))
                                 .setPositiveButton("确定", (d2, w2) -> {

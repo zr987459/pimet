@@ -130,12 +130,21 @@ public class SpritePetView extends View {
     }
 
     private void init(Context context) {
-        loadAtlas(context, PetRegistry.getPetDir(context));
+        petDirName = PetRegistry.getPetDir(context);
+        loadAtlas(context, petDirName);
         startTicker();
     }
 
     /** 动态切换角色（悬浮窗不重建） */
+    private String petDirName;
+
+    /** 当前已加载的角色目录名（未加载为 null）。 */
+    public String getPetDirName() {
+        return petDirName;
+    }
+
     public void setPetDir(String petDir) {
+        petDirName = petDir;
         if (atlas != null) {
             atlas.recycle();
             atlas = null;
@@ -147,6 +156,7 @@ public class SpritePetView extends View {
     /** 停止动画并释放贴图（弹窗等临时视图关闭时调用，避免 ticker 持有大 bitmap） */
     public void stopAnimation() {
         stopTicker();
+        petDirName = null;
         if (atlas != null) {
             atlas.recycle();
             atlas = null;

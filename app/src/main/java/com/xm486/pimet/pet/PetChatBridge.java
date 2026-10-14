@@ -48,13 +48,96 @@ public class PetChatBridge {
     private static final String TAG = "DevPetM.ChatBridge";
 
     private final PetOverlayService service;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    /** 服务销毁后丢弃尚未执行的界面回调（网络线程回来时悬浮窗已移除）。 */
+    private volatile boolean detached = false;
+    private final Handler handler = new Handler(Looper.getMainLooper()) {
+        @Override
+        public void dispatchMessage(android.os.Message msg) {
+            if (!detached) super.dispatchMessage(msg);
+        }
+    };
+
+    /** 服务销毁时调用：清掉待执行的界面回调。 */
+    public void detach() {
+        detached = true;
+        handler.removeCallbacksAndMessages(null);
+    }
 
     /** 正在等待 AI 回复（状态变化气泡不抢占聊天气泡） */
     private volatile boolean chatting = false;
 
     public boolean isChatting() {
         return chatting;
+    }
+
+    /** 当前正在执行的对话任务（用于「停止」打断） */
+    private volatile ChatTask currentTask;
+
+    /** 记录当前任务正在使用的网络连接，打断时直接断开，阻塞的读取会立刻返回 */
+    private HttpURLConnection track(HttpURLConnection c) {
+        ChatTask t = currentTask;
+        if (t != null && Thread.currentThread() == t) t.liveConn = c;
+        return c;
+    }
+
+    /** 记录当前任务对应的 Pi-Web 会话，打断时通知 Agent 停止（含手机自动化工具调用） */
+    private void notePiWebSession(int port, String sessionId) {
+        ChatTask t = currentTask;
+        if (t != null && Thread.currentThread() == t) {
+            t.piwebPort = port;
+            t.piwebSessionId = sessionId;
+        }
+    }
+
+    /** 打断当前回复：断开连接 + 通知 Pi-Web Agent abort，并立即恢复界面 */
+    public void interrupt() {
+        final ChatTask t = currentTask;
+        if (t == null || !t.isAlive()) {
+            refreshSendButton(false);
+            return;
+        }
+        t.cancelled = true;
+        final HttpURLConnection c = t.liveConn;
+        final String sid = t.piwebSessionId;
+        final int port = t.piwebPort;
+        new Thread(() -> {
+            if (sid != null && !sid.isEmpty() && port > 0) {
+                HttpURLConnection a = null;
+                try {
+                    a = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/api/agent/" + sid).openConnection();
+                    a.setRequestMethod("POST");
+                    a.setDoOutput(true);
+                    a.setConnectTimeout(2000);
+                    a.setReadTimeout(3000);
+                    a.setRequestProperty("Content-Type", "application/json");
+                    a.getOutputStream().write("{\"type\":\"abort\"}".getBytes("UTF-8"));
+                    a.getResponseCode();
+                } catch (Throwable e) {
+                    Log.w(TAG, "abort pi-web failed", e);
+                } finally {
+                    if (a != null) try { a.disconnect(); } catch (Throwable ignored) {}
+                }
+            }
+            if (c != null) {
+                try { c.disconnect(); } catch (Throwable ignored) {}
+            }
+        }).start();
+        try { t.interrupt(); } catch (Throwable ignored) {}
+        chatting = false;
+        refreshSendButton(false);
+        handler.post(() -> {
+            com.xm486.pimet.ui.StatusCardView card = service.getStatusCard();
+            if (card != null) card.endChatPhase();
+        });
+        handler.post(new PetTypewriter(service, "⏹ 已打断"));
+    }
+
+    /** 发送按钮在回复进行中显示为「停止」 */
+    private void refreshSendButton(boolean running) {
+        handler.post(() -> {
+            com.xm486.pimet.ui.StatusCardView card = service.getStatusCard();
+            if (card != null) card.setSendRunning(running);
+        });
     }
 
     public PetChatBridge(PetOverlayService service) {
@@ -64,7 +147,16 @@ public class PetChatBridge {
     /** 快捷短语发送（chip 点击调用） */
     public void sendQuickMessage(String text) {
         if (TextUtils.isEmpty(text)) return;
-        new ChatTask(text).start();
+        startTask(text);
+    }
+
+    /** 启动新对话；若上一条仍在进行，先打断它 */
+    private void startTask(String text) {
+        ChatTask prev = currentTask;
+        if (prev != null && prev.isAlive() && !prev.cancelled) interrupt();
+        ChatTask t = new ChatTask(text);
+        currentTask = t;
+        t.start();
     }
 
     /** 挂载到状态卡：输入框获焦时解除悬浮窗 FLAG_NOT_FOCUSABLE，发送按钮提交消息 */
@@ -97,12 +189,19 @@ public class PetChatBridge {
             send.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    ChatTask running = currentTask;
+                    if (running != null && running.isAlive() && !running.cancelled) {
+                        interrupt();
+                        return;
+                    }
                     EditText et = service.getChatInput();
                     if (et == null) return;
                     String text = et.getText().toString().trim();
                     if (TextUtils.isEmpty(text)) return;
                     et.setText("");
-                    new ChatTask(text).start();
+                    startTask(text);
+                    // 发送成功后自动收起聊天卡（收键盘），回复显示在桌宠头顶气泡
+                    service.collapseCardAfterSend();
                 }
             });
         }
@@ -134,7 +233,7 @@ public class PetChatBridge {
         handler.post(() -> {
             EditText input = service.getChatInput();
             if (input != null) {
-                input.setHint("💬 (. 支线后台问答/查进度，普通说话为桌宠闲聊)…");
+                input.setHint("说点什么");
             }
         });
     }
@@ -211,10 +310,8 @@ public class PetChatBridge {
             ChatConfig config = ChatConfig.load(service);
             config.mode = mode;
             config.save(service);
-            String modePet = PetRegistry.getPetDirForMode(service, mode);
-            if (!modePet.equals(PetRegistry.getPetDir(service))) {
-                PetRegistry.setPetDir(service, modePet);
-            }
+            // 切到该模式（= 同名监控目标）绑定的桌宠；未绑定保持当前桌宠
+            PetRegistry.applyTargetPet(service, mode);
             showReply(reply);
             service.onChatConfigChanged();
         } catch (Throwable t) {
@@ -270,6 +367,10 @@ public class PetChatBridge {
 
     private class ChatTask extends Thread {
         private final String input;
+        volatile boolean cancelled = false;
+        volatile HttpURLConnection liveConn;
+        volatile String piwebSessionId;
+        volatile int piwebPort;
 
         ChatTask(String input) {
             this.input = input;
@@ -279,6 +380,7 @@ public class PetChatBridge {
         public void run() {
             List<String> segments = null;
             chatting = true;
+            refreshSendButton(true);
             boolean needPhase = false;
             String cleanInput = input;
             try {
@@ -356,12 +458,17 @@ public class PetChatBridge {
                     }
                 }
             } catch (Throwable t) {
-                Log.w(TAG, "ChatTask processing error", t);
-                segments = Collections.singletonList(
-                        "🐾 小元刚刚走神了一下，能再对我说一遍吗~");
-                handler.post(() -> service.showFailureBubble("小元连接超时或异常，请稍后重试"));
+                if (!cancelled) {
+                    Log.w(TAG, "ChatTask processing error", t);
+                    segments = Collections.singletonList(
+                            "🐾 小元刚刚走神了一下，能再对我说一遍吗~");
+                    handler.post(() -> service.showFailureBubble("小元连接超时或异常，请稍后重试"));
+                }
             } finally {
-                chatting = false;
+                if (currentTask == this) {
+                    chatting = false;
+                    refreshSendButton(false);
+                }
                 // 结束阶段态，恢复监控驱动的状态刷新（顶栏回到 思考中/工具/回复中 等）
                 if (needPhase) {
                     handler.post(() -> {
@@ -370,6 +477,7 @@ public class PetChatBridge {
                     });
                 }
             }
+            if (cancelled) return; // 已被用户打断，丢弃迟到的回复
             if (segments != null && !segments.isEmpty()) {
                 StringBuilder full = new StringBuilder();
                 for (String seg : segments) full.append(seg).append(" ");
@@ -428,7 +536,7 @@ public class PetChatBridge {
         HttpURLConnection conn = null;
         try {
             JSONObject body = buildOperitBody(config, msg);
-            conn = (HttpURLConnection) new URL(config.operitUrl).openConnection();
+            conn = track((HttpURLConnection) new URL(config.operitUrl).openConnection());
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(45000); // 保护时间，避免工具循环卡死桌宠
             conn.setRequestMethod("POST");
@@ -516,7 +624,7 @@ public class PetChatBridge {
                 body.put("characterCardName", config.operitGroup);
             }
             String url = config.operitWebBase() + "/api/web/chats";
-            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn = track((HttpURLConnection) new URL(url).openConnection());
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(15000);
             conn.setRequestMethod("POST");
@@ -655,7 +763,9 @@ public class PetChatBridge {
         return note.length() > 0 ? note.trim() : null;
     }
 
-    /** 按段落 + ~60 字自然断句把长文拆成气泡分段；短文本原样返回单段 */
+    /** 按段落 + ~120 字自然断句把长文拆成气泡分段（相邻短段合并）；短文本原样返回单段 */
+    private static final int SEG_MAX = 120;
+
     private static List<String> segment(String text) {
         List<String> out = new ArrayList<>();
         String t = text == null ? "" : text.trim();
@@ -666,17 +776,17 @@ public class PetChatBridge {
         for (String para : t.split("\n+")) {
             para = para.trim();
             if (para.isEmpty()) continue;
-            if (para.length() <= 60) {
+            if (para.length() <= SEG_MAX) {
                 out.add(para);
                 continue;
             }
             int start = 0;
             while (start < para.length()) {
-                int end = Math.min(start + 60, para.length());
+                int end = Math.min(start + SEG_MAX, para.length());
                 if (end < para.length()) {
                     // 尽量在标点/空格处断开，避免把词切断
                     int cut = -1;
-                    for (int i = end; i > start + 20; i--) {
+                    for (int i = end; i > start + 40; i--) {
                         char c = para.charAt(i);
                         if (c == ' ' || c == ',' || c == '.' || c == '!' || c == '?'
                                 || c == '，' || c == '。' || c == '！' || c == '？'
@@ -691,6 +801,19 @@ public class PetChatBridge {
                 start = end;
             }
         }
+        // 合并相邻短段：一屏气泡能放下就一起显示，减少「打完一段→停顿→下一段」的等待
+        List<String> merged = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String piece : out) {
+            if (cur.length() > 0 && cur.length() + 1 + piece.length() > SEG_MAX) {
+                merged.add(cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(piece);
+        }
+        if (cur.length() > 0) merged.add(cur.toString());
+        if (!merged.isEmpty()) out = merged;
         return out;
     }
 
@@ -731,7 +854,7 @@ public class PetChatBridge {
                 body.put("max_tokens", config.maxTokens);
             }
 
-            conn = (HttpURLConnection) new URL(config.apiUrl).openConnection();
+            conn = track((HttpURLConnection) new URL(config.apiUrl).openConnection());
             int timeout = (config.timeoutSeconds > 0 ? config.timeoutSeconds : 30) * 1000;
             conn.setConnectTimeout(timeout);
             conn.setReadTimeout(timeout);
@@ -802,7 +925,7 @@ public class PetChatBridge {
             if (sessionId != null) {
                 try {
                     URL promptUrl = new URL("http://127.0.0.1:" + port + "/api/agent/" + sessionId);
-                    conn = (HttpURLConnection) promptUrl.openConnection();
+                    conn = track((HttpURLConnection) promptUrl.openConnection());
                     conn.setRequestMethod("POST");
                     conn.setConnectTimeout(4000);
                     conn.setReadTimeout(10000);
@@ -859,7 +982,7 @@ public class PetChatBridge {
             // 2. 如果未持有有效会话或上述会话已失效，新建专属桌宠会话
             if (sessionId == null) {
                 URL newUrl = new URL("http://127.0.0.1:" + port + "/api/agent/new");
-                conn = (HttpURLConnection) newUrl.openConnection();
+                conn = track((HttpURLConnection) newUrl.openConnection());
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(4000);
                 conn.setReadTimeout(10000);
@@ -916,6 +1039,8 @@ public class PetChatBridge {
                 return Collections.singletonList("pi-web 未能获取到会话 ID");
             }
 
+            notePiWebSession(port, sessionId);
+
             // 3. 订阅 SSE 收集回复
             handler.post(() -> {
                 com.xm486.pimet.ui.StatusCardView card = service.getStatusCard();
@@ -923,7 +1048,7 @@ public class PetChatBridge {
             });
 
             URL sseUrl = new URL("http://127.0.0.1:" + port + "/api/agent/" + sessionId + "/events");
-            conn = (HttpURLConnection) sseUrl.openConnection();
+            conn = track((HttpURLConnection) sseUrl.openConnection());
             conn.setRequestProperty("Accept", "text/event-stream");
             conn.setRequestProperty("Cache-Control", "no-cache");
             conn.setConnectTimeout(4000);
@@ -1006,7 +1131,7 @@ public class PetChatBridge {
             String cookie = null;
             if (token != null && !token.isEmpty()) {
                 URL loginUrl = new URL("http://127.0.0.1:" + port + "/login");
-                conn = (HttpURLConnection) loginUrl.openConnection();
+                conn = track((HttpURLConnection) loginUrl.openConnection());
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(3000);
                 conn.setReadTimeout(5000);
@@ -1033,7 +1158,7 @@ public class PetChatBridge {
             }
 
             URL overviewUrl = new URL("http://127.0.0.1:" + port + "/api/ai/sessions/overview");
-            conn = (HttpURLConnection) overviewUrl.openConnection();
+            conn = track((HttpURLConnection) overviewUrl.openConnection());
             conn.setConnectTimeout(3000);
             conn.setReadTimeout(5000);
             if (cookie != null) conn.setRequestProperty("Cookie", cookie);
@@ -1069,7 +1194,7 @@ public class PetChatBridge {
             if (!forceNew && sessionId == null) {
                 try {
                     URL allSessUrl = new URL("http://127.0.0.1:" + port + "/api/ai/sessions");
-                    conn = (HttpURLConnection) allSessUrl.openConnection();
+                    conn = track((HttpURLConnection) allSessUrl.openConnection());
                     conn.setConnectTimeout(3000);
                     conn.setReadTimeout(4000);
                     conn.setRequestProperty("Cookie", cookieHeader);
@@ -1091,7 +1216,7 @@ public class PetChatBridge {
 
             if (sessionId == null) {
                 URL sessUrl = new URL("http://127.0.0.1:" + port + "/api/ai/sessions");
-                conn = (HttpURLConnection) sessUrl.openConnection();
+                conn = track((HttpURLConnection) sessUrl.openConnection());
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(3000);
                 conn.setReadTimeout(5000);
@@ -1115,7 +1240,7 @@ public class PetChatBridge {
             }
 
             URL queueUrl = new URL("http://127.0.0.1:" + port + "/api/ai/queue?session_id=" + sessionId);
-            conn = (HttpURLConnection) queueUrl.openConnection();
+            conn = track((HttpURLConnection) queueUrl.openConnection());
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(4000);
             conn.setReadTimeout(6000);
@@ -1147,7 +1272,7 @@ public class PetChatBridge {
                 attempts++;
                 try { Thread.sleep(1500); } catch (InterruptedException e) { break; }
                 URL pollUrl = new URL("http://127.0.0.1:" + port + "/api/ai/chat?session_id=" + sessionId + "&limit=10");
-                conn = (HttpURLConnection) pollUrl.openConnection();
+                conn = track((HttpURLConnection) pollUrl.openConnection());
                 conn.setConnectTimeout(3000);
                 conn.setReadTimeout(4000);
                 conn.setRequestProperty("Cookie", cookieHeader);

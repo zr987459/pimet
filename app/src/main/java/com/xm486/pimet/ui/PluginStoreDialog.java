@@ -246,7 +246,7 @@ public class PluginStoreDialog {
     }
 
     public static void show(Context context, Runnable onInstallComplete) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        AlertDialog.Builder builder = new com.xm486.pimet.ui.Icons.DialogBuilder(context);
         AlertDialog[] dialogRef = new AlertDialog[1];
         View dialogView = buildStoreView(context, onInstallComplete, () -> {
             if (dialogRef[0] != null) dialogRef[0].dismiss();
@@ -298,14 +298,14 @@ public class PluginStoreDialog {
 
         TextView titleTv = new TextView(context);
         titleTv.setText("🏪 插件与生态商店");
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         titleTv.setTextColor(0xFFF8FAFC);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        titleTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         titleBox.addView(titleTv);
 
         TextView subTitleTv = new TextView(context);
         subTitleTv.setText("精选官方扩展、MCP 服务中心及全球生态站点一键浏览与即时翻译");
-        subTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+        subTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         subTitleTv.setTextColor(0xFF94A3B8);
         subTitleTv.setPadding(0, dp(context, 2), 0, 0);
         titleBox.addView(subTitleTv);
@@ -379,9 +379,9 @@ public class PluginStoreDialog {
         TextView tv = new TextView(context);
         tv.setText(text);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(dp(context, 14), dp(context, 7), dp(context, 14), dp(context, 7));
+        tv.setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(context, 8);
@@ -394,11 +394,11 @@ public class PluginStoreDialog {
         GradientDrawable bg = new GradientDrawable();
         if (active) {
             bg.setColor(0xFF2563EB);
-            bg.setCornerRadius(dp(tv.getContext(), 14));
+            bg.setCornerRadius(dp(tv.getContext(), 12));
             tv.setTextColor(0xFFFFFFFF);
         } else {
             bg.setColor(0x22334155);
-            bg.setCornerRadius(dp(tv.getContext(), 14));
+            bg.setCornerRadius(dp(tv.getContext(), 12));
             tv.setTextColor(0xFF94A3B8);
         }
         tv.setBackground(bg);
@@ -458,7 +458,7 @@ public class PluginStoreDialog {
         titleTv.setText(item.title);
         titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
         titleTv.setTextColor(0xFFF1F5F9);
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+        titleTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
         titleTv.setMaxLines(2);
         titleTv.setEllipsize(TextUtils.TruncateAt.END);
         titleCol.addView(titleTv);
@@ -467,16 +467,16 @@ public class PluginStoreDialog {
         LinearLayout metaRow = new LinearLayout(context);
         metaRow.setOrientation(LinearLayout.HORIZONTAL);
         metaRow.setGravity(Gravity.CENTER_VERTICAL);
-        metaRow.setPadding(0, dp(context, 3), 0, 0);
+        metaRow.setPadding(0, dp(context, 4), 0, 0);
 
         TextView badgeTv = new TextView(context);
         badgeTv.setText(item.badge);
         badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
         badgeTv.setTextColor(0xFF38BDF8);
-        badgeTv.setPadding(dp(context, 5), dp(context, 1), dp(context, 5), dp(context, 1));
+        badgeTv.setPadding(dp(context, 4), dp(context, 2), dp(context, 4), dp(context, 2));
         GradientDrawable bBg = new GradientDrawable();
         bBg.setColor(0x220284C7);
-        bBg.setCornerRadius(dp(context, 4));
+        bBg.setCornerRadius(dp(context, 6));
         badgeTv.setBackground(bBg);
         metaRow.addView(badgeTv);
 
@@ -486,7 +486,7 @@ public class PluginStoreDialog {
         idTv.setTextColor(0xFF64748B);
         idTv.setSingleLine(true);
         idTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        idTv.setPadding(dp(context, 6), 0, 0, 0);
+        idTv.setPadding(dp(context, 8), 0, 0, 0);
         metaRow.addView(idTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         titleCol.addView(metaRow);
@@ -495,8 +495,8 @@ public class PluginStoreDialog {
         // 操作按钮 (固定紧凑尺寸，始终靠右，绝不挤压溢出)
         Button actionBtn = new Button(context);
         actionBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-        actionBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        actionBtn.setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4));
+        actionBtn.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
+        actionBtn.setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 4));
         actionBtn.setMinHeight(dp(context, 28));
         actionBtn.setMinWidth(dp(context, 66));
         actionBtn.setIncludeFontPadding(false);
@@ -506,7 +506,7 @@ public class PluginStoreDialog {
             actionBtn.setTextColor(0xFF10B981);
             GradientDrawable btnBg = new GradientDrawable();
             btnBg.setColor(0x2210B981);
-            btnBg.setCornerRadius(dp(context, 8));
+            btnBg.setCornerRadius(dp(context, 10));
             btnBg.setStroke(dp(context, 1), 0x5510B981);
             actionBtn.setBackground(btnBg);
             actionBtn.setEnabled(false);
@@ -515,7 +515,7 @@ public class PluginStoreDialog {
             actionBtn.setTextColor(0xFFFFFFFF);
             GradientDrawable btnBg = new GradientDrawable();
             btnBg.setColor(0xFF2563EB);
-            btnBg.setCornerRadius(dp(context, 8));
+            btnBg.setCornerRadius(dp(context, 10));
             actionBtn.setBackground(btnBg);
 
             actionBtn.setOnClickListener(v -> {
@@ -532,7 +532,7 @@ public class PluginStoreDialog {
                             actionBtn.setTextColor(0xFF10B981);
                             GradientDrawable doneBg = new GradientDrawable();
                             doneBg.setColor(0x2210B981);
-                            doneBg.setCornerRadius(dp(context, 8));
+                            doneBg.setCornerRadius(dp(context, 10));
                             actionBtn.setBackground(doneBg);
                             if (onInstallComplete != null) onInstallComplete.run();
                         } else {
@@ -554,7 +554,7 @@ public class PluginStoreDialog {
         descTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
         descTv.setTextColor(0xFF94A3B8);
         descTv.setLineSpacing(dp(context, 2), 1.15f);
-        descTv.setPadding(0, dp(context, 6), 0, 0);
+        descTv.setPadding(0, dp(context, 8), 0, 0);
         card.addView(descTv);
 
         return card;
@@ -611,7 +611,7 @@ public class PluginStoreDialog {
             titleTv.setText(site.title);
             titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
             titleTv.setTextColor(0xFFF1F5F9);
-            titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+            titleTv.setTypeface(com.xm486.pimet.ThemeManager.MEDIUM_TYPEFACE);
             titleTv.setMaxLines(2);
             titleTv.setEllipsize(TextUtils.TruncateAt.END);
             rowTitle.addView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -620,25 +620,25 @@ public class PluginStoreDialog {
             badgeTv.setText(site.badge);
             badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
             badgeTv.setTextColor(0xFF38BDF8);
-            badgeTv.setPadding(dp(context, 5), dp(context, 1), dp(context, 5), dp(context, 1));
+            badgeTv.setPadding(dp(context, 4), dp(context, 2), dp(context, 4), dp(context, 2));
             GradientDrawable bBg = new GradientDrawable();
             bBg.setColor(0x220284C7);
-            bBg.setCornerRadius(dp(context, 4));
+            bBg.setCornerRadius(dp(context, 6));
             badgeTv.setBackground(bBg);
             LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            bLp.leftMargin = dp(context, 6);
+            bLp.leftMargin = dp(context, 8);
             rowTitle.addView(badgeTv, bLp);
             card.addView(rowTitle);
 
             // URL
             TextView urlTv = new TextView(context);
             urlTv.setText(site.url);
-            urlTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            urlTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             urlTv.setTextColor(0xFF38BDF8);
             urlTv.setSingleLine(true);
             urlTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-            urlTv.setPadding(0, dp(context, 2), 0, dp(context, 3));
+            urlTv.setPadding(0, dp(context, 2), 0, dp(context, 4));
             card.addView(urlTv);
 
             // 描述
@@ -663,7 +663,7 @@ public class PluginStoreDialog {
             btnInApp.setIncludeFontPadding(false);
             GradientDrawable inAppBg = new GradientDrawable();
             inAppBg.setColor(0xFF2563EB);
-            inAppBg.setCornerRadius(dp(context, 8));
+            inAppBg.setCornerRadius(dp(context, 10));
             btnInApp.setBackground(inAppBg);
             btnInApp.setOnClickListener(v -> {
                 try {
@@ -676,7 +676,7 @@ public class PluginStoreDialog {
                 }
             });
             LinearLayout.LayoutParams inAppLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.35f);
-            inAppLp.rightMargin = dp(context, 6);
+            inAppLp.rightMargin = dp(context, 8);
             btnRow.addView(btnInApp, inAppLp);
 
             Button btnExternal = new Button(context);
@@ -688,7 +688,7 @@ public class PluginStoreDialog {
             btnExternal.setIncludeFontPadding(false);
             GradientDrawable extBg = new GradientDrawable();
             extBg.setColor(0x22475569);
-            extBg.setCornerRadius(dp(context, 8));
+            extBg.setCornerRadius(dp(context, 10));
             btnExternal.setBackground(extBg);
             btnExternal.setOnClickListener(v -> {
                 try {

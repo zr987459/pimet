@@ -171,6 +171,7 @@ public class PiWebMonitor {
                 closeSse();
                 watchedSessionId = null;
                 if (goneCount >= GONE_THRESHOLD) {
+                    boolean wasReachable = lastSnapshot != null && lastSnapshot.state != OperitState.UNKNOWN;
                     OperitState.Snapshot unknown = new OperitState.Snapshot();
                     unknown.state = OperitState.UNKNOWN;
                     unknown.agentName = "pi-web";
@@ -180,7 +181,9 @@ public class PiWebMonitor {
                                     ? "pi-web 不可达（端口 " + port + "）"
                                     : "pi-web 连接中…"));
                     lastSnapshot = unknown;
-                    mainHandler.post(() -> listener.onSnapshot(lastSnapshot));
+                    final OperitState.Snapshot out = unknown.copy();
+                    if (wasReachable) out.transition = "disconnected";
+                    mainHandler.post(() -> listener.onSnapshot(out));
                 }
             }
         } catch (Throwable t) {
@@ -336,72 +339,166 @@ public class PiWebMonitor {
 
     // ---------------- SSE 事件 → 状态 ----------------
 
+    /** 本轮任务是否已播报过错误（避免 message_end 与 agent_end 重复报错） */
+    private boolean errorAnnounced = false;
+
     private void handleSseEvent(String json) {
         if (json == null || json.isEmpty()) return;
         try {
             JSONObject msg = new JSONObject(json);
             String type = msg.optString("type", "");
-            OperitState mapped = mapEventType(msg, type);
+            OperitState prev = lastSnapshot != null ? lastSnapshot.state : OperitState.IDLE;
+            OperitState mapped = null;
+            String transition = null;
+            String error = null;
+            switch (type) {
+                case "connected":
+                    // 刚连上只同步当前状态，绝不当作「完成」
+                    mapped = msg.optBoolean("isStreaming", false) ? OperitState.WORKING : OperitState.IDLE;
+                    if (mapped == OperitState.WORKING) errorAnnounced = false;
+                    break;
+                case "agent_start":
+                    mapped = OperitState.WORKING;
+                    errorAnnounced = false;
+                    break;
+                case "message_update": {
+                    JSONObject ev = msg.optJSONObject("assistantMessageEvent");
+                    if (ev == null) break;
+                    String t = ev.optString("type", "");
+                    if (t.startsWith("thinking_")) mapped = OperitState.THINKING;
+                    else if (t.startsWith("text_")) mapped = OperitState.RESPONDING;
+                    else if (t.startsWith("toolcall_")) mapped = OperitState.TOOL_RUNNING;
+                    else if ("error".equals(t)) {
+                        mapped = OperitState.ERROR;
+                        error = errorOf(ev.optJSONObject("error"), ev.optString("reason", ""));
+                    }
+                    break;
+                }
+                case "tool_execution_start":
+                case "tool_execution_update":
+                    mapped = OperitState.TOOL_RUNNING;
+                    break;
+                case "tool_execution_end":
+                    mapped = OperitState.THINKING; // 工具跑完，agent 继续
+                    break;
+                case "auto_retry_start":
+                    mapped = OperitState.WAITING;
+                    pushEvent("🔁 自动重试 " + msg.optInt("attempt", 0) + "/" + msg.optInt("maxAttempts", 0)
+                            + clip(" " + msg.optString("errorMessage", ""), 60));
+                    break;
+                case "auto_retry_end":
+                    if (!msg.optBoolean("success", true)) {
+                        mapped = OperitState.ERROR;
+                        error = msg.optString("finalError", "重试失败");
+                    }
+                    break;
+                case "message_end": {
+                    JSONObject m = msg.optJSONObject("message");
+                    if (m != null && "assistant".equals(m.optString("role"))) {
+                        String stop = m.optString("stopReason", "");
+                        if ("error".equals(stop)) {
+                            mapped = OperitState.ERROR;
+                            error = m.optString("errorMessage", "模型返回错误");
+                        }
+                    }
+                    break;
+                }
+                case "agent_end": {
+                    String stop = lastAssistantStop(msg.optJSONArray("messages"));
+                    if ("error".equals(stop)) {
+                        mapped = OperitState.ERROR;
+                        error = lastAssistantError(msg.optJSONArray("messages"));
+                    } else {
+                        mapped = OperitState.IDLE;
+                        boolean wasActive = prev != OperitState.IDLE && prev != OperitState.UNKNOWN;
+                        if ("aborted".equals(stop)) transition = "aborted";
+                        else if (wasActive && prev != OperitState.ERROR) transition = "completed";
+                    }
+                    break;
+                }
+                case "session_shutdown":
+                    mapped = OperitState.IDLE;
+                    break;
+                case "startup_error":
+                    mapped = OperitState.ERROR;
+                    error = msg.optString("error", msg.optString("message", "pi-web 启动失败"));
+                    break;
+                default:
+                    break;
+            }
             if (mapped == null) return; // 不驱动状态变化的事件
-            pushEvent(eventLabel(type));
-            applyDetailedState(mapped, msg, type);
+            if (mapped == OperitState.ERROR) {
+                if (errorAnnounced) {
+                    transition = null;
+                } else {
+                    transition = "error";
+                    errorAnnounced = true;
+                }
+            }
+            pushEvent(eventLabel(type, error));
+            applyDetailedState(mapped, msg, type, transition, error);
         } catch (Throwable t) {
             Log.w(TAG, "sse parse failed", t);
         }
     }
 
-    /** 事件 → OperitState；返回 null 表示该事件不驱动状态变化 */
-    private static OperitState mapEventType(JSONObject msg, String type) {
-        switch (type) {
-            case "connected": {
-                boolean streaming = msg.optBoolean("isStreaming", false);
-                return streaming ? OperitState.WORKING : OperitState.IDLE;
-            }
-            case "message_start":
-            case "extension_ui_request":
-                return null; // message_start 不带内容类型，先等 thinking/text 帧再定状态
-            case "message_update": {
-                JSONObject ev = msg.optJSONObject("assistantMessageEvent");
-                if (ev == null) return null;
-                String t = ev.optString("type", "");
-                if (t.startsWith("thinking_")) return OperitState.THINKING;
-                if (t.startsWith("text_")) return OperitState.RESPONDING;
-                if (t.startsWith("toolcall_")) return OperitState.TOOL_RUNNING;
-                return null;
-            }
-            case "tool_execution_update":
-                return OperitState.TOOL_RUNNING;
-            case "tool_execution_end":
-                return OperitState.THINKING; // 工具跑完，agent 回到思考/继续生成
-            case "agent_end":
-            case "session_shutdown":
-                return OperitState.IDLE;
-            case "startup_error":
-                return OperitState.ERROR;
-            default:
-                return null;
-        }
+    private static String clip(String s, int n) {
+        if (s == null) return "";
+        s = s.replace('\n', ' ').trim();
+        return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 
-    private static String eventLabel(String type) {
+    private static String errorOf(JSONObject err, String fallback) {
+        if (err != null) {
+            String m = err.optString("errorMessage", "");
+            if (!m.isEmpty()) return m;
+        }
+        return fallback == null || fallback.isEmpty() ? "模型返回错误" : fallback;
+    }
+
+    private static String lastAssistantStop(JSONArray msgs) {
+        if (msgs == null) return "";
+        for (int i = msgs.length() - 1; i >= 0; i--) {
+            JSONObject m = msgs.optJSONObject(i);
+            if (m != null && "assistant".equals(m.optString("role"))) return m.optString("stopReason", "");
+        }
+        return "";
+    }
+
+    private static String lastAssistantError(JSONArray msgs) {
+        if (msgs == null) return "模型返回错误";
+        for (int i = msgs.length() - 1; i >= 0; i--) {
+            JSONObject m = msgs.optJSONObject(i);
+            if (m != null && "assistant".equals(m.optString("role"))) {
+                String e = m.optString("errorMessage", "");
+                return e.isEmpty() ? "模型返回错误" : e;
+            }
+        }
+        return "模型返回错误";
+    }
+
+    private static String eventLabel(String type, String error) {
         switch (type) {
             case "connected":         return "🔌 已连接";
+            case "agent_start":       return "🚀 开始任务";
             case "message_start":     return "📨 开始生成";
-            case "message_update":    return "💬 生成中";
+            case "message_update":    return error != null ? "❌ " + clip(error, 50) : "💬 生成中";
+            case "tool_execution_start":
             case "tool_execution_update": return "🔧 执行工具";
             case "tool_execution_end":  return "✅ 工具完成";
-            case "agent_end":         return "🎉 回复完成";
+            case "message_end":       return "❌ " + clip(error, 50);
+            case "auto_retry_start":  return "🔁 自动重试";
+            case "auto_retry_end":    return "❌ 重试失败 " + clip(error, 40);
+            case "agent_end":         return error != null ? "❌ " + clip(error, 50) : "🎉 回复完成";
             case "session_shutdown":  return "👋 会话结束";
             case "startup_error":     return "❌ 启动失败";
             default:                  return type;
         }
     }
 
-    /** 用 SSE 的详细状态覆盖当前快照并推给 UI */
-    private void applyDetailedState(OperitState detailed, JSONObject msg, String type) {
-        OperitState.Snapshot snap = lastSnapshot;
-        // IDLE 只在明确结束时落（agent_end/session_shutdown/connected 非流式），
-        // 避免工具间隙的短暂回落造成状态闪烁
+    /** 用 SSE 的详细状态生成新快照并推给 UI（每次一份新对象，转折只出现一次） */
+    private void applyDetailedState(OperitState detailed, JSONObject msg, String type, String transition, String error) {
+        OperitState.Snapshot snap = lastSnapshot != null ? lastSnapshot.copy() : newSnapshotIdle();
         snap.state = detailed;
         snap.operitRunning = detailed != OperitState.IDLE;
         snap.agentName = "pi-web";
@@ -423,7 +520,11 @@ public class PiWebMonitor {
         List<String> ev = new ArrayList<>(recentEvents);
         if (ev.isEmpty()) ev.add(stateBubble(detailed));
         snap.recentEvents = ev;
-        mainHandler.post(() -> listener.onSnapshot(snap));
+        lastSnapshot = snap;
+        final OperitState.Snapshot out = snap.copy();
+        out.transition = transition;
+        out.errorMessage = error;
+        mainHandler.post(() -> listener.onSnapshot(out));
     }
 
     private static String stateBubble(OperitState s) {

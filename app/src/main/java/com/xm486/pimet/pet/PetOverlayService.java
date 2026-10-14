@@ -30,7 +30,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.MainActivity;
-import com.xm486.pimet.PiWebActivity;
 import com.xm486.pimet.R;
 import com.xm486.pimet.monitor.ClawBenchMonitor;
 import com.xm486.pimet.monitor.OperitMonitor;
@@ -90,7 +89,43 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     private FrameLayout overlayRoot;      // 悬浮窗根容器
     private SpritePetView petView;        // 桌宠（精灵图角色）
     private StatusCardView statusCard;    // 状态卡
-    private TextView bubbleView;          // 对话气泡（任务完成 + AI 聊天共用）
+    private PetBubbleView bubbleView;     // 对话气泡（任务完成 + AI 聊天共用，跟随主题）
+
+    /** 主题切换实时生效：监听主题偏好变化，重新给气泡与聊天卡着色 */
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener themePrefListener =
+            (sp, key) -> {
+                if (com.xm486.pimet.ThemeManager.PREF_THEME_KEY.equals(key)) {
+                    new Handler(Looper.getMainLooper()).post(this::applyOverlayTheme);
+                }
+            };
+
+    /** 用当前有效主题（含「跟随系统」）重新着色桌宠气泡与下方聊天卡 */
+    public void applyOverlayTheme() {
+        com.xm486.pimet.ThemeManager.ThemePalette p = com.xm486.pimet.ThemeManager.getEffectivePalette(this);
+        if (bubbleView != null) bubbleView.applyTheme(p);
+        if (statusCard != null) statusCard.applyTheme(p);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // 「跟随系统」主题下系统深浅色切换时同步
+        applyOverlayTheme();
+    }
+
+    /** 发送消息后自动收起聊天卡：清焦点、收键盘、收卡片（回复显示在桌宠头顶气泡） */
+    public void collapseCardAfterSend() {
+        if (statusCard != null) {
+            android.widget.EditText et = statusCard.getChatInput();
+            if (et != null) {
+                android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                        getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+                et.clearFocus();
+            }
+        }
+        if (cardVisible) toggleCard();
+    }
     private boolean cardVisible = false;
 
     /** AI 对话桥（状态卡输入框 → 大模型） */
@@ -207,6 +242,12 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             sendBroadcast(new Intent(ACTION_OVERLAY_STATE_CHANGED));
         } catch (Throwable ignored) {}
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        try {
+            android.content.IntentFilter sf = new android.content.IntentFilter();
+            sf.addAction(Intent.ACTION_SCREEN_OFF);
+            sf.addAction(Intent.ACTION_SCREEN_ON);
+            registerReceiver(screenReceiver, sf);
+        } catch (Throwable ignored) {}
         createNotificationChannel();
         // Android 14+：startForeground 必须传入与 Manifest 一致的类型，否则崩溃
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -219,13 +260,24 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         startMonitoring();
         // 监听角色切换
         PetRegistry.getPrefs(this).registerOnSharedPreferenceChangeListener(this);
+        getSharedPreferences(com.xm486.pimet.ThemeManager.PREF_NAME, MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(themePrefListener);
+        // 仅有桌宠服务存活（主界面未打开/被回收）时也要让 AI 控制桥在线，否则 phone_control 连不上
+        try {
+            com.xm486.pimet.bridge.AppBridgeManager.getInstance(this).start();
+            final android.content.Context appCtx = getApplicationContext();
+            new Thread(() -> com.xm486.pimet.PluginManager.ensureAndroidBridgeExtension(appCtx), "pimet-ensure-ext").start();
+        } catch (Throwable t) {
+            android.util.Log.w("PetOverlayService", "AppBridge start failed", t);
+        }
         // 挂载 AI 对话桥（状态卡输入框 → 大模型）
         chatBridge = new PetChatBridge(this);
         chatBridge.attach();
         // 状态卡显示当前 AI 模式
         statusCard.setModeLabel(ChatConfig.load(this).modeLabel());
-        // 自动应用当前模式绑定的专属角色
-        applyModePet(ChatConfig.load(this).mode);
+        // 自动应用当前监控目标绑定的桌宠（未绑定则保持当前桌宠）
+        lastPetMode = ChatConfig.load(this).mode;
+        PetRegistry.applyTargetPet(this, getCurrentTarget());
         // 自动启动桌宠独立记忆与主动关怀定时器
         startProactiveChatter();
     }
@@ -238,12 +290,24 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             try {
                 boolean enabled = PetRegistry.getBooleanPref(PetOverlayService.this,
                         PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
-                if (enabled && !isPetHidden && overlayRoot != null && !cardVisible) {
-                    String msg = PetMemoryManager.generateProactiveMessage(PetOverlayService.this);
-                    showProactiveBubble(msg);
-                    if (petView != null) {
-                        petView.playOneShot("waving");
-                    }
+                if (enabled && !screenOff && !isPetHidden && overlayRoot != null && !cardVisible) {
+                    // 生成文案要探测服务端口（网络请求），放到后台线程，避免主线程网络异常导致误报「未启动」
+                    final OperitState.Snapshot snapNow = currentSnapshotForTarget();
+                    new Thread(() -> {
+                        String msg;
+                        try {
+                            msg = PetMemoryManager.generateProactiveMessage(PetOverlayService.this, currentTarget, snapNow);
+                        } catch (Throwable t) {
+                            return;
+                        }
+                        final String m = msg;
+                        proactiveHandler.post(() -> {
+                            if (isPetHidden || overlayRoot == null || cardVisible) return;
+                            if (chatBridge != null && chatBridge.isChatting()) return;
+                            showProactiveBubble(m);
+                            if (petView != null) petView.playOneShot("waving");
+                        });
+                    }, "pet-proactive").start();
                 }
             } catch (Throwable t) {
                 Log.w(TAG, "proactiveRunnable error", t);
@@ -257,7 +321,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     public void startProactiveChatter() {
         stopProactiveChatter();
-        PetMemoryManager.ensurePetSubagentInstalled(this);
+        final android.content.Context appCtx = getApplicationContext();
+        new Thread(() -> PetMemoryManager.ensurePetSubagentInstalled(appCtx), "pimet-ensure-agent").start();
         int intervalMin = PetRegistry.getIntPref(this,
                 PetMemoryManager.KEY_PROACTIVE_INTERVAL_MIN, 3);
         proactiveHandler.postDelayed(proactiveRunnable, Math.max(45000L, intervalMin * 60000L));
@@ -285,7 +350,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         }
 
         applyBubbleDimensions();
-        bubbleView.setText("💬 " + msg);
+        bubbleView.setText(msg);
 
         // 核心：测量气泡高度并将桌宠顶开至气泡下方，杜绝气泡遮挡桌宠
         layoutChatBubble();
@@ -338,7 +403,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void onSharedPreferenceChanged(android.content.SharedPreferences sp, String key) {
         if ("pet_dir".equals(key)) {
             String dir = sp.getString(key, null);
-            if (dir != null && petView != null) {
+            if (dir != null && petView != null && !dir.equals(petView.getPetDirName())) {
                 petView.setPetDir(dir);
             }
         } else if (PetRegistry.KEY_PET_SIZE.equals(key)) {
@@ -408,18 +473,29 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
 
     /** 气泡尺寸与字号自适应动态调整 */
+    private int lastBubbleW = -1, lastBubbleTs = -1, lastBubbleScreenW = -1, lastBubbleMaxW = -1;
+
     public void applyBubbleDimensions() {
         if (bubbleView == null) return;
         int bw = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_WIDTH, PetRegistry.DEFAULT_BUBBLE_WIDTH);
         int ts = PetRegistry.getIntPref(this, PetRegistry.KEY_BUBBLE_TEXT_SIZE, PetRegistry.DEFAULT_BUBBLE_TEXT_SIZE);
         bw = Math.max(100, Math.min(320, bw));
         ts = Math.max(9, Math.min(18, ts));
+        int sw = getResources().getDisplayMetrics().widthPixels;
+        // 尺寸没变时跳过（打字机每帧都会走到这里，重复 setTextSize/setPadding 会触发整窗重新布局）
+        if (bw == lastBubbleW && ts == lastBubbleTs && sw == lastBubbleScreenW
+                && bubbleView.getMaxWidth() == lastBubbleMaxW) return;
+        lastBubbleW = bw;
+        lastBubbleTs = ts;
+        lastBubbleScreenW = sw;
         bubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, ts);
         int padH = Math.round(ts * 1.15f);
         int padV = Math.round(ts * 0.75f);
-        bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV));
+        // 底部额外留出尾巴高度，尾巴指向桌宠且不压文字
+        bubbleView.setPadding(dp(padH), dp(padV), dp(padH), dp(padV) + bubbleView.tailHeight());
         int maxW = Math.min(dp(bw), (int)(getResources().getDisplayMetrics().widthPixels * 0.75f));
         bubbleView.setMaxWidth(maxW);
+        lastBubbleMaxW = maxW;
     }
 
     public void applyBubbleWidth(int widthDp) {
@@ -434,20 +510,19 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     /** 创建任务完成对话气泡（圆角背景 + 白字） */
     private void buildBubble(int petHeightPx) {
-        bubbleView = new TextView(this);
+        bubbleView = new PetBubbleView(this);
         bubbleView.setGravity(Gravity.CENTER);
-        bubbleView.setTextColor(0xFFF1F5F9);
         bubbleView.setMaxLines(10);
         bubbleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        bubbleView.setLineSpacing(dp(2), 1.15f);
+        bubbleView.setLineSpacing(dp(2), 1.1f);
         applyBubbleDimensions();
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xF0181A22);
-        bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), 0x4460A5FA);
-        bubbleView.setBackground(bg);
         bubbleView.setVisibility(View.GONE);
         bubbleView.setOnClickListener(v -> {
+            // 点击进入控制台：立即停止播报并收起气泡
+            PetTypewriter.cancelActive();
+            cancelBubbleHide();
+            bubbleView.animate().cancel();
+            bubbleHideRunnable.run();
             openTargetConsole();
         });
 
@@ -478,7 +553,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(120), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
 
         // 桌宠往下顶出气泡空间 → 气泡显示在人物头顶上方，不遮挡人物
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
@@ -521,7 +596,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(120), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
 
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
         petLp.topMargin = shift;
@@ -562,18 +637,27 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
             return;
         }
 
+        openTargetWeb(this, targetKey, port);
+    }
+
+    /**
+     * 打开监控目标的 Web 界面：Pi-Web 直接回到本体的工作台页（不再使用独立 PiWebActivity 浏览器），
+     * 其他目标（Operit / ClawBench / RikkaHub）交给系统浏览器打开。
+     */
+    public static void openTargetWeb(Context ctx, String targetKey, int port) {
         try {
-            Intent intent = new Intent(this, PiWebActivity.class);
-            intent.putExtra(PiWebActivity.EXTRA_PORT, port);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
+            if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
+                Intent intent = new Intent(ctx, MainActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                intent.putExtra("pimet.open_web", true);
+                ctx.startActivity(intent);
+                return;
+            }
+            Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
+            browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(browser);
         } catch (Throwable t) {
-            Log.w(TAG, "openConsoleForTarget failed", t);
-            try {
-                Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
-                browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(browser);
-            } catch (Throwable ignored) {}
+            Log.w(TAG, "openTargetWeb failed", t);
         }
     }
 
@@ -680,6 +764,19 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return new int[]{dp(16), dp(160), dp(72), dp(72)};
     }
 
+    /** 桌宠精灵本身在屏幕上的矩形 [x, y, w, h]（像素，含窗口内偏移，如状态卡展开/气泡顶开时）。 */
+    public int[] getPetViewScreenRect() {
+        if (overlayRoot != null && overlayRoot.getLayoutParams() instanceof WindowManager.LayoutParams) {
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            int w = petView != null && petView.getWidth() > 0 ? petView.getWidth() : dp(PetRegistry.getIntPref(this, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE));
+            int h = petView != null && petView.getHeight() > 0 ? petView.getHeight() : Math.round(w * 208f / 192f);
+            int offX = petView != null ? petView.getLeft() : 0;
+            int offY = petView != null ? petView.getTop() : 0;
+            return new int[]{lp.x + offX, lp.y + offY, w, h};
+        }
+        return new int[]{dp(16), dp(160), dp(72), dp(72)};
+    }
+
     public TextView getChatBubble() {
         return bubbleView;
     }
@@ -701,7 +798,74 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return statusCard != null ? statusCard.getAttachButton() : null;
     }
 
+    /** 收起卡片时归还焦点：收键盘并恢复 FLAG_NOT_FOCUSABLE，避免悬浮窗继续吞掉返回键和触摸 */
+    private void releaseInputFocus() {
+        try {
+            if (statusCard != null && statusCard.getChatInput() != null) {
+                android.widget.EditText et = statusCard.getChatInput();
+                android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                        getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+                et.clearFocus();
+            }
+            if (overlayRoot != null && overlayRoot.getLayoutParams() instanceof WindowManager.LayoutParams) {
+                WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0) {
+                    lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                    updateOverlayLayout(lp);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // ---- 自动化期间隐身 ----
+    private static final Handler AUTO_HANDLER = new Handler(Looper.getMainLooper());
+    private static final Runnable AUTO_RESTORE = () -> {
+        PetOverlayService s = sInstance;
+        if (s != null) s.applyAutomationPassthrough(false);
+    };
+
+    /** 自动化操作开始：桌宠窗口透明 + 不可触摸（同步等待生效，最多 400ms） */
+    public static void beginAutomation() {
+        final PetOverlayService s = sInstance;
+        if (s == null) return;
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        AUTO_HANDLER.post(() -> {
+            AUTO_HANDLER.removeCallbacks(AUTO_RESTORE);
+            s.applyAutomationPassthrough(true);
+            latch.countDown();
+        });
+        try {
+            if (latch.await(400, java.util.concurrent.TimeUnit.MILLISECONDS)) Thread.sleep(50);
+        } catch (InterruptedException ignored) {}
+    }
+
+    /** 自动化操作结束：1.5 秒内没有新操作再恢复显示，连续操作时不闪烁 */
+    public static void endAutomation() {
+        AUTO_HANDLER.removeCallbacks(AUTO_RESTORE);
+        AUTO_HANDLER.postDelayed(AUTO_RESTORE, 1500);
+    }
+
+    private boolean automationHidden = false;
+
+    private void applyAutomationPassthrough(boolean on) {
+        if (overlayRoot == null || automationHidden == on) return;
+        automationHidden = on;
+        try {
+            if (on) releaseInputFocus();
+            overlayRoot.setAlpha(on ? 0f : 1f);
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+            if (on) lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            else lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            updateOverlayLayout(lp);
+        } catch (Throwable t) {
+            Log.w(TAG, "applyAutomationPassthrough failed", t);
+        }
+    }
+
     public void updateOverlayLayout(WindowManager.LayoutParams lp) {
+        // 任何时候都不独占屏幕触摸：输入框获焦（窗口可聚焦）时窗口外的触摸仍交给下层应用
+        lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
         try {
             windowManager.updateViewLayout(overlayRoot, lp);
         } catch (Throwable t) {
@@ -721,8 +885,10 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         int hSpec = View.MeasureSpec.makeMeasureSpec(dp(180), View.MeasureSpec.AT_MOST);
         bubbleView.measure(wSpec, hSpec);
         int bubbleH = bubbleView.getMeasuredHeight();
-        int shift = bubbleH + dp(6);
+        int shift = bubbleH + dp(2);
         FrameLayout.LayoutParams petLp = (FrameLayout.LayoutParams) petView.getLayoutParams();
+        // 高度没变（同一行内继续打字）就不重排、不更新悬浮窗——以前每个字都触发一次 updateViewLayout，长文明显卡顿
+        if (petLp.topMargin == shift) return;
         petLp.topMargin = shift;
         petView.setLayoutParams(petLp);
         FrameLayout.LayoutParams cardLp = (FrameLayout.LayoutParams) statusCard.getLayoutParams();
@@ -747,6 +913,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     public void showStreamingBubble(String text) {
         TextView b = bubbleView;
         if (b == null) return;
+        PetTypewriter.cancelActive(); // 流式内容到来时停止旧的打字播报，避免两者抢同一个气泡
         if (!b.isShown()) {
             b.setMaxLines(10);
             b.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -804,6 +971,11 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         statusCard.setScaleX(Math.max(0.4f, Math.min(1.2f, cardScale / 100f)));
         statusCard.setScaleY(Math.max(0.4f, Math.min(1.2f, cardScale / 100f)));
         overlayRoot.addView(statusCard, cardLp);
+        // 缩放锚点始终为顶部中心：首次展开前卡片尚未布局 (width=0)，若锚点取 0 会向左缩放导致偏移
+        statusCard.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            v.setPivotX((r - l) / 2f);
+            v.setPivotY(0f);
+        });
 
         // 任务完成对话气泡（显示在桌宠头顶，初始隐藏）
         buildBubble(petWidthPx);
@@ -817,6 +989,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 windowType(),
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         wmParams.gravity = Gravity.TOP | Gravity.START;
@@ -1125,11 +1298,17 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         final float cs = Math.max(0.4f, Math.min(1.2f,
                 PetRegistry.getIntPref(this, PetRegistry.KEY_CARD_SCALE,
                         PetRegistry.DEFAULT_CARD_SCALE) / 100f));
+        // 记录桌宠当前屏幕中心 X：窗口包裹宽度变化后据此回调窗口位置，桌宠原地不动、卡片居中在其下方
+        final int petCenterBefore = petScreenCenterX();
         if (cardVisible) {
             statusCard.setAlpha(0f);
             statusCard.setScaleX(cs * 0.94f);
             statusCard.setScaleY(cs * 0.94f);
-            statusCard.setPivotX(statusCard.getWidth() / 2f);
+            int cw = statusCard.getWidth();
+            if (cw <= 0 && statusCard.getLayoutParams() != null && statusCard.getLayoutParams().width > 0) {
+                cw = statusCard.getLayoutParams().width;
+            }
+            statusCard.setPivotX(cw / 2f);
             statusCard.setPivotY(0f);
             statusCard.setVisibility(View.VISIBLE);
             statusCard.animate()
@@ -1138,6 +1317,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                     .setInterpolator(new android.view.animation.DecelerateInterpolator())
                     .start();
         } else {
+            releaseInputFocus();
             // 退出比进入更快（约 60%），手感更利落
             statusCard.animate()
                     .alpha(0f).scaleX(cs * 0.96f).scaleY(cs * 0.96f)
@@ -1150,7 +1330,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                                     (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
                             windowManager.updateViewLayout(overlayRoot, lp);
                         } catch (Exception ignored) {}
-                        overlayRoot.post(this::clampToScreen);
+                        overlayRoot.post(() -> keepPetCenter(petCenterBefore));
                     })
                     .start();
         }
@@ -1166,9 +1346,58 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 // 触发窗口重新测量包裹新内容
                 windowManager.updateViewLayout(overlayRoot, lp);
             } catch (Exception ignored) {}
-            // 等一帧让布局完成后再 clamp 位置，防止状态卡/桌宠飞出屏幕
-            overlayRoot.post(this::clampToScreen);
+            // 等一帧让布局完成后：保持桌宠原地（卡片居中在其正下方），再 clamp 位置防止飞出屏幕
+            if (cardVisible) {
+                overlayRoot.post(() -> keepPetCenter(petCenterBefore));
+            } else {
+                overlayRoot.post(this::clampToScreen);
+            }
         });
+    }
+
+    /** 桌宠精灵在屏幕上的中心 X（像素）。 */
+    private int petScreenCenterX() {
+        if (overlayRoot == null || petView == null) return Integer.MIN_VALUE;
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+        if (lp == null) return Integer.MIN_VALUE;
+        return lp.x + petView.getLeft() + petView.getWidth() / 2;
+    }
+
+    /** 等窗口按新内容完成布局（或最多 150ms）后，再把桌宠中心对回原位。 */
+    private void keepPetCenter(int petCenterBefore) {
+        if (overlayRoot == null) return;
+        final boolean[] done = new boolean[1];
+        final android.view.ViewTreeObserver.OnGlobalLayoutListener[] holder =
+                new android.view.ViewTreeObserver.OnGlobalLayoutListener[1];
+        final Runnable once = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            try {
+                if (holder[0] != null) overlayRoot.getViewTreeObserver().removeOnGlobalLayoutListener(holder[0]);
+            } catch (Exception ignored) {}
+            applyPetCenter(petCenterBefore);
+        };
+        holder[0] = once::run;
+        overlayRoot.getViewTreeObserver().addOnGlobalLayoutListener(holder[0]);
+        overlayRoot.requestLayout();
+        overlayRoot.postDelayed(once, 150);
+    }
+
+    /** 窗口内容宽度变化后，平移窗口使桌宠中心回到原位，然后限制在屏幕内。 */
+    private void applyPetCenter(int petCenterBefore) {
+        if (overlayRoot == null) return;
+        try {
+            if (petCenterBefore != Integer.MIN_VALUE) {
+                int now = petScreenCenterX();
+                if (now != Integer.MIN_VALUE && now != petCenterBefore) {
+                    WindowManager.LayoutParams lp =
+                            (WindowManager.LayoutParams) overlayRoot.getLayoutParams();
+                    lp.x -= (now - petCenterBefore);
+                    windowManager.updateViewLayout(overlayRoot, lp);
+                }
+            }
+        } catch (Exception ignored) {}
+        clampToScreen();
     }
 
     /** 将窗口位置限制在屏幕内（配合状态卡展开/收起） */
@@ -1236,6 +1465,8 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         ensureAllMonitorsRunning();
         // 瞬间以目标当前后台已缓存的最新快照刷新桌宠状态（零延迟秒切）
         recomputeState();
+        // 切换到该监控绑定的桌宠（写 pet_dir → 偏好监听在主线程重载精灵图；未绑定保持不变）
+        PetRegistry.applyTargetPet(this, target);
 
         String label = "Operit";
         if (PetRegistry.TARGET_PIWEB.equals(target)) label = "pi-web";
@@ -1249,16 +1480,51 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         return currentTarget != null ? currentTarget : PetRegistry.TARGET_OPERIT;
     }
 
-    /** 确保所有后台监控源并发常驻运行 */
+    /** 屏幕熄灭时暂停监控与动画，亮屏恢复（省电） */
+    private volatile boolean screenOff = false;
+
+    /**
+     * 只运行当前监控目标的监控器，其余停掉（以前四个监控器同时常驻，RikkaHub 每秒、Operit 每 2 秒轮询，
+     * 后台持续占用 CPU/网络和电量）。切换目标时新监控器约 1 秒内拿到首个快照。
+     */
     public synchronized void ensureAllMonitorsRunning() {
-        startOperitMonitor();
-        startPiWebMonitor();
-        startClawBenchMonitor();
-        startRikkaMonitor();
+        String t = currentTarget != null ? currentTarget : PetRegistry.TARGET_OPERIT;
+        if (screenOff) {
+            stopMonitorsExcept(null);
+            return;
+        }
+        stopMonitorsExcept(t);
+        if (PetRegistry.TARGET_OPERIT.equals(t)) startOperitMonitor();
+        else if (PetRegistry.TARGET_PIWEB.equals(t)) startPiWebMonitor();
+        else if (PetRegistry.TARGET_CLAWBENCH.equals(t)) startClawBenchMonitor();
+        else if (PetRegistry.TARGET_RIKKA.equals(t)) startRikkaMonitor();
     }
+
+    private synchronized void stopMonitorsExcept(String keep) {
+        if (!PetRegistry.TARGET_OPERIT.equals(keep) && monitor != null) { monitor.stop(); monitor = null; }
+        if (!PetRegistry.TARGET_PIWEB.equals(keep) && piwebMonitor != null) { piwebMonitor.stop(); piwebMonitor = null; }
+        if (!PetRegistry.TARGET_CLAWBENCH.equals(keep) && clawbenchMonitor != null) { clawbenchMonitor.stop(); clawbenchMonitor = null; }
+        if (!PetRegistry.TARGET_RIKKA.equals(keep) && rikkaMonitor != null) { rikkaMonitor.stop(); rikkaMonitor = null; }
+    }
+
+    private final android.content.BroadcastReceiver screenReceiver = new android.content.BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent intent) {
+            boolean off = Intent.ACTION_SCREEN_OFF.equals(intent.getAction());
+            if (off == screenOff) return;
+            screenOff = off;
+            ensureAllMonitorsRunning();
+            if (petView != null) {
+                if (off) petView.stopTicker();
+                else if (!isPetHidden) petView.startTicker();
+            }
+            if (!off) recomputeState();
+        }
+    };
 
     /** 重启某个特定后台监控器（修改端口或配置时使用） */
     public synchronized void restartMonitor(String target) {
+        if (target == null || !target.equals(currentTarget)) return; // 非当前目标不运行监控器，下次切换时会按新配置启动
         if (PetRegistry.TARGET_OPERIT.equals(target)) {
             if (monitor != null) { monitor.stop(); monitor = null; }
             startOperitMonitor();
@@ -1386,6 +1652,15 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         Log.w(TAG, "monitor error: " + message);
     }
 
+    /** 当前监控目标的最新快照（可能为 null） */
+    private OperitState.Snapshot currentSnapshotForTarget() {
+        if (PetRegistry.TARGET_RIKKA.equals(currentTarget)) return rikkaSnap;
+        if (PetRegistry.TARGET_CLAWBENCH.equals(currentTarget)) return clawbenchSnap;
+        if (PetRegistry.TARGET_PIWEB.equals(currentTarget)) return piwebSnap;
+        if (PetRegistry.TARGET_OPERIT.equals(currentTarget)) return operitSnap;
+        return null;
+    }
+
     /** 使用当前目标 agent 的快照刷新桌宠 */
     private void recomputeState() {
         OperitState.Snapshot snap;
@@ -1423,12 +1698,27 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     private void applyPetState(OperitState.Snapshot snap) {
         if (petView == null) return;
 
-        // 状态变化：准确反映当前状态过渡（简练准确，杜绝跑任务时虚假提前宣告完成）
-        if (lastState != null && lastState != snap.state
+        // 状态变化：只播报真实发生的转折（完成/出错/中止/断连来自监控器的明确事件），
+        // 连接/重连时同步到的「空闲」不再当成「完成」
+        String tr = snap.transition;
+        if ("error".equals(tr)) {
+            String why = snap.errorMessage != null ? snap.errorMessage.replace('\n', ' ').trim() : "";
+            if (why.length() > 60) why = why.substring(0, 60) + "…";
+            showFailureBubble("出错了：" + (why.isEmpty() ? "任务异常" : why) + "\n点击气泡查看详情");
+        } else if ("completed".equals(tr)) {
+            if (chatBridge == null || !chatBridge.isChatting()) showCompletionBubble();
+        } else if ("aborted".equals(tr)) {
+            showStateBubbleText("⏹ 任务已中止");
+        } else if ("disconnected".equals(tr)) {
+            showFailureBubble("连不上 " + (snap.agentName != null ? snap.agentName : "服务") + " 了\n点击气泡打开看看");
+        } else if (lastState != null && lastState != snap.state
                 && snap.state != OperitState.UNKNOWN) {
-            showStateBubble(snap);
-            if (snap.state == OperitState.ERROR && lastState != OperitState.ERROR) {
-                showFailureBubble(null);
+            if (snap.state == OperitState.ERROR) {
+                if (lastState != OperitState.ERROR) showFailureBubble(null);
+            } else if (snap.state == OperitState.IDLE && PetRegistry.TARGET_PIWEB.equals(currentTarget)) {
+                // Pi-Web 的完成由 agent_end 明确给出；其余回落到空闲（重连/切会话）不播报
+            } else {
+                showStateBubble(snap);
             }
         }
         lastState = snap.state;
@@ -1441,6 +1731,18 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
         } else {
             updateNotification("桌宠已隐藏（后台监控中 · 点击重新弹出）");
         }
+    }
+
+    private void showStateBubbleText(String text) {
+        if (bubbleView == null) return;
+        if (chatBridge != null && chatBridge.isChatting()) return;
+        bubbleHandler.removeCallbacks(bubbleHideRunnable);
+        bubbleView.setText(com.xm486.pimet.ui.StatusCardView.clean(text));
+        layoutChatBubble();
+        bubbleView.setVisibility(View.VISIBLE);
+        bubbleView.setAlpha(0f);
+        bubbleView.animate().alpha(1f).setDuration(180).start();
+        scheduleBubbleHide(2800);
     }
 
     /** 状态变化气泡：准确反映当前状态过渡，简明扼要，2.8s 自动优雅淡出 */
@@ -1482,7 +1784,7 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
                 break;
         }
 
-        bubbleView.setText(text);
+        bubbleView.setText(com.xm486.pimet.ui.StatusCardView.clean(text));
         layoutChatBubble();
         bubbleView.setVisibility(View.VISIBLE);
         bubbleView.setAlpha(0f);
@@ -1493,19 +1795,25 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
     /** 动态切换角色形象并持久化保存 */
     public void changePet(String petDir) {
         if (petDir == null || petDir.isEmpty()) return;
-        PetRegistry.setPetDir(this, petDir);
-        if (petView != null) {
+        if (!petDir.equals(PetRegistry.getPetDir(this))) {
+            // 写入 pet_dir 后由 onSharedPreferenceChanged 在主线程重载精灵图，避免重复解码
+            PetRegistry.setPetDir(this, petDir);
+        } else if (petView != null && !petDir.equals(petView.getPetDirName())) {
             petView.setPetDir(petDir);
         }
     }
 
-    /** 读取并切换至当前 AI 模式绑定的专属角色形象 */
+    private String lastPetMode;
+
+    /**
+     * AI 模式切换（#operit / #api 等）时联动该目标绑定的桌宠。
+     * 只在模式真正变化时生效，其它配置保存（改密钥等）不再把手动选的桌宠强行改回去。
+     */
     public void applyModePet(String mode) {
         if (mode == null || mode.isEmpty()) return;
-        String boundDir = PetRegistry.getPetDirForMode(this, mode);
-        if (boundDir != null && !boundDir.isEmpty()) {
-            changePet(boundDir);
-        }
+        if (mode.equals(lastPetMode)) return;
+        lastPetMode = mode;
+        PetRegistry.applyTargetPet(this, mode);
     }
 
     public PetChatBridge getChatBridge() {
@@ -1564,12 +1872,14 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
         String btnLabel = isPetHidden ? "🐾 重新弹出桌宠" : "🙈 隐藏桌宠";
         Notification.Action action = new Notification.Action.Builder(
-                R.mipmap.ic_launcher, btnLabel, togglePi).build();
+                R.drawable.ic_paw, btnLabel, togglePi).build();
         builder.addAction(action);
 
         return builder
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("DevPetM")
+                .setSmallIcon(com.xm486.pimet.ui.NotificationStyle.SMALL_ICON)
+                .setColor(com.xm486.pimet.ui.NotificationStyle.accentColor(this))
+                .setLargeIcon(com.xm486.pimet.ui.NotificationStyle.largeIcon(this))
+                .setContentTitle("PiMet 桌宠")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(true)
@@ -1583,12 +1893,24 @@ public class PetOverlayService extends Service implements OperitMonitor.Listener
 
     @Override
     public void onDestroy() {
+        try {
+            unregisterReceiver(screenReceiver);
+        } catch (Throwable ignored) {}
         stopProactiveChatter();
         savePosition();
         PetRegistry.getPrefs(this).unregisterOnSharedPreferenceChangeListener(this);
+        try {
+            getSharedPreferences(com.xm486.pimet.ThemeManager.PREF_NAME, MODE_PRIVATE)
+                    .unregisterOnSharedPreferenceChangeListener(themePrefListener);
+        } catch (Throwable ignored) {}
         stopFling();
         releaseVelocityTracker();
-        bubbleHandler.removeCallbacks(bubbleHideRunnable);
+        bubbleHandler.removeCallbacksAndMessages(null);
+        bottomPauseHandler.removeCallbacksAndMessages(null);
+        if (chatBridge != null) {
+            chatBridge.detach();
+            chatBridge = null;
+        }
         if (petMenu != null) {
             petMenu.dismiss();
             petMenu = null;

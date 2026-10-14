@@ -23,7 +23,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.MainActivity;
-import com.xm486.pimet.PiWebActivity;
+import com.xm486.pimet.ThemeManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,140 +65,175 @@ public class PetMenu {
         return (int) (v * context.getResources().getDisplayMetrics().density + 0.5f);
     }
 
+    /**
+     * 菜单尺寸：跟随桌宠当前显示宽度，约为桌宠宽 × 倍数（默认 1.8×，可在设置里调 150–250%），
+     * 下限 140dp、上限 220dp，且不超过屏宽。按钮为纯图标网格，大字号下也不换行。
+     */
+    public static final int MIN_MENU_SCALE = 150;
+    public static final int MAX_MENU_SCALE = 250;
+    public static final int MIN_MENU_WIDTH_DP = 140;
+    public static final int MAX_MENU_WIDTH_DP = 220;
+    private static final int CELL_DP = 32;
+    private static final int GAP_DP = 5;
+    private static final int PAD_DP = 8;
+
+    private ThemeManager.ThemePalette palette;
+    private LinearLayout rootView;
+    private final android.os.Handler followHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int[] lastPetRect;
+    private final Runnable followRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (dialog == null || !dialog.isShowing()) return;
+            int[] r = currentPetRect();
+            if (r != null && (lastPetRect == null || !java.util.Arrays.equals(r, lastPetRect))) {
+                positionWindow();
+            }
+            followHandler.postDelayed(this, 200);
+        }
+    };
+
+    /** 桌宠当前显示宽度（dp）。 */
+    private int petWidthDp() {
+        PetOverlayService s = service != null ? service : PetOverlayService.getInstance();
+        float density = context.getResources().getDisplayMetrics().density;
+        if (s != null && s.getPetView() != null && s.getPetView().getWidth() > 0) {
+            return Math.round(s.getPetView().getWidth() / density);
+        }
+        return PetRegistry.getIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
+    }
+
+    /** 菜单宽度（dp）：桌宠宽 × 倍数，夹在 140–220dp 且不超出屏幕。 */
+    private int menuWidthDp() {
+        int scale = PetRegistry.getIntPref(context, PetRegistry.KEY_MENU_SCALE, PetRegistry.DEFAULT_MENU_SCALE);
+        scale = Math.max(MIN_MENU_SCALE, Math.min(MAX_MENU_SCALE, scale));
+        int w = Math.round(petWidthDp() * scale / 100f);
+        w = Math.max(MIN_MENU_WIDTH_DP, Math.min(MAX_MENU_WIDTH_DP, w));
+        android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int screenDp = (int) (dm.widthPixels / dm.density);
+        return Math.max(120, Math.min(w, screenDp - 16));
+    }
+
+    /** 桌宠在屏幕上的实际矩形 [x, y, w, h]（像素）；无悬浮桌宠时返回 null。 */
+    private int[] currentPetRect() {
+        PetOverlayService s = service != null ? service : PetOverlayService.getInstance();
+        if (s == null || s.getOverlayRoot() == null) return null;
+        return s.getPetViewScreenRect();
+    }
+
+    private void tintSeekBar(SeekBar sb) {
+        try {
+            android.content.res.ColorStateList acc = android.content.res.ColorStateList.valueOf(palette.accent);
+            sb.setProgressTintList(acc);
+            sb.setThumbTintList(acc);
+            sb.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.border));
+        } catch (Throwable ignored) {}
+    }
+
+    private StateListDrawable buttonBg(boolean danger, boolean selected) {
+        GradientDrawable normal = danger
+                ? ThemeManager.createDangerButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL)
+                : selected
+                ? ThemeManager.createSelectedOptionDrawable(context, palette, ThemeManager.RADIUS_CONTROL)
+                : ThemeManager.createSecondaryButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+        GradientDrawable pressed = ThemeManager.createSelectedOptionDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+        StateListDrawable sld = new StateListDrawable();
+        sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        sld.addState(new int[]{}, normal);
+        return sld;
+    }
+
+    /** 纯图标按钮：32dp 触控区，长按显示文字提示（tooltip）。 */
+    private android.widget.ImageView iconBtn(int iconRes, String tip, int tint, boolean danger,
+                                             View.OnClickListener listener) {
+        android.widget.ImageView iv = new android.widget.ImageView(context);
+        iv.setImageResource(iconRes);
+        iv.setColorFilter(tint, android.graphics.PorterDuff.Mode.SRC_IN);
+        iv.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+        iv.setPadding(dp(7), dp(7), dp(7), dp(7));
+        iv.setBackground(buttonBg(danger, false));
+        iv.setContentDescription(tip);
+        iv.setTooltipText(tip);
+        iv.setClickable(true);
+        iv.setFocusable(true);
+        iv.setOnClickListener(listener);
+        return iv;
+    }
+
+    /** 等宽网格：按可用宽度自动决定列数（每格约 32dp，间距 5dp），空位补占位。 */
+    private LinearLayout grid(List<View> cells, int innerWidthDp, int cellHeightDp, int minCols, int maxCols) {
+        int cols = (innerWidthDp + GAP_DP) / (CELL_DP + GAP_DP);
+        cols = Math.max(minCols, Math.min(maxCols, Math.min(cols, cells.size())));
+        // 均衡行：行数不变时尽量平均分配（如 6 个按钮排成 3×2，而不是 5+1）
+        if (cols > 0 && cells.size() > cols) {
+            int rows = (cells.size() + cols - 1) / cols;
+            cols = Math.max(minCols, (cells.size() + rows - 1) / rows);
+        }
+        LinearLayout g = new LinearLayout(context);
+        g.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < cells.size(); i += cols) {
+            LinearLayout row = new LinearLayout(context);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int c = 0; c < cols; c++) {
+                int idx = i + c;
+                View v = idx < cells.size() ? cells.get(idx) : new View(context);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(cellHeightDp), 1f);
+                if (c > 0) lp.leftMargin = dp(GAP_DP);
+                row.addView(v, lp);
+            }
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) rlp.topMargin = dp(GAP_DP);
+            g.addView(row, rlp);
+        }
+        return g;
+    }
+
+    private LinearLayout.LayoutParams rowLp(int topMarginDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(topMarginDp);
+        return lp;
+    }
+
+    private TextView glyphBtn(String glyph, View.OnClickListener l) {
+        TextView tv = new TextView(context);
+        tv.setText(glyph);
+        tv.setTextColor(palette.text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f);
+        tv.setGravity(Gravity.CENTER);
+        tv.setIncludeFontPadding(false);
+        tv.setBackground(buttonBg(false, false));
+        tv.setClickable(true);
+        tv.setFocusable(true);
+        tv.setOnClickListener(l);
+        return tv;
+    }
+
     public void show() {
         if (dialog != null && dialog.isShowing()) return;
 
         try {
+            palette = ThemeManager.getEffectivePalette(context);
             dialog = new Dialog(context);
             dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
 
-            // 读取已保存的菜单宽度（默认紧凑 150dp，可在 120~240dp 间任意调节）
-            int savedMenuWidth = PetRegistry.getIntPref(context, PetRegistry.KEY_MENU_WIDTH,
-                    PetRegistry.getIntPref(context, "pref_menu_width", PetRegistry.DEFAULT_MENU_WIDTH));
-            if (savedMenuWidth < 120 || savedMenuWidth > 260) {
-                savedMenuWidth = 150;
-            }
-            final int initialMenuWidth = savedMenuWidth;
+            final int menuWDp = menuWidthDp();
+            final int innerDp = menuWDp - PAD_DP * 2;
 
             LinearLayout root = new LinearLayout(context);
+            rootView = root;
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(9), dp(7), dp(9), dp(8));
+            root.setPadding(dp(PAD_DP), dp(PAD_DP), dp(PAD_DP), dp(PAD_DP));
 
+            // 不透明面板底色 + 发丝描边
             GradientDrawable rootBg = new GradientDrawable();
-            rootBg.setColor(0xF6131722);
+            rootBg.setColor(palette.bgPanel);
             rootBg.setCornerRadius(dp(12));
-            rootBg.setStroke(dp(1), 0x44475569);
+            rootBg.setStroke(Math.max(1, dp(1)), palette.border);
             root.setBackground(rootBg);
 
-            // ---- 顶栏：标题 + ✕ 关闭按钮 ----
-            LinearLayout topBar = new LinearLayout(context);
-            topBar.setOrientation(LinearLayout.HORIZONTAL);
-            topBar.setGravity(Gravity.CENTER_VERTICAL);
-
-            TextView title = new TextView(context);
-            title.setText("🐾 桌宠控制");
-            title.setTextColor(0xFFF1F5F9);
-            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            title.setTypeface(Typeface.DEFAULT_BOLD);
-            topBar.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-            TextView closeBtn = new TextView(context);
-            closeBtn.setText("✕");
-            closeBtn.setTextColor(0xFF94A3B8);
-            closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            closeBtn.setPadding(dp(6), dp(1), dp(3), dp(1));
-            closeBtn.setOnClickListener(v -> dismiss());
-            topBar.addView(closeBtn);
-            root.addView(topBar);
-
-            // 分割线 1
-            View div1 = new View(context);
-            div1.setBackgroundColor(0x22475569);
-            LinearLayout.LayoutParams divLp1 = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-            divLp1.topMargin = dp(4);
-            divLp1.bottomMargin = dp(5);
-            root.addView(div1, divLp1);
-
-            // ---- 监控目标标签行 (点按一键切换监控AI · 长按直达Web界面) ----
-            TextView targetHeader = new TextView(context);
-            targetHeader.setText("🎯 监控AI (点按切换 · 长按进入)");
-            targetHeader.setTextColor(0xFF94A3B8);
-            targetHeader.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
-            LinearLayout.LayoutParams thLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            thLp.bottomMargin = dp(3);
-            root.addView(targetHeader, thLp);
-
-            targetButtons.clear();
-
-            LinearLayout targetRow1 = new LinearLayout(context);
-            targetRow1.setOrientation(LinearLayout.HORIZONTAL);
-            targetRow1.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams tr1Lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(22));
-
-            TextView btnPiWeb = createTargetButton("pi-web", PetRegistry.TARGET_PIWEB, v -> {
-                switchTarget(PetRegistry.TARGET_PIWEB);
-            }, v -> {
-                openConsole(PetRegistry.TARGET_PIWEB);
-                return true;
-            });
-            TextView btnOperit = createTargetButton("Operit", PetRegistry.TARGET_OPERIT, v -> {
-                switchTarget(PetRegistry.TARGET_OPERIT);
-            }, v -> {
-                openConsole(PetRegistry.TARGET_OPERIT);
-                return true;
-            });
-
-            targetRow1.addView(btnPiWeb, new LinearLayout.LayoutParams(0, dp(22), 1f));
-            targetRow1.addView(new View(context), new LinearLayout.LayoutParams(dp(3), 1));
-            targetRow1.addView(btnOperit, new LinearLayout.LayoutParams(0, dp(22), 1f));
-            root.addView(targetRow1, tr1Lp);
-
-            LinearLayout targetRow2 = new LinearLayout(context);
-            targetRow2.setOrientation(LinearLayout.HORIZONTAL);
-            targetRow2.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams tr2Lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(22));
-            tr2Lp.topMargin = dp(3);
-
-            TextView btnClaw = createTargetButton("ClawBench", PetRegistry.TARGET_CLAWBENCH, v -> {
-                switchTarget(PetRegistry.TARGET_CLAWBENCH);
-            }, v -> {
-                openConsole(PetRegistry.TARGET_CLAWBENCH);
-                return true;
-            });
-            TextView btnRikka = createTargetButton("RikkaHub", PetRegistry.TARGET_RIKKA, v -> {
-                switchTarget(PetRegistry.TARGET_RIKKA);
-            }, v -> {
-                openConsole(PetRegistry.TARGET_RIKKA);
-                return true;
-            });
-
-            targetRow2.addView(btnClaw, new LinearLayout.LayoutParams(0, dp(22), 1f));
-            targetRow2.addView(new View(context), new LinearLayout.LayoutParams(dp(3), 1));
-            targetRow2.addView(btnRikka, new LinearLayout.LayoutParams(0, dp(22), 1f));
-            root.addView(targetRow2, tr2Lp);
-
-            targetButtons.add(btnPiWeb);
-            targetButtons.add(btnOperit);
-            targetButtons.add(btnClaw);
-            targetButtons.add(btnRikka);
-
-            String activeTarget = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
-            refreshTargetButtonStyles(activeTarget);
-
-            // 分割线 (监控与形象之间)
-            View divTarget = new View(context);
-            divTarget.setBackgroundColor(0x22475569);
-            LinearLayout.LayoutParams divLpTarget = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-            divLpTarget.topMargin = dp(5);
-            divLpTarget.bottomMargin = dp(5);
-            root.addView(divTarget, divLpTarget);
-
-            // ---- 角色切换横排：[◀] [角色名] [▶] ----
+            // ---- 顶行：[‹] 角色名 [›] [✕] ----
             allPets = PetRegistry.loadPets(context);
             String curPetDir = PetRegistry.getPetDir(context);
             if (allPets != null) {
@@ -209,59 +244,88 @@ public class PetMenu {
                     }
                 }
             }
+            LinearLayout topRow = new LinearLayout(context);
+            topRow.setOrientation(LinearLayout.HORIZONTAL);
+            topRow.setGravity(Gravity.CENTER_VERTICAL);
 
-            LinearLayout petSwitchRow = new LinearLayout(context);
-            petSwitchRow.setOrientation(LinearLayout.HORIZONTAL);
-            petSwitchRow.setGravity(Gravity.CENTER_VERTICAL);
-
-            TextView prevPetBtn = buildCompactActionBtn("◀", 0x33334155, 0x66475569, 0xFFCBD5E1, v -> stepPet(-1));
-            LinearLayout.LayoutParams prevLp = new LinearLayout.LayoutParams(dp(24), dp(22));
-            prevPetBtn.setLayoutParams(prevLp);
-
+            TextView prevPetBtn = glyphBtn("‹", v -> stepPet(-1));
+            prevPetBtn.setTooltipText("上一个角色");
             petNameTv = new TextView(context);
             updatePetNameLabel();
-            petNameTv.setTextColor(0xFFE2E8F0);
-            petNameTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            petNameTv.setTextColor(palette.text);
+            petNameTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
             petNameTv.setGravity(Gravity.CENTER);
-            petNameTv.setMaxLines(1);
+            petNameTv.setSingleLine(true);
             petNameTv.setEllipsize(TextUtils.TruncateAt.END);
-            petNameTv.setTypeface(Typeface.DEFAULT_BOLD);
-            LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(0, dp(22), 1f);
+            petNameTv.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+            TextView nextPetBtn = glyphBtn("›", v -> stepPet(1));
+            nextPetBtn.setTooltipText("下一个角色");
+            android.widget.ImageView closeBtn = iconBtn(com.xm486.pimet.R.drawable.ic_close, "收起菜单",
+                    palette.textMuted, false, v -> dismiss());
+            closeBtn.setBackground(null);
+
+            topRow.addView(prevPetBtn, new LinearLayout.LayoutParams(dp(26), dp(28)));
+            LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
             nameLp.leftMargin = dp(4);
             nameLp.rightMargin = dp(4);
-            petNameTv.setLayoutParams(nameLp);
+            topRow.addView(petNameTv, nameLp);
+            topRow.addView(nextPetBtn, new LinearLayout.LayoutParams(dp(26), dp(28)));
+            LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(dp(28), dp(28));
+            closeLp.leftMargin = dp(4);
+            topRow.addView(closeBtn, closeLp);
+            root.addView(topRow);
 
-            TextView nextPetBtn = buildCompactActionBtn("▶", 0x33334155, 0x66475569, 0xFFCBD5E1, v -> stepPet(1));
-            LinearLayout.LayoutParams nextLp = new LinearLayout.LayoutParams(dp(24), dp(22));
-            nextPetBtn.setLayoutParams(nextLp);
+            // ---- 监控目标 2×2：点按切换 · 长按进入 ----
+            targetButtons.clear();
+            String[][] targets = {
+                    {"pi-web", PetRegistry.TARGET_PIWEB},
+                    {"Operit", PetRegistry.TARGET_OPERIT},
+                    {"Claw", PetRegistry.TARGET_CLAWBENCH},
+                    {"Rikka", PetRegistry.TARGET_RIKKA},
+            };
+            List<View> targetCells = new ArrayList<>();
+            for (String[] t : targets) {
+                final String key = t[1];
+                TextView b = createTargetButton(t[0], key, v -> switchTarget(key), v -> {
+                    openConsole(key);
+                    return true;
+                });
+                targetButtons.add(b);
+                targetCells.add(b);
+            }
+            root.addView(grid(targetCells, innerDp, 28, 2, 2), rowLp(6));
+            String activeTarget = PetRegistry.getStringPref(context, PetRegistry.KEY_MONITOR_TARGET, PetRegistry.TARGET_PIWEB);
+            refreshTargetButtonStyles(activeTarget);
 
-            petSwitchRow.addView(prevPetBtn);
-            petSwitchRow.addView(petNameTv);
-            petSwitchRow.addView(nextPetBtn);
-            root.addView(petSwitchRow);
-
-            // ---- 尺寸滑块 1: 桌宠大小 (32 ~ 140 dp) ----
+            // ---- 桌宠大小滑块（32 ~ 140 dp），菜单随之缩放并贴紧桌宠 ----
             int curPetSize = PetRegistry.getIntPref(context, PetRegistry.KEY_PET_SIZE, PetRegistry.DEFAULT_PET_SIZE);
             curPetSize = Math.max(32, Math.min(140, curPetSize));
-            TextView petSizeLabel = new TextView(context);
-            petSizeLabel.setText("📏 桌宠大小: " + curPetSize + " dp");
-            petSizeLabel.setTextColor(0xFF94A3B8);
-            petSizeLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
-            LinearLayout.LayoutParams pslLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            pslLp.topMargin = dp(5);
-            root.addView(petSizeLabel, pslLp);
-
+            LinearLayout sizeRow = new LinearLayout(context);
+            sizeRow.setOrientation(LinearLayout.HORIZONTAL);
+            sizeRow.setGravity(Gravity.CENTER_VERTICAL);
+            android.widget.ImageView rulerIc = new android.widget.ImageView(context);
+            rulerIc.setImageResource(com.xm486.pimet.R.drawable.ic_ruler);
+            rulerIc.setColorFilter(palette.textMuted, android.graphics.PorterDuff.Mode.SRC_IN);
+            rulerIc.setTooltipText("桌宠大小");
+            sizeRow.addView(rulerIc, new LinearLayout.LayoutParams(dp(14), dp(14)));
             SeekBar petSizeBar = new SeekBar(context);
             petSizeBar.setMax(108); // 32 ~ 140
             petSizeBar.setProgress(curPetSize - 32);
-            petSizeBar.setPadding(dp(2), dp(1), dp(2), dp(1));
+            petSizeBar.setPadding(dp(8), dp(4), dp(8), dp(4));
+            tintSeekBar(petSizeBar);
+            sizeRow.addView(petSizeBar, new LinearLayout.LayoutParams(0, dp(24), 1f));
+            TextView sizeVal = new TextView(context);
+            sizeVal.setText(String.valueOf(curPetSize));
+            sizeVal.setTextColor(palette.textMuted);
+            sizeVal.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
+            sizeVal.setSingleLine(true);
+            sizeRow.addView(sizeVal);
             petSizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
                 public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                     if (fromUser) {
                         int size = progress + 32;
-                        petSizeLabel.setText("📏 桌宠大小: " + size + " dp");
+                        sizeVal.setText(String.valueOf(size));
                         PetRegistry.setIntPref(context, PetRegistry.KEY_PET_SIZE, size);
                         if (service != null) {
                             service.applyPetSize(size);
@@ -269,63 +333,16 @@ public class PetMenu {
                     }
                 }
                 @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-            });
-            root.addView(petSizeBar);
-
-            // ---- 尺寸滑块 2: 菜单面板大小 (120 ~ 240 dp) ----
-            TextView menuWidthLabel = new TextView(context);
-            menuWidthLabel.setText("📐 菜单宽度: " + initialMenuWidth + " dp");
-            menuWidthLabel.setTextColor(0xFF94A3B8);
-            menuWidthLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
-            LinearLayout.LayoutParams mwlLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            mwlLp.topMargin = dp(3);
-            root.addView(menuWidthLabel, mwlLp);
-
-            SeekBar menuWidthBar = new SeekBar(context);
-            menuWidthBar.setMax(120); // 120 ~ 240
-            menuWidthBar.setProgress(initialMenuWidth - 120);
-            menuWidthBar.setPadding(dp(2), dp(1), dp(2), dp(1));
-            menuWidthBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                @Override
-                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                    if (fromUser) {
-                        int width = progress + 120;
-                        menuWidthLabel.setText("📐 菜单宽度: " + width + " dp");
-                        PetRegistry.setIntPref(context, PetRegistry.KEY_MENU_WIDTH, width);
-                        PetRegistry.setIntPref(context, "pref_menu_width", width);
-                        if (dialog != null && dialog.getWindow() != null) {
-                            WindowManager.LayoutParams wlp = dialog.getWindow().getAttributes();
-                            wlp.width = dp(width);
-                            dialog.getWindow().setAttributes(wlp);
-                        }
-                    }
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                    // 松手后按新的桌宠尺寸重算菜单宽度与位置
+                    if (rootView != null) rootView.post(() -> positionWindow());
                 }
-                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
             });
-            root.addView(menuWidthBar);
+            root.addView(sizeRow, rowLp(4));
 
-            // 分割线 2
-            View div2 = new View(context);
-            div2.setBackgroundColor(0x22475569);
-            LinearLayout.LayoutParams divLp2 = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-            divLp2.topMargin = dp(4);
-            divLp2.bottomMargin = dp(5);
-            root.addView(div2, divLp2);
-
-            // ---- 桌宠专属子代理功能行: [🧠 汇报进度] [🗣️ 主动说话: 开/关] ----
-            LinearLayout petAgentRow = new LinearLayout(context);
-            petAgentRow.setOrientation(LinearLayout.HORIZONTAL);
-            petAgentRow.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams agentLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(23));
-            agentLp.bottomMargin = dp(4);
-            petAgentRow.setLayoutParams(agentLp);
-
-            TextView btnProgress = buildCompactActionBtn("🧠 汇报进度", 0x228B5CF6, 0x558B5CF6, 0xFFDDD6FE, v -> {
+            // ---- 操作图标网格：汇报进度 · 活跃度 · 绑定 · 设置 · 指南 · 关闭桌宠 ----
+            List<View> actions = new ArrayList<>();
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_brain, "汇报进度", palette.text, false, v -> {
                 dismiss();
                 try {
                     String report = PetMemoryManager.getSystemProgressReport(context);
@@ -340,41 +357,31 @@ public class PetMenu {
                 } catch (Throwable t) {
                     Log.e("PetMenu", "btnProgress error", t);
                 }
-            });
-            petAgentRow.addView(btnProgress, new LinearLayout.LayoutParams(0, dp(23), 1f));
-
-            View agentSpace = new View(context);
-            petAgentRow.addView(agentSpace, new LinearLayout.LayoutParams(dp(3), 1));
+            }));
 
             boolean proactiveOn = PetRegistry.getBooleanPref(context, PetMemoryManager.KEY_PROACTIVE_CHAT_ENABLED, true);
             int curMin = PetMemoryManager.getProactiveIntervalMin(context);
-            String label = proactiveOn ? "🗣️ 活跃度: " + curMin + "分" : "🗣️ 主动说话: 关";
-
-            TextView btnProactive = buildCompactActionBtn(
-                    label,
-                    proactiveOn ? 0x2210B981 : 0x2264748B,
-                    proactiveOn ? 0x5510B981 : 0x5564748B,
-                    proactiveOn ? 0xFFA7F3D0 : 0xFFCBD5E1,
-                    v -> {
+            String proTip = proactiveOn ? "主动说话 · 每 " + curMin + " 分" : "主动说话 · 关";
+            actions.add(iconBtn(proactiveOn ? com.xm486.pimet.R.drawable.ic_megaphone : com.xm486.pimet.R.drawable.ic_bell_off,
+                    proTip, proactiveOn ? palette.accent : palette.textMuted, false, v -> {
                         dismiss();
                         showActivenessDialog();
-                    });
-            petAgentRow.addView(btnProactive, new LinearLayout.LayoutParams(0, dp(23), 1f));
-            root.addView(petAgentRow);
+                    }));
 
-            // ---- 底部操作功能键行: 仅保留 [⚙️ 详细设置] 与 [🔴 关闭桌宠] ----
-            LinearLayout actionRow = new LinearLayout(context);
-            actionRow.setOrientation(LinearLayout.HORIZONTAL);
-            actionRow.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams arLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(26));
-            arLp.topMargin = dp(4);
+            // 绑定：为各监控目标绑定桌宠（当前监控高亮，选完若是当前监控立即换上）
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_link, "绑定桌宠", palette.text, false, v -> {
+                dismiss();
+                try {
+                    PetBindingDialog.show(context);
+                } catch (Throwable t) {
+                    Log.e("PetMenu", "open PetBindingDialog failed", t);
+                }
+            }));
 
-            TextView setBtn = buildCompactActionBtn("⚙️ 设置", 0x22F59E0B, 0x55F59E0B, 0xFFFCD34D, v -> {
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_settings, "设置", palette.text, false, v -> {
                 dismiss();
                 try {
                     PetParamsDialog.show(context, service, () -> {
-                        // 回调更新界面或桌宠状态
                         if (service != null) {
                             service.applyBubbleDimensions();
                         }
@@ -382,43 +389,42 @@ public class PetMenu {
                 } catch (Throwable t) {
                     Log.e("PetMenu", "open PetParamsDialog failed", t);
                 }
-            });
-            actionRow.addView(setBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
+            }));
 
-            View spaceGuide = new View(context);
-            actionRow.addView(spaceGuide, new LinearLayout.LayoutParams(dp(4), 1));
-
-            TextView guideBtn = buildCompactActionBtn("📖 指南", 0x220284C7, 0x550284C7, 0xFF7DD3FC, v -> {
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_book, "指南", palette.text, false, v -> {
                 dismiss();
                 try {
                     new com.xm486.pimet.ui.HelpGuideDialog(context).show();
                 } catch (Throwable t) {
                     Log.e("PetMenu", "open HelpGuideDialog failed", t);
                 }
-            });
-            actionRow.addView(guideBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
+            }));
 
-            View space3 = new View(context);
-            actionRow.addView(space3, new LinearLayout.LayoutParams(dp(4), 1));
-
-            TextView stopBtn = buildCompactActionBtn("🔴 关闭", 0x22EF4444, 0x55EF4444, 0xFFFCA5A5, v -> {
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_terminal, "终端", palette.text, false, v -> {
                 dismiss();
-                try {
-                    PetRegistry.setPetEnabled(context, false);
-                    if (service != null) {
-                        service.stopSelf();
-                    }
-                    if (activity != null) {
-                        activity.updatePetDisplay(false);
-                    }
-                } catch (Throwable t) {
-                    Log.e("PetMenu", "stopBtn failed", t);
-                }
-            });
-            actionRow.addView(stopBtn, new LinearLayout.LayoutParams(0, dp(26), 1f));
-            root.addView(actionRow, arLp);
+                com.xm486.pimet.terminal.FloatingTerminal.toggle(context);
+            }));
 
-            dialog.setContentView(root);
+            // 关闭桌宠：低调危险样式（极淡危险底 + 危险色图标）
+            actions.add(iconBtn(com.xm486.pimet.R.drawable.ic_power, "关闭桌宠",
+                    ThemeManager.statusDangerColor(palette), true, v -> {
+                        dismiss();
+                        try {
+                            PetRegistry.setPetEnabled(context, false);
+                            if (service != null) {
+                                service.stopSelf();
+                            }
+                            if (activity != null) {
+                                activity.updatePetDisplay(false);
+                            }
+                        } catch (Throwable t) {
+                            Log.e("PetMenu", "stopBtn failed", t);
+                        }
+                    }));
+            root.addView(grid(actions, innerDp, CELL_DP, 3, 5), rowLp(6));
+
+            dialog.setContentView(com.xm486.pimet.ui.Icons.install(root));
+            dialog.setOnDismissListener(d -> followHandler.removeCallbacks(followRunnable));
 
             Window window = dialog.getWindow();
             if (window != null) {
@@ -430,53 +436,86 @@ public class PetMenu {
                     }
                 }
                 window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                // 菜单外的触摸交给下层应用（不再整屏拦截导致「触控失灵」），并在点到外面时关闭菜单
+                window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH);
+                window.setDimAmount(0f);
                 window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             }
 
+            dialog.setCanceledOnTouchOutside(true);
             dialog.show();
-
-            if (window != null) {
-                WindowManager.LayoutParams lp = window.getAttributes();
-                lp.width = dp(initialMenuWidth);
-                lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-
-                PetOverlayService effectiveService = (service != null) ? service : PetOverlayService.getInstance();
-                if (effectiveService != null && effectiveService.getOverlayRoot() != null) {
-                    lp.gravity = Gravity.TOP | Gravity.START;
-                    int[] pos = effectiveService.getPetScreenPosition();
-                    int petX = pos[0];
-                    int petY = pos[1];
-                    int petW = pos[2];
-                    int menuW = dp(initialMenuWidth);
-
-                    android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
-                    int screenW = dm.widthPixels;
-                    int screenH = dm.heightPixels;
-
-                    // 若桌宠在屏幕右半边，菜单排在桌宠左侧；若桌宠在左半边，菜单排在桌宠右侧，杜绝遮挡桌宠
-                    if (petX + petW / 2 > screenW / 2) {
-                        lp.x = Math.max(dp(8), petX - menuW - dp(8));
-                    } else {
-                        lp.x = Math.min(screenW - menuW - dp(8), petX + petW + dp(8));
-                    }
-
-                    // 垂直方向与桌宠对齐并防止超出上下屏幕边界
-                    int targetY = Math.max(dp(36), petY - dp(10));
-                    int maxAllowedY = screenH - dp(320);
-                    lp.y = Math.min(Math.max(dp(36), targetY), Math.max(dp(36), maxAllowedY));
-                } else {
-                    lp.gravity = Gravity.CENTER;
-                }
-                window.setAttributes(lp);
-            }
+            positionWindow();
+            followHandler.removeCallbacks(followRunnable);
+            followHandler.postDelayed(followRunnable, 200);
 
         } catch (Throwable t) {
             Toast.makeText(context, "打开菜单失败: " + t.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
+    /**
+     * 让菜单贴在桌宠旁边：优先右侧，右侧放不下则左侧（都放不下取空间较大的一侧并夹在屏内），
+     * 竖向与桌宠中线对齐并限制在屏幕内。桌宠移动/缩放后重复调用即可跟随。
+     */
+    private void positionWindow() {
+        if (dialog == null || dialog.getWindow() == null || rootView == null) return;
+        Window window = dialog.getWindow();
+        WindowManager.LayoutParams lp = window.getAttributes();
+        int menuW = dp(menuWidthDp());
+        lp.width = menuW;
+        lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
+        lp.alpha = 1f;
+
+        int[] pet = currentPetRect();
+        lastPetRect = pet;
+        if (pet == null) {
+            lp.gravity = Gravity.CENTER;
+            window.setAttributes(lp);
+            return;
+        }
+        lp.gravity = Gravity.TOP | Gravity.START;
+        int petX = pet[0], petY = pet[1], petW = pet[2], petH = pet[3];
+        android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int screenW = dm.widthPixels;
+        int screenH = dm.heightPixels;
+        int gap = dp(6);
+        int edge = dp(4);
+
+        int rightRoom = screenW - (petX + petW) - gap - edge;
+        int leftRoom = petX - gap - edge;
+        int x;
+        if (rightRoom >= menuW) {
+            x = petX + petW + gap;
+        } else if (leftRoom >= menuW) {
+            x = petX - gap - menuW;
+        } else if (rightRoom >= leftRoom) {
+            x = screenW - menuW - edge;
+        } else {
+            x = edge;
+        }
+        lp.x = Math.max(edge, Math.min(x, screenW - menuW - edge));
+
+        int menuH;
+        try {
+            rootView.measure(View.MeasureSpec.makeMeasureSpec(menuW, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            menuH = rootView.getMeasuredHeight();
+        } catch (Throwable t) {
+            menuH = dp(220);
+        }
+        int y = petY + petH / 2 - menuH / 2;
+        int minY = dp(28);
+        int maxY = Math.max(minY, screenH - menuH - dp(24));
+        lp.y = Math.max(minY, Math.min(y, maxY));
+        window.setAttributes(lp);
+    }
+
     private void switchTarget(String targetKey) {
         PetRegistry.setStringPref(context, PetRegistry.KEY_MONITOR_TARGET, targetKey);
+        // 切到该监控绑定的桌宠（未绑定保持当前），并同步菜单里的角色名
+        PetRegistry.applyTargetPet(context, targetKey);
+        syncPetIndex();
         try {
             ChatConfig cfg = ChatConfig.load(context);
             if (PetRegistry.TARGET_PIWEB.equals(targetKey)) {
@@ -542,18 +581,7 @@ public class PetMenu {
                 return;
             }
 
-            try {
-                Intent intent = new Intent(context, PiWebActivity.class);
-                intent.putExtra(PiWebActivity.EXTRA_PORT, port);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(intent);
-            } catch (Throwable t) {
-                try {
-                    Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + port));
-                    browser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    context.startActivity(browser);
-                } catch (Throwable ignored) {}
-            }
+            PetOverlayService.openTargetWeb(context, targetKey, port);
         } catch (Throwable t) {
             Log.e("PetMenu", "openConsole error", t);
         }
@@ -562,9 +590,9 @@ public class PetMenu {
     private TextView createTargetButton(String label, String targetKey, View.OnClickListener clk, View.OnLongClickListener lclk) {
         TextView btn = new TextView(context);
         btn.setText(label);
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
         btn.setGravity(Gravity.CENTER);
-        btn.setPadding(dp(4), dp(2), dp(4), dp(2));
+        btn.setPadding(dp(4), 0, dp(4), 0);
         btn.setTag(targetKey);
         btn.setClickable(true);
         btn.setFocusable(true);
@@ -579,30 +607,23 @@ public class PetMenu {
     }
 
     private void refreshTargetButtonStyles(String activeTarget) {
+        if (palette == null) palette = ThemeManager.getEffectivePalette(context);
         for (TextView btn : targetButtons) {
             String key = (String) btn.getTag();
             boolean isActive = key != null && key.equals(activeTarget);
 
-            GradientDrawable normal = new GradientDrawable();
-            normal.setCornerRadius(dp(6));
+            GradientDrawable normal;
             if (isActive) {
-                normal.setColor(0x3310B981);
-                normal.setStroke(dp(1), 0xFF10B981);
-                btn.setTextColor(0xFF34D399);
-                btn.setTypeface(Typeface.DEFAULT_BOLD);
-                btn.setText("● " + getTargetLabel(key));
+                normal = ThemeManager.createSelectedOptionDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+                btn.setTextColor(palette.accent);
+                btn.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
             } else {
-                normal.setColor(0x221E293B);
-                normal.setStroke(dp(1), 0x22475569);
-                btn.setTextColor(0xFF94A3B8);
+                normal = ThemeManager.createSecondaryButtonDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
+                btn.setTextColor(palette.textMuted);
                 btn.setTypeface(Typeface.DEFAULT);
-                btn.setText("○ " + getTargetLabel(key));
             }
 
-            GradientDrawable pressed = new GradientDrawable();
-            pressed.setCornerRadius(dp(6));
-            pressed.setColor(isActive ? 0x6610B981 : 0x55334155);
-            pressed.setStroke(dp(1), isActive ? 0xFF34D399 : 0x6694A3B8);
+            GradientDrawable pressed = ThemeManager.createSelectedOptionDrawable(context, palette, ThemeManager.RADIUS_CONTROL);
 
             StateListDrawable sld = new StateListDrawable();
             sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
@@ -631,37 +652,21 @@ public class PetMenu {
         updatePetNameLabel();
     }
 
+    private void syncPetIndex() {
+        if (allPets == null) return;
+        String cur = PetRegistry.getPetDir(context);
+        for (int i = 0; i < allPets.size(); i++) {
+            if (allPets.get(i).dir.equals(cur)) {
+                currentPetIndex = i;
+                break;
+            }
+        }
+        updatePetNameLabel();
+    }
+
     private void updatePetNameLabel() {
         if (petNameTv == null || allPets == null || allPets.isEmpty()) return;
         petNameTv.setText(allPets.get(currentPetIndex).displayName);
-    }
-
-    private TextView buildCompactActionBtn(String text, int normalColor, int strokeColor, int textColor, View.OnClickListener listener) {
-        TextView btn = new TextView(context);
-        btn.setText(text);
-        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
-        btn.setTextColor(textColor);
-        btn.setGravity(Gravity.CENTER);
-        btn.setClickable(true);
-        btn.setFocusable(true);
-        btn.setIncludeFontPadding(false);
-
-        GradientDrawable normal = new GradientDrawable();
-        normal.setColor(normalColor);
-        normal.setCornerRadius(dp(6));
-        normal.setStroke(dp(1), strokeColor);
-
-        GradientDrawable pressed = new GradientDrawable();
-        pressed.setColor(strokeColor);
-        pressed.setCornerRadius(dp(6));
-
-        StateListDrawable sld = new StateListDrawable();
-        sld.addState(new int[]{android.R.attr.state_pressed}, pressed);
-        sld.addState(new int[]{}, normal);
-
-        btn.setBackground(sld);
-        btn.setOnClickListener(listener);
-        return btn;
     }
 
     private void showActivenessDialog() {
@@ -690,7 +695,7 @@ public class PetMenu {
         }
 
         try {
-            android.app.AlertDialog alert = new android.app.AlertDialog.Builder(context)
+            android.app.AlertDialog alert = new com.xm486.pimet.ui.Icons.DialogBuilder(context)
                     .setTitle("🗣️ 桌宠活跃度与主动说话频率")
                     .setSingleChoiceItems(options, checkedItem, (dialogInterface, which) -> {
                         dialogInterface.dismiss();
@@ -725,6 +730,7 @@ public class PetMenu {
     }
 
     public void dismiss() {
+        followHandler.removeCallbacks(followRunnable);
         if (dialog != null && dialog.isShowing()) {
             dialog.dismiss();
             dialog = null;

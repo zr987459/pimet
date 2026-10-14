@@ -105,6 +105,8 @@ public class RikkaHubMonitor {
         return reachable;
     }
 
+    private volatile boolean lastGenerating = false;
+
     private void tick() {
         if (!running) return;
         try {
@@ -127,6 +129,7 @@ public class RikkaHubMonitor {
                 }
             }
             reachable = true;
+            lastGenerating = activeId != null;
 
             // 2) 拉取详情（生成中的会话，或最近更新的会话）解析细节
             String targetId = activeId != null ? activeId : latestId;
@@ -142,7 +145,9 @@ public class RikkaHubMonitor {
             notifySnapshot(OperitState.UNKNOWN);
         } finally {
             if (running && handler != null) {
-                handler.postDelayed(this::tick, POLL_INTERVAL_MS);
+                // 自适应轮询：生成中 1 秒；空闲 2.5 秒；连不上 5 秒（以前固定每秒两次 HTTP 请求）
+                long next = !reachable ? 5000L : (lastGenerating ? POLL_INTERVAL_MS : 2500L);
+                handler.postDelayed(this::tick, next);
             }
         }
     }

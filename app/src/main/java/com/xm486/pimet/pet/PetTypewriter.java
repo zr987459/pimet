@@ -9,7 +9,7 @@ import android.widget.TextView;
 /**
  * 打字机效果：把 AI 回复一字一字地显示在对话气泡里。
  *
- * 每 50ms 递增一个字符；每帧重新测量气泡高度并把桌宠/状态卡顶开，
+ * 每 30ms 推进一帧（长文一帧多个字）；气泡高度变化时才重新排版悬浮窗，
  * 播完后 1.5s 自动隐藏气泡。
  */
 public class PetTypewriter implements Runnable {
@@ -19,6 +19,23 @@ public class PetTypewriter implements Runnable {
     private final String text;
     private Runnable onTyped;
     private int index = 0;
+    private volatile boolean cancelled = false;
+
+    /** 同一时间只允许一个打字机在跑：新消息/点击气泡会打断旧的（以前多段会叠在一起继续慢慢播） */
+    private static PetTypewriter active;
+
+    public static void cancelActive() {
+        PetTypewriter a = active;
+        if (a != null) a.cancel();
+        active = null;
+    }
+
+    public void cancel() {
+        cancelled = true;
+        handler.removeCallbacks(this);
+        if (onTyped != null) handler.removeCallbacks(onTyped);
+        onTyped = null;
+    }
     public PetTypewriter(PetOverlayService service, String text) {
         this(service, text, null);
     }
@@ -32,7 +49,7 @@ public class PetTypewriter implements Runnable {
 
     @Override
     public void run() {
-        if (service == null || text == null) return;
+        if (cancelled || service == null || text == null) return;
         TextView bubble = service.getChatBubble();
         if (bubble == null) return;
 
@@ -40,6 +57,8 @@ public class PetTypewriter implements Runnable {
         if (index >= length) return;
 
         if (index == 0) {
+            if (active != null && active != this) active.cancel();
+            active = this;
             // 首帧：支持充裕的多行文本展开（至多10行），允许气泡跟随配置自适应宽度
             bubble.setMaxLines(10);
             bubble.setEllipsize(TextUtils.TruncateAt.END);
@@ -60,7 +79,9 @@ public class PetTypewriter implements Runnable {
                     .start();
         }
 
-        index++;
+        // 长文按长度加速：最多约 50 帧打完（≈1.5 秒），短句仍逐字
+        int step = length <= 40 ? 1 : (int) Math.ceil(length / 50.0);
+        index = Math.min(length, index + step);
         bubble.setText(text.substring(0, index));
         bubble.setVisibility(View.VISIBLE);
 
@@ -68,17 +89,18 @@ public class PetTypewriter implements Runnable {
         service.layoutChatBubble();
 
         if (index < length) {
-            handler.postDelayed(this, 48);
+            handler.postDelayed(this, 30);
         } else {
             // 播完当前分段：
             if (onTyped != null) {
                 // 有后续分段：保留充裕的阅读时间（至少 2.8 秒，按字数动态延长），绝不瞬间刷掉
-                int readPause = Math.max(2800, Math.min(7000, length * 140));
+                int readPause = Math.max(1500, Math.min(4000, length * 70));
                 handler.postDelayed(onTyped, readPause);
             } else {
                 // 最终分段结束：预留 5.5 秒 ~ 10 秒供用户完整阅读
                 int finalPause = Math.max(5500, Math.min(10000, length * 160));
                 service.scheduleBubbleHide(finalPause);
+                if (active == this) active = null;
             }
         }
     }

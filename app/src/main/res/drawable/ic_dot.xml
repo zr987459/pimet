@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 状态指示圆点 (Lucide 风格配套，填充色运行时着色) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M8,12a4,4 0 1,0 8,0a4,4 0 1,0 -8,0"
+        android:fillColor="#FFFFFFFF"/>
+</vector>

@@ -3,6 +3,6 @@
     android:shape="oval">
     <solid android:color="#D9161B22" />
     <stroke
-        android:width="1.5dp"
+        android:width="@dimen/hairline"
         android:color="#58A6FF" />
 </shape>

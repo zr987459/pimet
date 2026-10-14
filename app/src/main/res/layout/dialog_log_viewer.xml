@@ -4,7 +4,7 @@
     android:layout_height="wrap_content"
     android:background="#161B22"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="@dimen/space_lg">
 
     <!-- 顶部标题与关闭 -->
     <LinearLayout
@@ -19,7 +19,7 @@
             android:layout_weight="1"
             android:text="📜 系统运行与部署日志"
             android:textColor="#F0F6FC"
-            android:textSize="16sp"
+            android:textSize="@dimen/text_title"
             android:textStyle="bold" />
 
         <TextView
@@ -36,7 +36,7 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="@dimen/space_md"
         android:orientation="horizontal">
 
         <Button
@@ -47,29 +47,29 @@
             android:background="@drawable/bg_tab_selected"
             android:text="🖥️ 控制台"
             android:textColor="@color/brand_on_primary_container"
-            android:textSize="11sp" />
+            android:textSize="@dimen/text_caption" />
 
         <Button
             android:id="@+id/btnLogClawBench"
             android:layout_width="0dp"
             android:layout_height="32dp"
-            android:layout_marginStart="4dp"
+            android:layout_marginStart="@dimen/space_xs"
             android:layout_weight="1"
             android:background="@drawable/bg_tab_normal"
             android:text="🦞 ClawBench"
             android:textColor="#C9D1D9"
-            android:textSize="11sp" />
+            android:textSize="@dimen/text_caption" />
 
         <Button
             android:id="@+id/btnLogPiWeb"
             android:layout_width="0dp"
             android:layout_height="32dp"
-            android:layout_marginStart="4dp"
+            android:layout_marginStart="@dimen/space_xs"
             android:layout_weight="1"
             android:background="@drawable/bg_tab_normal"
             android:text="🌐 Pi-Web"
             android:textColor="#C9D1D9"
-            android:textSize="11sp" />
+            android:textSize="@dimen/text_caption" />
     </LinearLayout>
 
     <!-- 日志内容滚动查看区 -->
@@ -77,9 +77,9 @@
         android:id="@+id/logViewerScrollView"
         android:layout_width="match_parent"
         android:layout_height="340dp"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="@dimen/space_md"
         android:background="#0D1117"
-        android:padding="8dp">
+        android:padding="@dimen/space_sm">
 
         <TextView
             android:id="@+id/logViewerContentTv"
@@ -96,40 +96,40 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="@dimen/space_md"
         android:gravity="end"
         android:orientation="horizontal">
 
         <Button
             android:id="@+id/btnLogRefresh"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
-            android:layout_marginEnd="6dp"
+            android:layout_height="@dimen/control_height_compact"
+            android:layout_marginEnd="@dimen/space_sm"
             android:background="?attr/selectableItemBackground"
             android:text="🔄 刷新"
             android:textColor="#58A6FF"
-            android:textSize="11.5sp" />
+            android:textSize="@dimen/text_small" />
 
         <Button
             android:id="@+id/btnLogClear"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
-            android:layout_marginEnd="6dp"
+            android:layout_height="@dimen/control_height_compact"
+            android:layout_marginEnd="@dimen/space_sm"
             android:background="?attr/selectableItemBackground"
             android:text="🗑️ 清空"
             android:textColor="#F85149"
-            android:textSize="11.5sp" />
+            android:textSize="@dimen/text_small" />
 
         <Button
             android:id="@+id/btnLogCopy"
             android:layout_width="wrap_content"
-            android:layout_height="34dp"
+            android:layout_height="@dimen/control_height_compact"
             android:background="@drawable/bg_tab_selected"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="@dimen/space_md"
+            android:paddingEnd="@dimen/space_md"
             android:text="📋 复制全部"
             android:textColor="@color/brand_on_primary_container"
-            android:textSize="11.5sp"
+            android:textSize="@dimen/text_small"
             android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>

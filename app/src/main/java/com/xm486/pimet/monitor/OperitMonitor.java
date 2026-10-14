@@ -121,7 +121,8 @@ public class OperitMonitor {
             notifyError(t.getMessage());
         } finally {
             if (running && handler != null) {
-                handler.postDelayed(this::tick, POLL_INTERVAL_MS);
+                // 连不上时退避到 5 秒，在线时保持 2 秒
+                handler.postDelayed(this::tick, goneCount > 0 ? 5000L : POLL_INTERVAL_MS);
             }
         }
     }

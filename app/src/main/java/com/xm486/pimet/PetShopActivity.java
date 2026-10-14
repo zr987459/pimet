@@ -91,13 +91,13 @@ public class PetShopActivity extends AppCompatActivity {
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setPadding(dp(14), dp(10), dp(14), dp(10));
+        topBar.setPadding(dp(16), dp(12), dp(16), dp(12));
         topBar.setBackgroundColor(ThemeHelper.getCardColor(this));
 
         TextView back = new TextView(this);
         back.setText("‹ 返回");
         back.setTextSize(14f);
-        back.setTypeface(Typeface.DEFAULT_BOLD);
+        back.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         back.setTextColor(ThemeHelper.getPrimaryColor(this));
         back.setOnClickListener(v -> finish());
         topBar.addView(back, new LinearLayout.LayoutParams(
@@ -105,8 +105,8 @@ public class PetShopActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText("  🛍 宠物商店 · petdex.dev");
-        title.setTextSize(15f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextSize(16f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         title.setTextColor(ThemeHelper.getTextPrimary(this));
         topBar.addView(title, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -116,7 +116,7 @@ public class PetShopActivity extends AppCompatActivity {
         // ---- 搜索框 ----
         LinearLayout searchRow = new LinearLayout(this);
         searchRow.setOrientation(LinearLayout.HORIZONTAL);
-        searchRow.setPadding(dp(14), dp(8), dp(14), dp(4));
+        searchRow.setPadding(dp(16), dp(8), dp(16), dp(4));
         searchRow.setBackgroundColor(ThemeHelper.getCardColor(this));
 
         searchBox = new EditText(this);
@@ -126,7 +126,7 @@ public class PetShopActivity extends AppCompatActivity {
         searchBox.setTextSize(13f);
         searchBox.setSingleLine(true);
         searchBox.setBackgroundResource(R.drawable.bg_sunken);
-        searchBox.setPadding(dp(12), dp(7), dp(12), dp(7));
+        searchBox.setPadding(dp(12), dp(8), dp(12), dp(8));
         searchRow.addView(searchBox, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -145,7 +145,7 @@ public class PetShopActivity extends AppCompatActivity {
         // ---- 排序切换栏 ----
         LinearLayout sortRow = new LinearLayout(this);
         sortRow.setOrientation(LinearLayout.HORIZONTAL);
-        sortRow.setPadding(dp(14), dp(4), dp(14), dp(8));
+        sortRow.setPadding(dp(16), dp(4), dp(16), dp(8));
         sortRow.setBackgroundColor(ThemeHelper.getCardColor(this));
 
         sortHotBtn = makeSortButton("🔥 热门", PetDexShop.SORT_HOT);
@@ -181,7 +181,7 @@ public class PetShopActivity extends AppCompatActivity {
         buttonsRow = new LinearLayout(this);
         buttonsRow.setOrientation(LinearLayout.HORIZONTAL);
         buttonsRow.setGravity(Gravity.CENTER);
-        buttonsRow.setPadding(dp(14), dp(8), dp(14), dp(10));
+        buttonsRow.setPadding(dp(16), dp(8), dp(16), dp(12));
         buttonsRow.setBackgroundColor(ThemeHelper.getCardColor(this));
         buttonsRow.setVisibility(View.GONE);
         Button moreBtn = makeButton("加载更多");
@@ -348,7 +348,7 @@ public class PetShopActivity extends AppCompatActivity {
         LinearLayout cell = new LinearLayout(this);
         cell.setOrientation(LinearLayout.VERTICAL);
         cell.setGravity(Gravity.CENTER);
-        cell.setPadding(dp(10), dp(12), dp(10), dp(12));
+        cell.setPadding(dp(12), dp(12), dp(12), dp(12));
 
         final ImageView iv = new ImageView(this);
         iv.setBackgroundColor(getColor(R.color.surface_card));
@@ -361,12 +361,12 @@ public class PetShopActivity extends AppCompatActivity {
         TextView name = new TextView(this);
         name.setText(pet.displayName);
         name.setTextSize(13f);
-        name.setTypeface(Typeface.DEFAULT_BOLD);
+        name.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         name.setTextColor(ThemeHelper.getTextPrimary(this));
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         name.setGravity(Gravity.CENTER);
-        name.setPadding(0, dp(6), 0, 0);
+        name.setPadding(0, dp(8), 0, 0);
         cell.addView(name);
 
         // 下载量与作者信息行
@@ -377,14 +377,14 @@ public class PetShopActivity extends AppCompatActivity {
 
         TextView dlText = new TextView(this);
         dlText.setText("🔥 " + pet.getDownloadsFormatted(this));
-        dlText.setTextSize(10.5f);
+        dlText.setTextSize(11f);
         dlText.setTextColor(0xFFE56A32); // 亮眼橙色
         metaRow.addView(dlText);
 
         if (!pet.submittedBy.isEmpty()) {
             TextView author = new TextView(this);
             author.setText(" · " + pet.submittedBy);
-            author.setTextSize(10f);
+            author.setTextSize(11f);
             author.setTextColor(getColor(R.color.text_tertiary));
             author.setSingleLine(true);
             author.setEllipsize(TextUtils.TruncateAt.END);
@@ -398,7 +398,7 @@ public class PetShopActivity extends AppCompatActivity {
         lp.width = 0;
         lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
         lp.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
-        lp.setMargins(dp(6), dp(6), dp(6), dp(6));
+        lp.setMargins(dp(8), dp(8), dp(8), dp(8));
         cell.setLayoutParams(lp);
 
         shownCells.add(cell);
@@ -447,7 +447,7 @@ public class PetShopActivity extends AppCompatActivity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(20), dp(16), dp(20), dp(16));
+        content.setPadding(dp(24), dp(16), dp(24), dp(16));
 
         final ImageView preview = new ImageView(this);
         preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -461,7 +461,7 @@ public class PetShopActivity extends AppCompatActivity {
         TextView title = new TextView(this);
         title.setText(pet.displayName);
         title.setTextSize(16f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
         title.setTextColor(ThemeHelper.getTextPrimary(this));
         title.setGravity(Gravity.CENTER);
         title.setPadding(0, dp(8), 0, 0);
@@ -479,7 +479,7 @@ public class PetShopActivity extends AppCompatActivity {
         meta.setTextSize(11f);
         meta.setTextColor(getColor(R.color.text_tertiary));
         meta.setGravity(Gravity.CENTER);
-        meta.setPadding(0, dp(4), 0, dp(14));
+        meta.setPadding(0, dp(4), 0, dp(16));
         content.addView(meta);
 
         // 异步载入静态预览
@@ -509,7 +509,7 @@ public class PetShopActivity extends AppCompatActivity {
         final String[] importedDir = new String[1];
         importBtn.setOnClickListener(v -> startImport(pet, importBtn, preview, animated, switchBtn, importedDir));
 
-        AlertDialog dlg = new AlertDialog.Builder(this)
+        AlertDialog dlg = new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setView(content)
                 .setPositiveButton("浏览器打开", (d, w) -> openInBrowser(pet))
                 .setNegativeButton("关闭", null)
@@ -542,10 +542,9 @@ public class PetShopActivity extends AppCompatActivity {
                     if (switchBtn != null) {
                         switchBtn.setVisibility(View.VISIBLE);
                         switchBtn.setOnClickListener(vv -> {
+                            // 只切换当前桌宠；监控绑定统一在「桌宠设置 → 监控绑定桌宠」里管理
                             PetRegistry.setPetDir(this, dirName[0]);
-                            ChatConfig cur = ChatConfig.load(this);
-                            PetRegistry.setPetDirForMode(this, cur.mode, dirName[0]);
-                            Toast.makeText(this, "已切换为 " + pet.displayName + "（已绑定为当前模式专属形象）", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, "已切换为 " + pet.displayName, Toast.LENGTH_SHORT).show();
                             finish();
                         });
                     }

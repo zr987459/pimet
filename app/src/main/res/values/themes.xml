@@ -187,59 +187,59 @@
         <item name="colorSecondaryContainer">#E0F2FE</item>
     </style>
 
-    <!-- ============ 文本样式（统一字号阶梯 12/13/15/20，行高 1.5） ============ -->
+    <!-- ============ 文本样式（统一字号阶梯 11/12/13/14/16/20，标题使用 Medium 字重，行高 1.5） ============ -->
 
     <style name="Text.Title" parent="">
-        <item name="android:textSize">20sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">@dimen/text_headline</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textColor">?attr/colorTextPrimary</item>
         <item name="android:lineSpacingMultiplier">1.3</item>
     </style>
 
     <style name="Text.SectionLabel" parent="">
-        <item name="android:textSize">13sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">@dimen/text_body_small</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textColor">?attr/colorPrimary</item>
         <item name="android:letterSpacing">0.03</item>
     </style>
 
     <style name="Text.Body" parent="">
-        <item name="android:textSize">14sp</item>
+        <item name="android:textSize">@dimen/text_body</item>
         <item name="android:textColor">?attr/colorTextPrimary</item>
         <item name="android:lineSpacingMultiplier">1.5</item>
     </style>
 
     <style name="Text.Caption" parent="">
-        <item name="android:textSize">12sp</item>
+        <item name="android:textSize">@dimen/text_small</item>
         <item name="android:textColor">?attr/colorTextTertiary</item>
         <item name="android:lineSpacingMultiplier">1.5</item>
     </style>
 
-    <!-- ============ 卡片容器（统一圆角 + 描边，替代原来的半透明黑块） ============ -->
+    <!-- ============ 卡片容器（统一圆角 + 1dp 发丝描边，扁平无阴影） ============ -->
 
     <style name="CardSection" parent="">
         <item name="android:background">@drawable/bg_card</item>
-        <item name="android:padding">16dp</item>
+        <item name="android:padding">@dimen/space_lg</item>
     </style>
 
-    <!-- ============ 按钮（Material3 语义化，触摸目标 ≥48dp） ============ -->
+    <!-- ============ 按钮（Material3 语义化，统一高度/圆角，扁平无阴影） ============ -->
 
     <style name="Btn.Primary" parent="Widget.Material3.Button">
-        <item name="android:minHeight">52dp</item>
-        <item name="android:textSize">15sp</item>
-        <item name="cornerRadius">14dp</item>
+        <item name="android:minHeight">@dimen/cta_height</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="cornerRadius">@dimen/radius_control</item>
     </style>
 
     <style name="Btn.Secondary" parent="Widget.Material3.Button.TonalButton">
-        <item name="android:minHeight">48dp</item>
-        <item name="android:textSize">14sp</item>
-        <item name="cornerRadius">14dp</item>
+        <item name="android:minHeight">@dimen/control_height</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="cornerRadius">@dimen/radius_control</item>
     </style>
 
     <style name="Btn.Outline" parent="Widget.Material3.Button.OutlinedButton">
-        <item name="android:minHeight">48dp</item>
-        <item name="android:textSize">14sp</item>
-        <item name="cornerRadius">14dp</item>
+        <item name="android:minHeight">@dimen/control_height</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="cornerRadius">@dimen/radius_control</item>
     </style>
 
 </resources>
