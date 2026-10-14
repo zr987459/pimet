@@ -77,6 +77,24 @@ function format(body: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  // bash 防卡死：Pi 自带 bash 默认没有超时，手机/国内网络下 apt、npm、git、curl 一卡就无限等。
+  // 没给超时的命令默认 180 秒；并强制非交互，避免等确认、等密码、进分页器。
+  const BASH_DEFAULT_TIMEOUT = 180;
+  // 写进本进程环境，bash 工具派生的子进程都会继承（不改写命令文本，界面上看到的仍是原命令）
+  const NONINTERACTIVE_ENV: Record<string, string> = {
+    DEBIAN_FRONTEND: "noninteractive", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", PAGER: "cat",
+    SYSTEMD_PAGER: "cat", npm_config_yes: "true", npm_config_fund: "false", npm_config_audit: "false",
+    PIP_NO_INPUT: "1", PIP_DISABLE_PIP_VERSION_CHECK: "1",
+  };
+  for (const [k, v] of Object.entries(NONINTERACTIVE_ENV)) {
+    if (process.env[k] === undefined) process.env[k] = v;
+  }
+  pi.on("tool_call", async (event: any) => {
+    if (event.toolName !== "bash" || !event.input) return;
+    const input = event.input as { timeout?: number };
+    if (typeof input.timeout !== "number" || input.timeout <= 0) input.timeout = BASH_DEFAULT_TIMEOUT;
+  });
+
   pi.registerTool({
     name: "terminal",
     label: "Terminal",
