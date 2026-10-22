@@ -85,7 +85,19 @@ public final class FloatingApps {
     private final WindowManager.LayoutParams lp;
     private final LinearLayout root;
     final FrameLayout webFrame;
-    final WebView web;
+    /** 当前显示的标签的 WebView（工具栏按钮、自定义按钮都作用于它） */
+    WebView web;
+    final List<Tab> tabs = new ArrayList<>();
+    Tab active;
+    private int tabSeq = 0;
+    private final LinearLayout tabStrip;
+    private final android.widget.HorizontalScrollView tabScroll;
+    private final TextView resizeHandle;
+    private int pageColor = Color.parseColor("#0D1117");
+    /** 用户点了「停止 Pi」：之后所有 browser 请求都返回「已叫停」，直到用户点「允许 Pi」 */
+    private static volatile boolean sPiStopped = false;
+    /** BrowserAgent 正在分发模拟触摸：不要因此把悬浮窗设为可获得焦点（会抢走下层 App 的输入法） */
+    static volatile boolean sAgentTouch = false;
     private final EditText urlField;
     private final File appsDir;   // /root/pimet-browser：config.json、scripts/、pages/、home.html
     private final File pagesDir;  // /root/pimet-browser/pages/<id>/index.html
@@ -94,10 +106,9 @@ public final class FloatingApps {
     private final LinearLayout customStrip;
     private final android.widget.HorizontalScrollView customScroll;
     private long configMtime = -1;
+    /** 窗口是 Pi 刚打开的（用户还没看任何网页）：第一个 Pi 标签直接放到前台 */
+    private boolean freshForAgent = false;
     private JSONObject config = new JSONObject();
-    private volatile String currentUrl = "";
-    volatile boolean pageLoading = false;
-    volatile int pageProgress = 100;
     boolean minimized = false;
     private boolean maximized = false;
     private int savedW, savedH, savedX, savedY;
@@ -238,6 +249,16 @@ public final class FloatingApps {
         addBar(bar, "✕", "关闭", v -> dismiss());
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
 
+        // ---- 标签栏：用户标签 / 🤖 Pi 标签 / ＋ / 接管 / 停止 Pi
+        tabScroll = new android.widget.HorizontalScrollView(app);
+        tabScroll.setHorizontalScrollBarEnabled(false);
+        tabStrip = new LinearLayout(app);
+        tabStrip.setOrientation(LinearLayout.HORIZONTAL);
+        tabStrip.setGravity(Gravity.CENTER_VERTICAL);
+        tabStrip.setPadding(dp(4), 0, dp(4), dp(2));
+        tabScroll.addView(tabStrip);
+        root.addView(tabScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
         // ---- 自定义按钮栏（config.json 的 buttons，由 Pi 编辑）
         customScroll = new android.widget.HorizontalScrollView(app);
         customScroll.setHorizontalScrollBarEnabled(false);
@@ -249,88 +270,19 @@ public final class FloatingApps {
         customScroll.setVisibility(View.GONE);
         root.addView(customScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
 
-        // ---- 网页
+        // ---- 网页：每个标签一个 WebView，叠在同一个 webFrame 里
         webFrame = new FrameLayout(app);
-        web = new WebView(app);
-        WebSettings ws = web.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setDatabaseEnabled(true);
-        ws.setAllowFileAccess(true);
-        ws.setAllowContentAccess(true);
-        ws.setAllowFileAccessFromFileURLs(true);
-        ws.setAllowUniversalAccessFromFileURLs(true);
-        ws.setUseWideViewPort(true);
-        ws.setLoadWithOverviewMode(true);
-        ws.setSupportZoom(true);
-        ws.setBuiltInZoomControls(true);
-        ws.setDisplayZoomControls(false);
-        ws.setMediaPlaybackRequiresUserGesture(false);
-        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
-        web.setBackgroundColor(Color.parseColor("#0D1117"));
-        web.addJavascriptInterface(new Bridge(), "PiMetNative");
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
-                String u = req.getUrl().toString();
-                if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file://")
-                        || u.startsWith("about:") || u.startsWith("data:") || u.startsWith("blob:")) {
-                    return false;
-                }
-                try {
-                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(i);
-                } catch (Throwable ignored) {}
-                return true;
-            }
-
-            @Override
-            public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                pageLoading = true;
-                currentUrl = url != null ? url : "";
-                showUrl(url);
-            }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                pageLoading = false;
-                currentUrl = url != null ? url : "";
-                showUrl(url);
-                if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
-                reloadConfigIfChanged();
-                injectUserScripts(view, url);
-            }
-
-            @Override
-            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
-                currentUrl = url != null ? url : "";
-                showUrl(url);
-            }
-        });
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onProgressChanged(WebView view, int newProgress) {
-                pageProgress = newProgress;
-            }
-        });
-        try {
-            android.webkit.CookieManager.getInstance().setAcceptCookie(true);
-            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
-        } catch (Throwable ignored) {}
-        webFrame.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
         // 右下角拖动调整大小
-        TextView resize = new TextView(app);
-        resize.setText("◢");
-        resize.setTextColor(Color.parseColor("#8B949E"));
-        resize.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        resize.setGravity(Gravity.CENTER);
-        resize.setContentDescription("拖动调整大小");
-        resize.setOnTouchListener(new DragResizer());
-        webFrame.addView(resize, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.BOTTOM | Gravity.END));
+        resizeHandle = new TextView(app);
+        resizeHandle.setText("◢");
+        resizeHandle.setTextColor(Color.parseColor("#8B949E"));
+        resizeHandle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        resizeHandle.setGravity(Gravity.CENTER);
+        resizeHandle.setContentDescription("拖动调整大小");
+        resizeHandle.setOnTouchListener(new DragResizer());
+        webFrame.addView(resizeHandle, new FrameLayout.LayoutParams(dp(30), dp(30), Gravity.BOTTOM | Gravity.END));
         root.addView(webFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        switchTo(newTab(false));
 
         int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -349,11 +301,7 @@ public final class FloatingApps {
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         clampToScreen();
 
-        // 点窗口内：可输入；点窗口外：让出焦点给下层
-        web.setOnTouchListener((v, ev) -> {
-            if (ev.getAction() == MotionEvent.ACTION_DOWN) setFocusable(true);
-            return false;
-        });
+        // 点窗口外：让出焦点给下层（点窗口内见 createWebView）
         root.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == MotionEvent.ACTION_OUTSIDE) setFocusable(false);
             return false;
@@ -361,6 +309,397 @@ public final class FloatingApps {
 
         reloadConfigIfChanged();
         wm.addView(root, lp);
+    }
+
+    // ------------------------------------------------------------------ 标签页
+
+    /**
+     * 一个标签 = 一个 WebView。用户标签是用户自己浏览用的；Pi 标签（🤖 Pi）是 Pi 默认操作的，不打扰用户正在看的页面。
+     * 所有标签共用全局 CookieManager，所以 Pi 能用到用户的登录状态。
+     * <p>
+     * 可见性策略（后台标签怎么做真实触摸 / 截图）：
+     * 平时只有当前标签 VISIBLE，其余 INVISIBLE —— INVISIBLE 保持布局尺寸，页面里的 innerWidth/坐标都正确，Chromium 也会暂停后台页面的渲染。
+     * Pi 操作某个后台标签期间（agentBegin → agentEnd 之后 1.5 秒），把它临时设为 VISIBLE 并放在当前标签的下面：
+     * 当前标签的 WebView 背景不透明，完全盖住它，用户看不到任何变化，触摸也只落在最上层；
+     * 而它在渲染，所以宿主可以直接给它的 WebView 分发真实触摸事件、用 draw() 截图。
+     * 这样既不用把 Pi 标签切到前台抢用户的画面，也不必退回 JS 点击（JS 点击只在窗口最小化时作为兜底）。
+     * 后台标签不抢输入焦点：按键改用 JS 键盘事件（见 BrowserAgent.pressKey）。
+     */
+    static final class Tab {
+        final String id;
+        final boolean pi;
+        WebView web;
+        volatile String url = "";
+        volatile String title = "";
+        volatile boolean loading = false;
+        volatile int progress = 100;
+        volatile boolean closed = false;
+        /** 同一标签上的 Pi 操作串行；不同标签可以并行 */
+        final Object lock = new Object();
+        int busy = 0;            // 只在主线程读写
+        boolean agentVisible;    // 后台标签被 Pi 操作时临时可见（压在当前标签下面）
+
+        Tab(String id, boolean pi) {
+            this.id = id;
+            this.pi = pi;
+        }
+    }
+
+    private Tab newTab(boolean pi) {
+        Tab t = new Tab("t" + (++tabSeq), pi);
+        t.web = createWebView(t);
+        t.web.setVisibility(View.INVISIBLE);
+        webFrame.addView(t.web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        tabs.add(t);
+        return t;
+    }
+
+    private void switchTo(Tab t) {
+        if (t == null || t.closed) return;
+        active = t;
+        web = t.web;
+        applyVisibility();
+        String u = t.url;
+        if (!urlField.hasFocus()) {
+            urlField.setText("");
+            showUrl(t, u);
+        }
+        refreshTabs();
+    }
+
+    boolean isActive(Tab t) {
+        return t == active;
+    }
+
+    /** 当前标签在最上层；被 Pi 操作的后台标签 VISIBLE 但压在下面；其余 INVISIBLE */
+    private void applyVisibility() {
+        for (Tab x : tabs) {
+            if (x.web == null) continue;
+            x.web.setVisibility(x == active || x.agentVisible ? View.VISIBLE : View.INVISIBLE);
+        }
+        for (Tab x : tabs) if (x != active && x.agentVisible && x.web != null) x.web.bringToFront();
+        if (active != null && active.web != null) active.web.bringToFront();
+        resizeHandle.bringToFront();
+        webFrame.invalidate();
+    }
+
+    private void closeTab(Tab t) {
+        if (t == null || t.closed) return;
+        if (tabs.size() <= 1) {
+            goHome(t, false);
+            return;
+        }
+        int idx = tabs.indexOf(t);
+        tabs.remove(t);
+        t.closed = true;
+        try {
+            webFrame.removeView(t.web);
+            t.web.stopLoading();
+            t.web.destroy();
+        } catch (Throwable ignored) {}
+        t.web = null;
+        if (active == t) {
+            Tab next = null;
+            for (Tab x : tabs) if (!x.pi) { next = x; break; }
+            if (next == null) next = tabs.get(Math.max(0, Math.min(idx, tabs.size()) - 1));
+            switchTo(next);
+        } else {
+            refreshTabs();
+        }
+    }
+
+    private Tab lastPiTab() {
+        for (int i = tabs.size() - 1; i >= 0; i--) if (tabs.get(i).pi) return tabs.get(i);
+        return null;
+    }
+
+    private Tab findTab(String id) {
+        for (Tab x : tabs) if (x.id.equals(id)) return x;
+        return null;
+    }
+
+    /** BrowserAgent：按请求里的 tab 找标签。空 / "pi" = Pi 标签（没有就建）；"user" = 用户当前的标签；其它 = 标签 id */
+    Tab agentTab(String spec) {
+        spec = spec == null ? "" : spec.trim();
+        if (spec.isEmpty() || spec.equalsIgnoreCase("pi")) {
+            Tab t = lastPiTab();
+            return t != null ? t : agentNewPiTab();
+        }
+        if (spec.equalsIgnoreCase("user")) {
+            if (active != null && !active.pi) return active;
+            for (Tab x : tabs) if (!x.pi) return x;
+            Tab t = newTab(false);
+            goHome(t, false);
+            refreshTabs();
+            return t;
+        }
+        return findTab(spec);
+    }
+
+    Tab agentNewPiTab() {
+        Tab t = newTab(true);
+        t.web.loadUrl("about:blank");
+        // 窗口是 Pi 刚打开的（用户还没在看别的网页），就直接把 Pi 标签放到前台
+        if (freshForAgent || active == null || (!active.pi && (active.url.isEmpty() || isLauncher(active.url)) && !userTouched)) {
+            freshForAgent = false;
+            switchTo(t);
+        } else {
+            refreshTabs();
+        }
+        return t;
+    }
+
+    boolean agentSwitch(String id) {
+        Tab t = "user".equalsIgnoreCase(id) ? agentTab("user") : "pi".equalsIgnoreCase(id) ? lastPiTab() : findTab(id);
+        if (t == null) return false;
+        if (minimized) toggleMinimize();
+        switchTo(t);
+        return true;
+    }
+
+    /** 返回 null 表示成功，否则是错误信息。Pi 只能关 Pi 标签，不能关用户的标签 */
+    String agentCloseTab(String id) {
+        Tab t = id == null || id.isEmpty() || "pi".equalsIgnoreCase(id) ? lastPiTab() : findTab(id);
+        if (t == null) return "没有标签 " + id;
+        if (!t.pi) return "不能关闭用户的标签 " + t.id;
+        closeTab(t);
+        return null;
+    }
+
+    org.json.JSONArray agentTabsJson() throws Exception {
+        org.json.JSONArray a = new org.json.JSONArray();
+        for (Tab x : tabs) {
+            a.put(new JSONObject().put("id", x.id).put("kind", x.pi ? "pi" : "user").put("active", x == active)
+                    .put("busy", x.busy > 0).put("url", x.url).put("title", x.title));
+        }
+        return a;
+    }
+
+    String agentTabsText() {
+        StringBuilder sb = new StringBuilder();
+        for (Tab x : tabs) {
+            sb.append(x.id).append(x.pi ? " 🤖Pi" : " 用户").append(x == active ? " [当前显示]" : "")
+                    .append(x.busy > 0 ? " [操作中]" : "").append("  ").append(x.title.isEmpty() ? "" : x.title + "  ").append(x.url).append('\n');
+        }
+        return sb.toString().trim();
+    }
+
+    /** Pi 开始操作某个标签（主线程） */
+    void agentBegin(Tab t) {
+        if (t.closed) return;
+        t.busy++;
+        if (t != active && !t.agentVisible) {
+            t.agentVisible = true;
+            applyVisibility();
+        }
+        if (t.busy == 1) refreshTabs();
+    }
+
+    /** Pi 结束一次操作；连续操作之间不闪烁：1.5 秒内没有新操作才恢复 INVISIBLE、去掉「操作中」 */
+    void agentEnd(Tab t) {
+        t.busy = Math.max(0, t.busy - 1);
+        if (t.busy > 0) return;
+        MAIN.postDelayed(() -> {
+            if (t.busy > 0 || t.closed) return;
+            if (t.agentVisible) {
+                t.agentVisible = false;
+                applyVisibility();
+            }
+            refreshTabs();
+        }, 1500);
+    }
+
+    private android.animation.ObjectAnimator busyPulse;
+
+    private void refreshTabs() {
+        if (tabStrip == null) return;
+        if (busyPulse != null) {
+            busyPulse.cancel();
+            busyPulse = null;
+        }
+        tabStrip.removeAllViews();
+        JSONObject th = config.optJSONObject("theme");
+        if (th == null) th = new JSONObject();
+        int fg = color(th, "text", Color.parseColor("#C9D1D9"));
+        int btnBg = color(th, "button", Color.parseColor("#22272E"));
+        int piCount = 0;
+        for (Tab x : tabs) if (x.pi) piCount++;
+        for (Tab x : tabs) {
+            String label;
+            if (x.pi) {
+                label = "🤖 Pi" + (piCount > 1 ? " " + x.id : "");
+            } else {
+                String tt = x.title;
+                if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "首页" : x.url.replaceFirst("^https?://", "");
+                if (tt.length() > 10) tt = tt.substring(0, 10) + "…";
+                label = "🌐 " + tt;
+            }
+            TextView chip = chip(x.busy > 0 ? label + " ●" : label, x == active ? Color.WHITE : fg,
+                    x == active ? Color.parseColor(x.pi ? "#1F6FEB" : "#30363D") : btnBg);
+            chip.setOnClickListener(v -> {
+                userTouched = true;
+                switchTo(x);
+            });
+            chip.setOnLongClickListener(v -> {
+                closeTab(x);
+                Toast.makeText(ctx, "已关闭标签", Toast.LENGTH_SHORT).show();
+                return true;
+            });
+            chip.setContentDescription((x.pi ? "Pi 标签 " : "标签 ") + x.id + "（长按关闭）");
+            if (x.pi && x.busy > 0) {
+                busyPulse = android.animation.ObjectAnimator.ofFloat(chip, "alpha", 1f, 0.45f);
+                busyPulse.setDuration(600);
+                busyPulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                busyPulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+                busyPulse.start();
+            }
+            tabStrip.addView(chip, chipLp());
+        }
+        TextView plus = chip("＋", fg, btnBg);
+        plus.setContentDescription("新标签");
+        plus.setOnClickListener(v -> {
+            userTouched = true;
+            Tab t = newTab(false);
+            switchTo(t);
+            goHome(t, true);
+        });
+        tabStrip.addView(plus, chipLp());
+        Tab pt = lastPiTab();
+        if (pt != null && active != pt) {
+            TextView take = chip("🖐 接管", fg, btnBg);
+            take.setContentDescription("把 Pi 标签切到前台");
+            take.setOnClickListener(v -> {
+                userTouched = true;
+                switchTo(pt);
+            });
+            tabStrip.addView(take, chipLp());
+        }
+        if (pt != null || sPiStopped) {
+            TextView stop = sPiStopped ? chip("▶ 允许 Pi", Color.WHITE, Color.parseColor("#B62324")) : chip("⏹ 停止 Pi", fg, btnBg);
+            stop.setContentDescription(sPiStopped ? "重新允许 Pi 操作浏览器" : "叫停 Pi 的浏览器操作");
+            stop.setOnClickListener(v -> {
+                sPiStopped = !sPiStopped;
+                if (sPiStopped) for (Tab x : tabs) if (x.pi && x.web != null) x.web.stopLoading();
+                Toast.makeText(ctx, sPiStopped ? "已叫停 Pi：它之后的浏览器操作都会被拒绝" : "已允许 Pi 继续操作浏览器", Toast.LENGTH_SHORT).show();
+                refreshTabs();
+            });
+            tabStrip.addView(stop, chipLp());
+        }
+    }
+
+    /** 用户自己点过标签栏（之后 Pi 新建标签就不再自动切到前台） */
+    private boolean userTouched = false;
+
+    private TextView chip(String text, int fg, int bg) {
+        TextView t = new TextView(ctx);
+        t.setText(text);
+        t.setTextColor(fg);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        t.setGravity(Gravity.CENTER);
+        t.setSingleLine(true);
+        t.setPadding(dp(9), 0, dp(9), 0);
+        GradientDrawable cb = new GradientDrawable();
+        cb.setColor(bg);
+        cb.setCornerRadius(dp(12));
+        t.setBackground(cb);
+        return t;
+    }
+
+    private LinearLayout.LayoutParams chipLp() {
+        LinearLayout.LayoutParams l = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(24));
+        l.setMargins(0, 0, dp(6), 0);
+        return l;
+    }
+
+    @SuppressLint({"ClickableViewAccessibility", "SetJavaScriptEnabled", "JavascriptInterface"})
+    private WebView createWebView(Tab t) {
+        WebView w = new WebView(ctx);
+        WebSettings ws = w.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setDatabaseEnabled(true);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
+        ws.setAllowFileAccessFromFileURLs(true);
+        ws.setAllowUniversalAccessFromFileURLs(true);
+        ws.setUseWideViewPort(true);
+        ws.setLoadWithOverviewMode(true);
+        ws.setSupportZoom(true);
+        ws.setBuiltInZoomControls(true);
+        ws.setDisplayZoomControls(false);
+        ws.setMediaPlaybackRequiresUserGesture(false);
+        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
+        w.setBackgroundColor(pageColor);
+        w.addJavascriptInterface(new Bridge(t), "PiMetNative");
+        w.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                String u = req.getUrl().toString();
+                if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file://")
+                        || u.startsWith("about:") || u.startsWith("data:") || u.startsWith("blob:")) {
+                    return false;
+                }
+                // Pi 标签里的网页不能自己拉起外部 App
+                if (t.pi) return true;
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    ctx.startActivity(i);
+                } catch (Throwable ignored) {}
+                return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                t.loading = true;
+                t.url = url != null ? url : "";
+                showUrl(t, url);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                t.loading = false;
+                t.url = url != null ? url : "";
+                showUrl(t, url);
+                String title = view.getTitle();
+                if (title != null && !title.equals(t.title)) {
+                    t.title = title;
+                    refreshTabs();
+                }
+                if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
+                reloadConfigIfChanged();
+                injectUserScripts(view, url);
+            }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                t.url = url != null ? url : "";
+                showUrl(t, url);
+            }
+        });
+        w.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                t.progress = newProgress;
+            }
+
+            @Override
+            public void onReceivedTitle(WebView view, String title) {
+                t.title = title != null ? title : "";
+                if (!t.pi) refreshTabs();
+            }
+        });
+        try {
+            android.webkit.CookieManager.getInstance().setAcceptCookie(true);
+            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
+        } catch (Throwable ignored) {}
+        // 点窗口内：可输入
+        w.setOnTouchListener((v, ev) -> {
+            if (ev.getAction() == MotionEvent.ACTION_DOWN && !sAgentTouch) setFocusable(true);
+            return false;
+        });
+        return w;
     }
 
     // ------------------------------------------------------------------ 导航
@@ -386,26 +725,31 @@ public final class FloatingApps {
     }
 
     private void goHome() {
+        goHome(active, true);
+    }
+
+    /** 在指定标签里打开首页；restore=true 时顺便把窗口从最小化恢复 */
+    private void goHome(Tab t, boolean restore) {
         if (root.getParent() == null) wm.addView(root, lp);
-        if (minimized) toggleMinimize();
+        if (restore && minimized) toggleMinimize();
         File custom = new File(appsDir, "home.html");
         String homeCfg = config.optString("home", "");
         if (!homeCfg.isEmpty()) {
-            load(homeCfg.startsWith("/") ? "file://" + new File(ProotManager.getRootfsDir(ctx), homeCfg.substring(1)).getAbsolutePath() : homeCfg);
+            loadIn(t, homeCfg.startsWith("/") ? "file://" + new File(ProotManager.getRootfsDir(ctx), homeCfg.substring(1)).getAbsolutePath() : homeCfg, restore);
             return;
         }
         if (custom.isFile()) {
-            web.loadUrl("file://" + custom.getAbsolutePath());
+            t.web.loadUrl("file://" + custom.getAbsolutePath());
             return;
         }
         new Thread(() -> {
             File launcher = new File(appsDir, ".launcher.html");
             try {
                 writeIfChanged(launcher, buildLauncherHtml());
-            } catch (Throwable t) {
-                Log.w(TAG, "write launcher failed", t);
+            } catch (Throwable e) {
+                Log.w(TAG, "write launcher failed", e);
             }
-            MAIN.post(() -> web.loadUrl("file://" + launcher.getAbsolutePath()));
+            MAIN.post(() -> { if (t.web != null) t.web.loadUrl("file://" + launcher.getAbsolutePath()); });
         }, "pimet-apps-home").start();
     }
 
@@ -414,6 +758,7 @@ public final class FloatingApps {
         if (sInstance == null) {
             sInstance = new FloatingApps(context.getApplicationContext());
             sInstance.goHome();
+            sInstance.freshForAgent = true;
         } else if (sInstance.root.getParent() == null) {
             sInstance.wm.addView(sInstance.root, sInstance.lp);
         }
@@ -424,16 +769,24 @@ public final class FloatingApps {
         return sInstance;
     }
 
+    static boolean isPiStopped() {
+        return sPiStopped;
+    }
+
     String url() {
-        return currentUrl;
+        return currentUrl();
     }
 
-    void agentLoad(String url) {
-        load(url);
+    private String currentUrl() {
+        return active != null ? active.url : "";
     }
 
-    void agentHome() {
-        goHome();
+    void agentLoad(Tab t, String url) {
+        loadIn(t, url, t == active);
+    }
+
+    void agentHome(Tab t) {
+        goHome(t, t == active);
     }
 
     void agentRestore() {
@@ -449,31 +802,35 @@ public final class FloatingApps {
     }
 
     private void load(String url) {
+        loadIn(active, url, true);
+    }
+
+    private void loadIn(Tab t, String url, boolean restore) {
         if (root.getParent() == null) wm.addView(root, lp);
-        if (minimized) toggleMinimize();
+        if (restore && minimized) toggleMinimize();
         if (url == null || url.isEmpty()) {
-            goHome();
+            goHome(t, restore);
             return;
         }
-        web.loadUrl(url);
+        t.web.loadUrl(url);
     }
 
     private void reload() {
-        if (isLauncher(currentUrl)) goHome();
+        if (isLauncher(currentUrl())) goHome();
         else web.reload();
     }
 
     private void goBack() {
         if (web.canGoBack()) web.goBack();
-        else if (!isLauncher(currentUrl)) goHome();
+        else if (!isLauncher(currentUrl())) goHome();
     }
 
     private boolean isLauncher(String url) {
         return url != null && url.endsWith("/.launcher.html");
     }
 
-    private void showUrl(String url) {
-        if (urlField.hasFocus()) return;
+    private void showUrl(Tab t, String url) {
+        if (t != active || urlField.hasFocus()) return;
         if (url == null || isLauncher(url)) {
             urlField.setText("");
             return;
@@ -563,7 +920,9 @@ public final class FloatingApps {
         ub.setCornerRadius(dp(8));
         urlField.setBackground(ub);
         urlField.setTextColor(color(th, "addressText", Color.parseColor("#E6EDF3")));
-        web.setBackgroundColor(color(th, "page", Color.parseColor("#0D1117")));
+        pageColor = color(th, "page", Color.parseColor("#0D1117"));
+        for (Tab t : tabs) if (t.web != null) t.web.setBackgroundColor(pageColor);
+        refreshTabs();
 
         customStrip.removeAllViews();
         org.json.JSONArray btns = config.optJSONArray("buttons");
@@ -618,7 +977,7 @@ public final class FloatingApps {
                     title = j.optString("t");
                     sel = j.optString("s");
                 } catch (Throwable ignored) {}
-                String text = ask.replace("{url}", currentUrl).replace("{title}", title).replace("{selection}", sel);
+                String text = ask.replace("{url}", currentUrl()).replace("{title}", title).replace("{selection}", sel);
                 boolean send = b.optBoolean("send", true);
                 if (sPiBridge != null) {
                     sPiBridge.askPi(text, send);
@@ -795,20 +1154,27 @@ public final class FloatingApps {
             + "close:function(){PiMetNative.close();}};"
             + "try{window.dispatchEvent(new Event('pimetready'));}catch(e){}})();";
 
+    /** 每个标签一个桥；按该标签自己当前的网址判断是否可信（只有应用目录里的本地页面） */
     private final class Bridge {
+        private final Tab tab;
+
+        Bridge(Tab tab) {
+            this.tab = tab;
+        }
+
         @JavascriptInterface
         public void exec(String cmd, String cbId, int timeoutSec) {
-            if (!isTrusted(currentUrl)) {
-                deliver(cbId, -1, "", "当前页面不在应用目录内，禁止执行命令");
+            if (!isTrusted(tab.url)) {
+                deliver(tab, cbId, -1, "", "当前页面不在应用目录内，禁止执行命令");
                 return;
             }
             final int timeout = Math.max(1, Math.min(timeoutSec, 600));
-            new Thread(() -> runCommand(cmd, cbId, timeout), "pimet-apps-exec").start();
+            new Thread(() -> runCommand(tab, cmd, cbId, timeout), "pimet-apps-exec").start();
         }
 
         @JavascriptInterface
         public void askPi(String text, boolean send) {
-            if (!isTrusted(currentUrl)) return;
+            if (!isTrusted(tab.url)) return;
             MAIN.post(() -> {
                 if (sPiBridge != null) sPiBridge.askPi(text, send);
                 else Toast.makeText(ctx, "工作台未就绪", Toast.LENGTH_SHORT).show();
@@ -817,11 +1183,13 @@ public final class FloatingApps {
 
         @JavascriptInterface
         public void toast(String msg) {
+            if (!isTrusted(tab.url)) return;
             MAIN.post(() -> Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show());
         }
 
         @JavascriptInterface
         public void openExternal(String url) {
+            if (!isTrusted(tab.url)) return;
             MAIN.post(() -> {
                 try {
                     Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
@@ -833,11 +1201,12 @@ public final class FloatingApps {
 
         @JavascriptInterface
         public void close() {
+            if (!isTrusted(tab.url)) return;
             MAIN.post(FloatingApps.this::dismiss);
         }
     }
 
-    private void runCommand(String cmd, String cbId, int timeoutSec) {
+    private void runCommand(Tab tab, String cmd, String cbId, int timeoutSec) {
         Process p = null;
         try {
             List<String> guest = Arrays.asList("/bin/bash", "-lc", cmd);
@@ -857,10 +1226,10 @@ public final class FloatingApps {
             te.join(1000);
             String e = err.toString("UTF-8");
             if (!done) e = e + (e.isEmpty() ? "" : "\n") + "命令超时（" + timeoutSec + " 秒）已终止";
-            deliver(cbId, done ? proc.exitValue() : -1, out.toString("UTF-8"), e);
+            deliver(tab, cbId, done ? proc.exitValue() : -1, out.toString("UTF-8"), e);
         } catch (Throwable t) {
             if (p != null) try { p.destroyForcibly(); } catch (Throwable ignored) {}
-            deliver(cbId, -1, "", "执行失败: " + t.getMessage());
+            deliver(tab, cbId, -1, "", "执行失败: " + t.getMessage());
         }
     }
 
@@ -880,14 +1249,14 @@ public final class FloatingApps {
         return t;
     }
 
-    private void deliver(String cbId, int code, String stdout, String stderr) {
+    private void deliver(Tab tab, String cbId, int code, String stdout, String stderr) {
         try {
             JSONObject res = new JSONObject();
             res.put("code", code);
             res.put("stdout", stdout);
             res.put("stderr", stderr);
             String js = "window.__pimetResolve&&window.__pimetResolve(" + JSONObject.quote(cbId) + "," + res + ")";
-            MAIN.post(() -> web.evaluateJavascript(js, null));
+            MAIN.post(() -> { if (tab.web != null) tab.web.evaluateJavascript(js, null); });
         } catch (Throwable ignored) {}
     }
 
@@ -954,6 +1323,7 @@ public final class FloatingApps {
     private void toggleMinimize() {
         minimized = !minimized;
         webFrame.setVisibility(minimized ? View.GONE : View.VISIBLE);
+        tabScroll.setVisibility(minimized ? View.GONE : View.VISIBLE);
         customScroll.setVisibility(!minimized && customStrip.getChildCount() > 0 ? View.VISIBLE : View.GONE);
         if (minimized) {
             savedH = lp.height;
@@ -994,10 +1364,15 @@ public final class FloatingApps {
         try {
             if (root.getParent() != null) wm.removeView(root);
         } catch (Throwable ignored) {}
-        try {
-            web.stopLoading();
-            web.destroy();
-        } catch (Throwable ignored) {}
+        for (Tab t : tabs) {
+            try {
+                t.web.stopLoading();
+                t.web.destroy();
+            } catch (Throwable ignored) {}
+            t.web = null;
+            t.closed = true;
+        }
+        tabs.clear();
         if (sInstance == this) sInstance = null;
     }
 

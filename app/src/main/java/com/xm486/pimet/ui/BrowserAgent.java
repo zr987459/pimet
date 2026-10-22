@@ -11,124 +11,209 @@ import android.provider.Settings;
 import android.util.Base64;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.View;
 import android.webkit.WebView;
 
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 让容器里的 Pi 操控「Pi 浏览器」悬浮窗（经 AppBridge 127.0.0.1:30143，需令牌）。
+ * 让容器里的 Pi 操控「Pi 浏览器」悬浮窗（经 AppBridge 127.0.0.1:30143，需令牌，令牌在 AppBridgeManager 里校验）。
  * <p>
  * 思路借鉴 Playwright MCP / browser-use：每次返回页面的「快照」，把可交互元素编号成 [e1] [e2]…，
- * Pi 再用编号点击、输入；点击走真实触摸事件（isTrusted），用户在窗口里能看到每一步并随时接手。
+ * Pi 再用编号点击、输入；点击优先走真实触摸事件（isTrusted），用户在窗口里能看到每一步并随时接手。
+ * <p>
+ * 标签页：默认操作 Pi 专属标签（没有就创建），请求带 tab:"user" 才操作用户正在看的标签，也可以带标签 id。
+ * 每个标签一把锁，不同标签上的任务可以并行；同一标签上的操作串行。
+ * 用户在窗口里点「停止 Pi」后，所有 browser 请求都返回「已叫停」，直到用户点「允许 Pi」。
+ * <p>
+ * 页面端的辅助函数（快照、定位、输入…）在 assets/pimet-browser/agent.js，每次调用前注入（带版本号，已注入则跳过）。
  */
 public final class BrowserAgent {
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final Object LOCK = new Object();
+    /** 窗口级操作（关闭窗口、开关标签）用的锁；页面操作用各标签自己的锁 */
+    private static final Object WINDOW_LOCK = new Object();
+    private static volatile String sAgentJs;
+
+    static final String STOPPED_MSG = "用户已叫停 Pi 的浏览器操作。请立即停止当前的浏览器任务，告诉用户进展，等用户在浏览器窗口标签栏点「▶ 允许 Pi」后再继续。";
 
     private BrowserAgent() {}
 
     public static JSONObject handle(Context ctx, JSONObject req) {
-        synchronized (LOCK) {
-            try {
-                return doHandle(ctx, req);
-            } catch (Throwable t) {
-                return err("浏览器操作失败: " + t);
-            }
+        try {
+            if (FloatingApps.isPiStopped()) return err(STOPPED_MSG);
+            return doHandle(ctx, req);
+        } catch (StoppedException s) {
+            return err(STOPPED_MSG);
+        } catch (Throwable t) {
+            return err("浏览器操作失败: " + t);
         }
+    }
+
+    private static final class StoppedException extends RuntimeException {}
+
+    private static void checkStop() {
+        if (FloatingApps.isPiStopped()) throw new StoppedException();
     }
 
     private static JSONObject doHandle(Context ctx, JSONObject req) throws Exception {
         String action = req.optString("browser_action", req.optString("op", "snapshot")).trim().toLowerCase();
         int timeout = clamp(req.optInt("timeout", 20000), 1000, 120000);
+        ensureAgentJs(ctx);
 
         if (action.equals("close")) {
-            onMain(() -> {
-                FloatingApps f = FloatingApps.current();
-                if (f != null) f.agentClose();
-                return null;
-            }, 5000);
+            synchronized (WINDOW_LOCK) {
+                onMain(() -> {
+                    FloatingApps f = FloatingApps.current();
+                    if (f != null) f.agentClose();
+                    return null;
+                }, 5000);
+            }
             return ok().put("result", "已关闭浏览器窗口");
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(ctx)) {
             return err("PiMet 没有悬浮窗权限，无法打开浏览器窗口。请让用户在系统设置里给 PiMet 开启「显示在其他应用上层」。");
         }
-        final FloatingApps win = onMain(() -> FloatingApps.ensureForAgent(ctx), 8000);
+        final FloatingApps win;
+        synchronized (WINDOW_LOCK) {
+            win = onMain(() -> FloatingApps.ensureForAgent(ctx), 8000);
+        }
         if (win == null) return err("浏览器窗口创建失败");
 
+        // ---- 窗口级 / 标签管理
+        switch (action) {
+            case "tabs":
+                return ok().put("tabs", onMain(win::agentTabsJson, 3000)).put("result", onMain(win::agentTabsText, 3000));
+            case "new_tab": {
+                String url = normalize(req.optString("url", ""));
+                FloatingApps.Tab t;
+                synchronized (WINDOW_LOCK) {
+                    t = onMain(() -> win.agentNewPiTab(), 5000);
+                }
+                if (!url.isEmpty()) {
+                    synchronized (t.lock) {
+                        onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
+                        SystemClock.sleep(300);
+                        waitLoaded(t, timeout);
+                    }
+                }
+                return ok().put("tab", t.id).put("url", t.url).put("result", "已新建 Pi 标签 " + t.id + (url.isEmpty() ? "" : " 并打开 " + url));
+            }
+            case "switch_tab": {
+                String id = req.optString("tab", "");
+                Boolean done = onMain(() -> win.agentSwitch(id), 3000);
+                if (!Boolean.TRUE.equals(done)) return err("没有标签 " + id + "，用 tabs 查看");
+                return ok().put("tab", id).put("result", "已切换到标签 " + id + "（用户现在看到的是它）");
+            }
+            case "close_tab": {
+                String id = req.optString("tab", "pi");
+                String r;
+                synchronized (WINDOW_LOCK) {
+                    r = onMain(() -> win.agentCloseTab(id), 3000);
+                }
+                if (r != null) return err(r);
+                return ok().put("result", "已关闭标签 " + id);
+            }
+            case "show":
+                onMain(() -> { win.agentRestore(); return null; }, 3000);
+                return ok().put("result", "浏览器窗口已显示");
+            case "hide":
+            case "minimize":
+                onMain(() -> { win.agentMinimize(); return null; }, 3000);
+                return ok().put("result", "浏览器窗口已最小化（仍可继续操作，但只能用 JS 点击，也不能截图）");
+            case "reload_ui":
+            case "reload_config":
+                onMain(() -> { win.reloadConfigNow(); return null; }, 3000);
+                return ok().put("result", "已重新加载浏览器配置（config.json）；用户脚本会在下次打开/刷新网页时生效");
+            default:
+                break;
+        }
+
+        // ---- 页面操作：先找到标签，再按标签加锁
+        final String tabSpec = req.optString("tab", "");
+        final FloatingApps.Tab tab;
+        synchronized (WINDOW_LOCK) {
+            tab = onMain(() -> win.agentTab(tabSpec), 5000);
+        }
+        if (tab == null) return err("没有标签 " + tabSpec + "，用 tabs 查看（\"user\" = 用户当前的标签，省略 = Pi 标签）");
+        synchronized (tab.lock) {
+            onMain(() -> { win.agentBegin(tab); return null; }, 3000);
+            try {
+                JSONObject out = doTab(win, tab, action, req, timeout);
+                if (out.optBoolean("success")) out.put("tab", tab.id);
+                return out;
+            } finally {
+                MAIN.post(() -> win.agentEnd(tab));
+            }
+        }
+    }
+
+    private static JSONObject doTab(FloatingApps win, FloatingApps.Tab tab, String action, JSONObject req, int timeout) throws Exception {
         boolean wantSnapshot = req.optBoolean("snapshot", true);
         String result;
+        JSONObject out = ok();
         switch (action) {
             case "open":
             case "navigate":
             case "goto": {
                 String url = normalize(req.optString("url", ""));
                 if (url.isEmpty()) return err("缺少 url");
-                onMain(() -> { win.agentRestore(); win.agentLoad(url); return null; }, 5000);
+                onMain(() -> { win.agentLoad(tab, url); return null; }, 5000);
                 SystemClock.sleep(300);
-                waitLoaded(win, timeout);
+                waitLoaded(tab, timeout);
                 result = "已打开 " + url;
                 break;
             }
             case "home":
-                onMain(() -> { win.agentHome(); return null; }, 5000);
+                onMain(() -> { win.agentHome(tab); return null; }, 5000);
                 SystemClock.sleep(500);
-                waitLoaded(win, timeout);
+                waitLoaded(tab, timeout);
                 result = "已回到首页";
                 break;
             case "back":
             case "forward":
             case "reload": {
                 onMain(() -> {
-                    if (action.equals("back")) { if (win.web.canGoBack()) win.web.goBack(); }
-                    else if (action.equals("forward")) { if (win.web.canGoForward()) win.web.goForward(); }
-                    else win.web.reload();
+                    WebView w = tab.web;
+                    if (action.equals("back")) { if (w.canGoBack()) w.goBack(); }
+                    else if (action.equals("forward")) { if (w.canGoForward()) w.goForward(); }
+                    else w.reload();
                     return null;
                 }, 5000);
                 SystemClock.sleep(400);
-                waitLoaded(win, timeout);
+                waitLoaded(tab, timeout);
                 result = action.equals("back") ? "已后退" : action.equals("forward") ? "已前进" : "已刷新";
                 break;
             }
             case "snapshot":
             case "read":
-                waitLoaded(win, Math.min(timeout, 8000));
+                waitLoaded(tab, Math.min(timeout, 8000));
                 wantSnapshot = true;
                 result = null;
                 break;
             case "click":
             case "tap": {
-                result = click(win, req);
-                settle(win, timeout);
+                result = click(win, tab, req);
+                settle(tab, timeout);
                 break;
             }
             case "type":
             case "fill": {
-                result = type(win, req);
-                settle(win, timeout);
+                result = type(win, tab, req);
+                settle(tab, timeout);
                 break;
             }
             case "select": {
-                String ref = req.optString("ref", "");
-                String js = "(function(ref,v){var el=document.querySelector('[data-pimet-ref=\"'+ref+'\"]');"
-                        + "if(!el)return {ok:false,error:'找不到元素 '+ref+'，请先 snapshot'};"
-                        + "if(el.tagName!=='SELECT')return {ok:false,error:ref+' 不是下拉框'};"
-                        + "var o=Array.from(el.options).find(function(o){return o.value===v||o.text.trim()===v;});"
-                        + "if(!o)return {ok:false,error:'没有选项 '+v+'，可选：'+Array.from(el.options).map(function(o){return o.text.trim()}).join(' / ')};"
-                        + "el.value=o.value;el.dispatchEvent(new Event('input',{bubbles:true}));"
-                        + "el.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true,result:'已选择 '+o.text.trim()};})("
-                        + JSONObject.quote(ref) + "," + JSONObject.quote(req.optString("value", "")) + ")";
-                JSONObject r = evalJson(win, js, 5000);
+                JSONObject r = evalAgent(tab, "A.select(" + JSONObject.quote(req.optString("ref", "")) + "," + JSONObject.quote(req.optString("value", "")) + ")", 5000);
                 if (!r.optBoolean("ok")) return err(r.optString("error", "选择失败"));
                 result = r.optString("result");
-                settle(win, timeout);
+                settle(tab, timeout);
                 break;
             }
             case "press":
@@ -136,33 +221,15 @@ public final class BrowserAgent {
                 String key = req.optString("key", "Enter");
                 int code = keyCode(key);
                 if (code == 0) return err("不支持的按键 " + key + "（支持 Enter Tab Escape Backspace Delete Space ArrowUp/Down/Left/Right PageUp PageDown Home End）");
-                onMain(() -> {
-                    win.web.requestFocus();
-                    long now = SystemClock.uptimeMillis();
-                    win.web.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0));
-                    win.web.dispatchKeyEvent(new KeyEvent(now, now + 30, KeyEvent.ACTION_UP, code, 0));
-                    return null;
-                }, 5000);
+                pressKey(win, tab, key, code);
                 result = "已按 " + key;
-                settle(win, timeout);
+                settle(tab, timeout);
                 break;
             }
             case "scroll": {
-                String ref = req.optString("ref", "");
-                String dir = req.optString("direction", "down");
-                double amount = req.optDouble("amount", 0.8);
-                String js = "(function(ref,dir,amt){if(ref){var el=document.querySelector('[data-pimet-ref=\"'+ref+'\"]');"
-                        + "if(!el)return {ok:false,error:'找不到元素 '+ref};el.scrollIntoView({block:'center'});return {ok:true,result:'已滚动到 '+ref};}"
-                        + "var dy=dir==='up'?-1:dir==='down'?1:0,dx=dir==='left'?-1:dir==='right'?1:0;"
-                        + "var t=document.elementFromPoint(innerWidth/2,innerHeight/2),sc=null;"
-                        + "while(t&&t!==document.body&&t!==document.documentElement){var s=getComputedStyle(t);"
-                        + "if((dy&&/(auto|scroll)/.test(s.overflowY)&&t.scrollHeight>t.clientHeight+4)||(dx&&/(auto|scroll)/.test(s.overflowX)&&t.scrollWidth>t.clientWidth+4)){sc=t;break;}t=t.parentElement;}"
-                        + "var tgt=sc||document.scrollingElement||document.documentElement;"
-                        + "var h=sc?sc.clientHeight:innerHeight,w=sc?sc.clientWidth:innerWidth;"
-                        + "tgt.scrollBy({left:dx*w*amt,top:dy*h*amt,behavior:'instant'});"
-                        + "return {ok:true,result:'已滚动 '+dir};})("
-                        + JSONObject.quote(ref) + "," + JSONObject.quote(dir) + "," + amount + ")";
-                JSONObject r = evalJson(win, js, 5000);
+                String js = "A.scroll(" + JSONObject.quote(req.optString("ref", "")) + "," + JSONObject.quote(req.optString("direction", "down"))
+                        + "," + req.optDouble("amount", 0.8) + ")";
+                JSONObject r = evalAgent(tab, js, 5000);
                 if (!r.optBoolean("ok")) return err(r.optString("error", "滚动失败"));
                 result = r.optString("result");
                 SystemClock.sleep(350);
@@ -174,15 +241,20 @@ public final class BrowserAgent {
                     long end = SystemClock.uptimeMillis() + timeout;
                     boolean found = false;
                     while (SystemClock.uptimeMillis() < end) {
-                        JSONObject r = evalJson(win, "({ok:true,v:document.body?document.body.innerText.indexOf("
-                                + JSONObject.quote(text) + ")>=0:false})", 3000);
+                        checkStop();
+                        JSONObject r = evalAgent(tab, "A.hasText(" + JSONObject.quote(text) + ")", 3000);
                         if (r.optBoolean("v")) { found = true; break; }
                         SystemClock.sleep(400);
                     }
+                    out.put("found", found);
                     result = found ? "页面已出现「" + text + "」" : "等待超时，页面没有出现「" + text + "」";
                 } else {
-                    SystemClock.sleep(clamp(req.optInt("ms", 1000), 0, 60000));
-                    waitLoaded(win, timeout);
+                    long end = SystemClock.uptimeMillis() + clamp(req.optInt("ms", 1000), 0, 60000);
+                    while (SystemClock.uptimeMillis() < end) {
+                        checkStop();
+                        SystemClock.sleep(Math.min(200, Math.max(1, end - SystemClock.uptimeMillis())));
+                    }
+                    waitLoaded(tab, timeout);
                     result = "已等待";
                 }
                 break;
@@ -191,159 +263,106 @@ public final class BrowserAgent {
             case "js": {
                 String script = req.optString("script", "");
                 if (script.isEmpty()) return err("缺少 script");
-                String v = evalAsync(win, script, timeout);
-                JSONObject out = ok().put("url", win.url()).put("result", v);
-                return out;
+                String[] v = evalAsync(tab, script, timeout);
+                if (v[0] != null) return err(v[0]).put("url", tab.url);
+                return out.put("url", tab.url).put("result", v[1]);
             }
             case "screenshot": {
                 onMain(() -> { win.agentRestore(); return null; }, 3000);
-                SystemClock.sleep(250);
-                String b64 = onMain(() -> capture(win.web), 8000);
+                // 后台标签在操作期间是「可见但压在当前标签下面」，刚变可见时要等一帧画出来
+                SystemClock.sleep(onMain(() -> win.isActive(tab), 2000) ? 250 : 600);
+                String b64 = onMain(() -> capture(tab.web), 8000);
                 if (b64 == null) return err("截图失败（窗口不可见？）");
-                return ok().put("url", win.url()).put("image", b64).put("mime", "image/jpeg");
+                return out.put("url", tab.url).put("image", b64).put("mime", "image/jpeg");
             }
-            case "show":
-                onMain(() -> { win.agentRestore(); return null; }, 3000);
-                result = "浏览器窗口已显示";
-                wantSnapshot = false;
-                break;
-            case "hide":
-            case "minimize":
-                onMain(() -> { win.agentMinimize(); return null; }, 3000);
-                result = "浏览器窗口已最小化（仍可继续操作）";
-                wantSnapshot = false;
-                break;
-            case "reload_ui":
-            case "reload_config":
-                onMain(() -> { win.reloadConfigNow(); return null; }, 3000);
-                result = "已重新加载浏览器配置（config.json）；用户脚本会在下次打开/刷新网页时生效";
-                wantSnapshot = false;
-                break;
             case "status":
-                result = "url: " + win.url();
+                result = "url: " + tab.url;
                 wantSnapshot = false;
                 break;
             default:
                 return err("未知操作 " + action);
         }
 
-        JSONObject out = ok();
         if (result != null) out.put("result", result);
         if (wantSnapshot) {
-            JSONObject snap = snapshot(win, req.optInt("max_chars", 6000));
+            JSONObject snap = snapshot(tab, req.optInt("max_chars", 6000), req.optString("mode", "full"));
             out.put("url", snap.optString("url"));
             out.put("title", snap.optString("title"));
             out.put("snapshot", snap.optString("text"));
         } else {
-            out.put("url", win.url());
+            out.put("url", tab.url);
+            out.put("title", tab.title);
         }
         return out;
     }
 
+    // ------------------------------------------------------------------ 页面辅助脚本
+
+    private static void ensureAgentJs(Context ctx) {
+        if (sAgentJs != null) return;
+        try (InputStream in = ctx.getAssets().open("pimet-browser/agent.js")) {
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) bo.write(buf, 0, n);
+            sAgentJs = bo.toString("UTF-8");
+        } catch (Throwable t) {
+            throw new IllegalStateException("缺少 assets/pimet-browser/agent.js: " + t);
+        }
+    }
+
+    /** 注入 agent.js 后执行 expr（可用变量 A = window.__pimetAgent），结果按 JSON 解析 */
+    private static JSONObject evalAgent(FloatingApps.Tab tab, String expr, long timeoutMs) throws Exception {
+        String js = "(function(){try{" + sAgentJs + "\n;var A=window.__pimetAgent;return JSON.stringify(" + expr
+                + ")}catch(e){return JSON.stringify({ok:false,error:String(e)})}})()";
+        String raw = evalRaw(tab, js, timeoutMs);
+        if (raw == null || raw.equals("null")) return new JSONObject().put("ok", false).put("error", "页面没有返回结果（可能正在加载）");
+        String s = new org.json.JSONTokener(raw).nextValue().toString();
+        return new JSONObject(s);
+    }
+
     // ------------------------------------------------------------------ 快照
 
-    private static final String SNAPSHOT_JS = "(function(maxChars){"
-            + "document.querySelectorAll('[data-pimet-ref]').forEach(function(e){e.removeAttribute('data-pimet-ref')});"
-            + "function clean(s){return (s||'').replace(/\\s+/g,' ').trim();}"
-            + "function cut(s,n){s=clean(s);return s.length>n?s.slice(0,n)+'…':s;}"
-            + "function visible(el){var r=el.getBoundingClientRect();if(r.width<2||r.height<2)return false;"
-            + "var s=getComputedStyle(el);return s.visibility!=='hidden'&&s.display!=='none'&&parseFloat(s.opacity||'1')>0.05;}"
-            + "var sel='a[href],button,input:not([type=hidden]),textarea,select,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],"
-            + "[role=tab],[role=menuitem],[role=option],[role=switch],[role=combobox],[role=textbox],[role=searchbox],[contenteditable=\"\"],[contenteditable=true],[onclick]';"
-            + "var all=Array.from(document.querySelectorAll(sel));"
-            // 额外收集 cursor:pointer 的小元素（很多站点用 div 当按钮）
-            + "try{Array.from(document.querySelectorAll('div,span,li,img,svg')).slice(0,3000).forEach(function(e){"
-            + "if(all.indexOf(e)<0&&getComputedStyle(e).cursor==='pointer'&&!(e.parentElement&&getComputedStyle(e.parentElement).cursor==='pointer')"
-            + "&&!e.closest(sel))all.push(e);});}catch(x){}"
-            + "var lines=[],n=0,H=innerHeight,W=innerWidth;"
-            + "for(var i=0;i<all.length&&n<220;i++){var el=all[i];if(!visible(el))continue;"
-            + "var tag=el.tagName.toLowerCase(),type=(el.getAttribute('type')||'').toLowerCase();"
-            + "var role=el.getAttribute('role')||(tag==='a'?'link':tag==='button'?'button':tag==='select'?'select':tag==='textarea'?'textbox'"
-            + ":tag==='input'?(type==='checkbox'||type==='radio'?type:(type==='submit'||type==='button'?'button':'textbox')):el.isContentEditable?'textbox':'clickable');"
-            + "var name=el.getAttribute('aria-label')||el.getAttribute('title')||'';"
-            + "if(!name&&tag!=='input'&&tag!=='textarea'&&tag!=='select')name=el.innerText||'';"
-            + "if(!name){var img=el.querySelector&&el.querySelector('img[alt]');if(img)name=img.getAttribute('alt');}"
-            + "if(!name&&tag==='img')name=el.getAttribute('alt')||'';"
-            + "if(!name&&(tag==='input'||tag==='textarea'))name=el.getAttribute('placeholder')||el.getAttribute('name')||'';"
-            + "if(!name&&(type==='submit'||type==='button'))name=el.value||'';"
-            + "name=cut(name,70);if(!name&&role==='clickable')continue;"
-            + "n++;var ref='e'+n;el.setAttribute('data-pimet-ref',ref);"
-            + "var extra='';"
-            + "if(role==='textbox'||tag==='input'){var v=el.isContentEditable?el.innerText:el.value;if(v&&type!=='password')extra+=' 值=\"'+cut(v,60)+'\"';"
-            + "if(el.getAttribute('placeholder')&&name!==cut(el.getAttribute('placeholder'),70))extra+=' 提示=\"'+cut(el.getAttribute('placeholder'),40)+'\"';"
-            + "if(type&&type!=='text'&&type!=='checkbox'&&type!=='radio')extra+=' type='+type;}"
-            + "if(type==='checkbox'||type==='radio'||el.getAttribute('aria-checked'))extra+=(el.checked||el.getAttribute('aria-checked')==='true')?' [已选]':' [未选]';"
-            + "if(tag==='select'){var o=el.options[el.selectedIndex];extra+=' 当前=\"'+cut(o?o.text:'',30)+'\" 选项数='+el.options.length;}"
-            + "if(el.disabled||el.getAttribute('aria-disabled')==='true')extra+=' [禁用]';"
-            + "var r=el.getBoundingClientRect();if(r.bottom<0)extra+=' (上方)';else if(r.top>H)extra+=' (下方)';"
-            + "lines.push('['+ref+'] '+role+(name?' \"'+name+'\"':'')+extra);}"
-            + "var text=document.body?clean(document.body.innerText):'';"
-            + "var se=document.scrollingElement||document.documentElement;"
-            + "var head='网址: '+location.href+'\\n标题: '+document.title+'\\n滚动: '+Math.round(se.scrollTop)+'/'+Math.max(0,Math.round(se.scrollHeight-H))"
-            + "+' (视口 '+W+'x'+H+')';"
-            + "var frames=document.querySelectorAll('iframe').length;if(frames)head+='\\n注意: 页面含 '+frames+' 个 iframe，其中内容不在快照里';"
-            + "var body='\\n\\n可交互元素（用 ref 操作）:\\n'+(lines.join('\\n')||'(无)')+'\\n\\n页面文字:\\n';"
-            + "var room=Math.max(800,maxChars-head.length-body.length);"
-            + "return {url:location.href,title:document.title,text:head+body+(text.length>room?text.slice(0,room)+'…（已截断，可滚动或用 eval 读取更多）':text)};"
-            + "})";
-
-    private static JSONObject snapshot(FloatingApps win, int maxChars) throws Exception {
+    private static JSONObject snapshot(FloatingApps.Tab tab, int maxChars, String mode) throws Exception {
         int mc = clamp(maxChars, 1500, 40000);
-        JSONObject r = evalJson(win, SNAPSHOT_JS + "(" + mc + ")", 8000);
+        String m = "interactive".equalsIgnoreCase(mode) ? "interactive" : "full";
+        JSONObject r = evalAgent(tab, "A.snapshot(" + mc + "," + JSONObject.quote(m) + ")", 10000);
         if (!r.has("text")) {
-            r.put("url", win.url()).put("title", "").put("text", "网址: " + win.url() + "\n（页面还没准备好，无法读取快照）");
+            r.put("url", tab.url).put("title", "").put("text", "网址: " + tab.url + "\n（页面还没准备好，无法读取快照"
+                    + (r.has("error") ? "：" + r.optString("error") : "") + "）");
         }
         return r;
     }
 
-    // ------------------------------------------------------------------ 点击 / 输入
+    // ------------------------------------------------------------------ 点击 / 输入 / 按键
 
-    private static final String LOCATE_JS = "(function(ref,text){var el=null;"
-            + "if(ref)el=document.querySelector('[data-pimet-ref=\"'+ref+'\"]');"
-            + "if(!el&&text){var c=Array.from(document.querySelectorAll('a,button,[role=button],input[type=submit],input[type=button],[onclick],label,summary,li,span,div'));"
-            + "var best=null;for(var i=0;i<c.length;i++){var e=c[i];var t=(e.innerText||e.value||e.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim();"
-            + "if(t&&t.indexOf(text)>=0){var r0=e.getBoundingClientRect();if(r0.width<2||r0.height<2)continue;if(!best||t.length<best.len){best={e:e,len:t.length};}}}"
-            + "if(best)el=best.e;}"
-            + "if(!el)return {ok:false,error:ref?('找不到元素 '+ref+'，页面可能已变化，请重新 snapshot'):'找不到包含「'+text+'」的元素'};"
-            + "el.scrollIntoView({block:'center',inline:'center',behavior:'instant'});"
-            + "var r=el.getBoundingClientRect();"
-            + "try{var o=document.createElement('div');o.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #ff4d4f;"
-            + "border-radius:4px;box-shadow:0 0 0 3px rgba(255,77,79,.3);left:'+(r.left-2)+'px;top:'+(r.top-2)+'px;width:'+(r.width)+'px;height:'+(r.height)+'px';"
-            + "document.documentElement.appendChild(o);setTimeout(function(){o.remove()},700);}catch(x){}"
-            + "var x=r.left+r.width/2,y=r.top+r.height/2;"
-            + "var hit=document.elementFromPoint(x,y);var covered=hit&&hit!==el&&!el.contains(hit)&&!hit.contains(el);"
-            + "window.__pimetTarget=el;"
-            + "var vv=window.visualViewport,vx=vv?x-vv.offsetLeft:x,vy=vv?y-vv.offsetTop:y,vw=vv?vv.width:innerWidth;"
-            + "return {ok:true,x:vx,y:vy,vw:vw,covered:!!covered,tag:el.tagName.toLowerCase(),"
-            + "label:(el.innerText||el.value||el.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,40)};})";
-
-    private static String click(FloatingApps win, JSONObject req) throws Exception {
+    private static String click(FloatingApps win, FloatingApps.Tab tab, JSONObject req) throws Exception {
         String ref = req.optString("ref", "");
         String text = req.optString("text", "");
         if (ref.isEmpty() && text.isEmpty()) throw new IllegalArgumentException("click 需要 ref 或 text");
-        JSONObject loc = evalJson(win, LOCATE_JS + "(" + JSONObject.quote(ref) + "," + JSONObject.quote(text) + ")", 5000);
+        JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(ref) + "," + JSONObject.quote(text) + ")", 5000);
         if (!loc.optBoolean("ok")) throw new IllegalStateException(loc.optString("error", "定位失败"));
         SystemClock.sleep(120);
         boolean useJs = req.optBoolean("js", false);
         boolean nativeOk = false;
         if (!useJs) {
-            nativeOk = Boolean.TRUE.equals(onMain(() -> nativeTap(win, loc.optDouble("x"), loc.optDouble("y"), loc.optDouble("vw")), 4000));
+            nativeOk = Boolean.TRUE.equals(onMain(() -> nativeTap(win, tab, loc.optDouble("x"), loc.optDouble("y"), loc.optDouble("vw")), 4000));
         }
-        if (!nativeOk) {
-            evalJson(win, "(function(){var el=window.__pimetTarget;if(!el)return {ok:false};var r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;"
-                    + "['pointerdown','mousedown','pointerup','mouseup'].forEach(function(t){try{el.dispatchEvent(new (t.indexOf('pointer')===0&&window.PointerEvent?PointerEvent:MouseEvent)"
-                    + "(t,{bubbles:true,cancelable:true,clientX:x,clientY:y,view:window}))}catch(e){}});"
-                    + "try{el.focus()}catch(e){}el.click();return {ok:true};})()", 5000);
-        }
+        if (!nativeOk) evalAgent(tab, "A.jsClick()", 5000);
         String label = loc.optString("label");
         return "已点击 " + (ref.isEmpty() ? "「" + text + "」" : ref) + (label.isEmpty() ? "" : "（" + label + "）")
-                + (loc.optBoolean("covered") && !useJs ? "；注意：该位置被其它元素遮挡，可能点到了遮挡物，必要时加 js=true 重试" : "");
+                + (!nativeOk && !useJs ? "（用 JS 点击）" : "")
+                + (loc.optBoolean("covered") && nativeOk ? "；注意：该位置被其它元素遮挡，可能点到了遮挡物，必要时加 js=true 重试" : "");
     }
 
-    /** 真实触摸：CSS 坐标换算到 WebView 像素 */
-    private static boolean nativeTap(FloatingApps win, double cssX, double cssY, double vw) {
-        WebView web = win.web;
-        if (win.minimized || web.getWidth() <= 0 || web.getHeight() <= 0 || vw <= 0 || !web.isShown()) return false;
+    /**
+     * 真实触摸：CSS 坐标换算到 WebView 像素。坐标已由 agent.js 加上 iframe 偏移、按 visualViewport 换算。
+     * 后台标签在操作期间是 VISIBLE 但压在当前标签下面（见 FloatingApps.agentBegin），触摸事件直接分发给它的 WebView，
+     * 用户看不到也不受影响；窗口最小化时 WebView 不在屏幕上，返回 false 退回 JS 点击。
+     */
+    private static boolean nativeTap(FloatingApps win, FloatingApps.Tab tab, double cssX, double cssY, double vw) {
+        WebView web = tab.web;
+        if (win.minimized || web == null || web.getWidth() <= 0 || web.getHeight() <= 0 || vw <= 0 || !web.isShown()) return false;
         float ratio = (float) (web.getWidth() / vw);
         float x = (float) (cssX * ratio), y = (float) (cssY * ratio);
         if (x < 0 || y < 0 || x > web.getWidth() || y > web.getHeight()) return false;
@@ -352,43 +371,45 @@ public final class BrowserAgent {
         MotionEvent u = MotionEvent.obtain(down, down + 60, MotionEvent.ACTION_UP, x, y, 0);
         d.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         u.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        web.dispatchTouchEvent(d);
-        web.dispatchTouchEvent(u);
+        FloatingApps.sAgentTouch = true;
+        try {
+            web.dispatchTouchEvent(d);
+            web.dispatchTouchEvent(u);
+        } finally {
+            FloatingApps.sAgentTouch = false;
+        }
         d.recycle();
         u.recycle();
         return true;
     }
 
-    private static String type(FloatingApps win, JSONObject req) throws Exception {
+    /** 当前标签发系统按键；后台标签不抢焦点（会打断用户输入），改用 JS 键盘事件 */
+    private static void pressKey(FloatingApps win, FloatingApps.Tab tab, String key, int code) throws Exception {
+        boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab) && !win.minimized, 2000));
+        if (active) {
+            onMain(() -> {
+                tab.web.requestFocus();
+                long now = SystemClock.uptimeMillis();
+                tab.web.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0));
+                tab.web.dispatchKeyEvent(new KeyEvent(now, now + 30, KeyEvent.ACTION_UP, code, 0));
+                return null;
+            }, 5000);
+        } else {
+            evalAgent(tab, "A.key(" + JSONObject.quote(key) + ")", 5000);
+        }
+    }
+
+    private static String type(FloatingApps win, FloatingApps.Tab tab, JSONObject req) throws Exception {
         String ref = req.optString("ref", "");
         String text = req.optString("text", "");
         boolean clear = req.optBoolean("clear", true);
         boolean submit = req.optBoolean("submit", false);
-        String js = "(function(ref,text,clear){var el=ref?document.querySelector('[data-pimet-ref=\"'+ref+'\"]'):document.activeElement;"
-                + "if(!el||el===document.body)return {ok:false,error:ref?'找不到元素 '+ref+'，请重新 snapshot':'没有获得焦点的输入框，请指定 ref'};"
-                + "if(!(el.isContentEditable||el.tagName==='INPUT'||el.tagName==='TEXTAREA')){var inner=el.querySelector&&el.querySelector('input,textarea,[contenteditable]');if(inner)el=inner;}"
-                + "el.scrollIntoView({block:'center',behavior:'instant'});try{el.focus()}catch(e){}"
-                + "if(el.isContentEditable){if(clear){document.execCommand('selectAll',false);document.execCommand('delete',false);}document.execCommand('insertText',false,text);}"
-                + "else if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'){var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
-                + "var set=Object.getOwnPropertyDescriptor(proto,'value').set;set.call(el,(clear?'':el.value)+text);"
-                + "el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));el.dispatchEvent(new Event('change',{bubbles:true}));}"
-                + "else return {ok:false,error:ref+' 不是输入框'};"
-                + "window.__pimetTarget=el;return {ok:true,form:!!el.form};})("
-                + JSONObject.quote(ref) + "," + JSONObject.quote(text) + "," + clear + ")";
-        JSONObject r = evalJson(win, js, 5000);
+        JSONObject r = evalAgent(tab, "A.type(" + JSONObject.quote(ref) + "," + JSONObject.quote(text) + "," + clear + ")", 5000);
         if (!r.optBoolean("ok")) throw new IllegalStateException(r.optString("error", "输入失败"));
         String res = "已输入" + (ref.isEmpty() ? "" : "到 " + ref);
         if (submit) {
-            if (r.optBoolean("form")) {
-                evalJson(win, "(function(){var el=window.__pimetTarget;try{if(el.form.requestSubmit)el.form.requestSubmit();else el.form.submit();}catch(e){return {ok:false}}return {ok:true};})()", 5000);
-            } else {
-                onMain(() -> {
-                    long now = SystemClock.uptimeMillis();
-                    win.web.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0));
-                    win.web.dispatchKeyEvent(new KeyEvent(now, now + 30, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0));
-                    return null;
-                }, 3000);
-            }
+            if (r.optBoolean("form")) evalAgent(tab, "A.submit()", 5000);
+            else pressKey(win, tab, "Enter", KeyEvent.KEYCODE_ENTER);
             res += "并提交";
         }
         return res;
@@ -396,21 +417,12 @@ public final class BrowserAgent {
 
     // ------------------------------------------------------------------ JS 执行
 
-    /** 执行一段返回对象的表达式，结果按 JSON 解析 */
-    private static JSONObject evalJson(FloatingApps win, String expr, long timeoutMs) throws Exception {
-        String raw = evalRaw(win, "(function(){try{return JSON.stringify(" + expr + ")}catch(e){return JSON.stringify({ok:false,error:String(e)})}})()", timeoutMs);
-        if (raw == null || raw.equals("null")) return new JSONObject().put("ok", false).put("error", "页面没有返回结果（可能正在加载）");
-        // evaluateJavascript 返回的是 JSON 编码后的字符串
-        String s = new org.json.JSONTokener(raw).nextValue().toString();
-        return new JSONObject(s);
-    }
-
-    private static String evalRaw(FloatingApps win, String js, long timeoutMs) throws Exception {
+    private static String evalRaw(FloatingApps.Tab tab, String js, long timeoutMs) throws Exception {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<String> ref = new AtomicReference<>();
         MAIN.post(() -> {
             try {
-                win.web.evaluateJavascript(js, v -> { ref.set(v); latch.countDown(); });
+                tab.web.evaluateJavascript(js, v -> { ref.set(v); latch.countDown(); });
             } catch (Throwable t) {
                 latch.countDown();
             }
@@ -419,49 +431,56 @@ public final class BrowserAgent {
         return ref.get();
     }
 
-    /** 支持 await 的任意脚本：结果放进 window.__pimetEval[id]，轮询取回 */
-    private static String evalAsync(FloatingApps win, String script, long timeoutMs) throws Exception {
+    /** 支持 await 的任意脚本：结果放进 window.__pimetEval[id]，轮询取回。返回 {错误或 null, 结果} */
+    private static String[] evalAsync(FloatingApps.Tab tab, String script, long timeoutMs) throws Exception {
         String id = UUID.randomUUID().toString().replace("-", "");
         String body = script.contains("return") ? script : "return (" + script + ");";
         String js = "(function(){window.__pimetEval=window.__pimetEval||{};var id=" + JSONObject.quote(id) + ";"
                 + "(async function(){" + body + "\n})().then(function(v){var s;try{s=typeof v==='string'?v:JSON.stringify(v);}catch(e){s=String(v);}"
                 + "window.__pimetEval[id]={ok:true,v:s===undefined?'undefined':s};},function(e){window.__pimetEval[id]={ok:false,v:String(e&&e.stack||e)};});return 1;})()";
-        evalRaw(win, js, 5000);
+        String started = evalRaw(tab, js, 5000);
+        if (started == null || started.equals("null")) {
+            return new String[]{"脚本没有运行（语法错误，或页面正在加载）。请检查代码；需要 return 时写成语句，如 return document.title;", null};
+        }
         long end = SystemClock.uptimeMillis() + timeoutMs;
         while (SystemClock.uptimeMillis() < end) {
-            JSONObject r = evalJson(win, "(function(){var m=window.__pimetEval||{},r=m[" + JSONObject.quote(id) + "];if(!r)return {done:false};delete m["
-                    + JSONObject.quote(id) + "];return {done:true,ok:r.ok,v:r.v};})()", 3000);
+            checkStop();
+            String raw = evalRaw(tab, "(function(){var m=window.__pimetEval||{},r=m[" + JSONObject.quote(id) + "];if(!r)return JSON.stringify({done:false});delete m["
+                    + JSONObject.quote(id) + "];return JSON.stringify({done:true,ok:r.ok,v:r.v});})()", 3000);
+            JSONObject r = raw == null || raw.equals("null") ? new JSONObject()
+                    : new JSONObject(new org.json.JSONTokener(raw).nextValue().toString());
             if (r.optBoolean("done")) {
                 String v = r.optString("v");
                 if (v.length() > 40000) v = v.substring(0, 40000) + "…（已截断）";
-                return r.optBoolean("ok") ? v : "脚本出错: " + v;
+                return r.optBoolean("ok") ? new String[]{null, v} : new String[]{"脚本出错: " + v, null};
             }
             SystemClock.sleep(150);
         }
-        return "脚本超时（" + timeoutMs + "ms）未返回";
+        return new String[]{"脚本超时（" + timeoutMs + "ms）未返回（页面跳转也会导致结果丢失）", null};
     }
 
     // ------------------------------------------------------------------ 等待 / 截图 / 工具
 
-    private static void waitLoaded(FloatingApps win, long timeoutMs) {
+    private static void waitLoaded(FloatingApps.Tab tab, long timeoutMs) {
         long end = SystemClock.uptimeMillis() + timeoutMs;
         while (SystemClock.uptimeMillis() < end) {
-            if (!win.pageLoading && win.pageProgress >= 100) break;
+            checkStop();
+            if (!tab.loading && tab.progress >= 100) break;
             SystemClock.sleep(150);
         }
         SystemClock.sleep(250);
     }
 
     /** 操作后给页面一点反应时间；若触发了跳转则等加载完 */
-    private static void settle(FloatingApps win, long timeoutMs) {
+    private static void settle(FloatingApps.Tab tab, long timeoutMs) {
         SystemClock.sleep(500);
-        if (win.pageLoading || win.pageProgress < 100) waitLoaded(win, timeoutMs);
+        if (tab.loading || tab.progress < 100) waitLoaded(tab, timeoutMs);
         else SystemClock.sleep(200);
     }
 
     private static String capture(WebView web) {
         int w = web.getWidth(), h = web.getHeight();
-        if (w <= 0 || h <= 0) return null;
+        if (w <= 0 || h <= 0 || !web.isShown()) return null;
         float scale = Math.min(1f, 900f / Math.max(w, h));
         Bitmap bmp = Bitmap.createBitmap(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)), Bitmap.Config.RGB_565);
         Canvas c = new Canvas(bmp);
@@ -494,7 +513,7 @@ public final class BrowserAgent {
         }
     }
 
-    private static String normalize(String s) {
+    static String normalize(String s) {
         s = s == null ? "" : s.trim();
         if (s.isEmpty()) return "";
         if (s.matches("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")) return s;
@@ -504,9 +523,9 @@ public final class BrowserAgent {
         return "https://www.bing.com/search?q=" + android.net.Uri.encode(s);
     }
 
-    private interface MainCall<T> { T call() throws Exception; }
+    interface MainCall<T> { T call() throws Exception; }
 
-    private static <T> T onMain(MainCall<T> c, long timeoutMs) throws Exception {
+    static <T> T onMain(MainCall<T> c, long timeoutMs) throws Exception {
         if (Looper.myLooper() == Looper.getMainLooper()) return c.call();
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<T> ref = new AtomicReference<>();
@@ -538,10 +557,5 @@ public final class BrowserAgent {
         } catch (Throwable t) {
             return new JSONObject();
         }
-    }
-
-    @SuppressWarnings("unused")
-    private static boolean isShown(View v) {
-        return v != null && v.isShown();
     }
 }
