@@ -98,6 +98,13 @@ public final class UpdateManager {
     public static String getInstalledPiWebVersion(Context context) {
         try {
             File rootfs = ProotManager.getRootfsDir(context);
+            // 先看构建产物里写死的版本（.next/required-server-files.json 的 NEXT_PUBLIC_APP_VERSION），
+            // 这才是界面实际显示、服务实际运行的版本；package.json 可能已被新版覆盖而 .next 仍是旧版
+            String runningDir = resolveRunningPiWebDir(context);
+            if (runningDir != null) {
+                String built = readBuiltPiWebVersion(new File(rootfs, runningDir.substring(1)));
+                if (built != null) return built;
+            }
             List<File> candidates = new java.util.ArrayList<>();
             // 先认「实际被启动的那一份」：PiWebManager 用 PATH 里的 pi-web 拉起服务，
             // 只看 /usr/local 会把一份没被使用的副本当成已安装版本（升级后界面仍是旧版、却提示已是最新）
@@ -121,6 +128,24 @@ public final class UpdateManager {
             }
         } catch (Throwable ignored) {}
         return "0.11.0";
+    }
+
+    /** 读取 Pi-Web 构建产物中的版本号，读不到返回 null */
+    static String readBuiltPiWebVersion(File pkgDir) {
+        File f = new File(pkgDir, ".next/required-server-files.json");
+        if (!f.exists() || !f.canRead()) return null;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            JSONObject cfg = new JSONObject(sb.toString()).optJSONObject("config");
+            JSONObject env = cfg != null ? cfg.optJSONObject("env") : null;
+            String v = env != null ? env.optString("NEXT_PUBLIC_APP_VERSION", "") : "";
+            return v.isEmpty() || "0.0.0".equals(v) ? null : v;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /**
@@ -375,7 +400,9 @@ public final class UpdateManager {
                                 int extCode = ProotManager.executeCommandSync(context, extractCmd);
                                 targetTgz.delete();
 
-                                if (extCode == 0) {
+                                // 校验构建产物确实换成了新版本（防止只覆盖了 package.json）
+                                String builtAfter = readBuiltPiWebVersion(new File(rootfsDir, targetDir.substring(1)));
+                                if (extCode == 0 && builtAfter != null) {
                                     fastSuccess = true;
                                     if (progressListener != null) {
                                         MAIN_HANDLER.post(() -> progressListener.onProgress(88, "增量解包完成，正在注入离线优化资源...", "optimizePiWebOffline..."));
@@ -402,6 +429,7 @@ public final class UpdateManager {
                             "/bin/bash", "-c",
                             "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
                             "export npm_config_registry=\"" + normalizedRegistry + "\"; " +
+                            "npm uninstall -g @agegr/pi-web >/dev/null 2>&1; rm -rf '" + targetDir + "'; " +
                             "npm install -g --loglevel=info --ignore-scripts --no-audit --no-fund --prefer-online @agegr/pi-web@latest"
                     );
 
