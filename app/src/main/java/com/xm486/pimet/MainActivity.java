@@ -663,7 +663,7 @@ public class MainActivity extends AppCompatActivity {
         btnFloatFullscreen = findViewById(R.id.btnFloatFullscreen);
         btnFloatReload = findViewById(R.id.btnFloatReload);
         btnFloatTranslate = findViewById(R.id.btnFloatTranslate);
-        btnFloatZoom = findViewById(R.id.btnFloatZoom);
+        btnFloatZoom = null; // 悬浮球缩放按钮已移除，双指缩放保留
         btnFloatTheme = findViewById(R.id.btnFloatTheme);
         btnFloatBrowser = findViewById(R.id.btnFloatBrowser);
         btnFloatClose = findViewById(R.id.btnFloatClose);
@@ -2982,7 +2982,7 @@ public class MainActivity extends AppCompatActivity {
         // 初始化网页缩放
         int savedZoom = com.xm486.pimet.ui.WebPinchZoom.getZoom(this);
         webSettings.setTextZoom(100);
-        btnFloatZoom.setText(savedZoom + "%");
+        if (btnFloatZoom != null) btnFloatZoom.setText(savedZoom + "%");
 
         // 注册通用网页翻译原生桥接 (支持任意网页、多引擎、绕过CORS)
         TranslationBridge transBridge = new TranslationBridge(this, piWebWebView);
@@ -3387,9 +3387,29 @@ public class MainActivity extends AppCompatActivity {
             WebTranslationDialog.show(MainActivity.this, piWebWebView);
             return true;
         });
-        btnFloatZoom.setOnClickListener(v -> {
-            showZoomDialog();
+        View btnFloatApps = findViewById(R.id.btnFloatApps);
+        if (btnFloatApps != null) {
+            btnFloatApps.setOnClickListener(v -> {
+                floatingMenuVertical.setVisibility(View.GONE);
+                com.xm486.pimet.ui.FloatingApps.toggle(MainActivity.this);
+            });
+        }
+        // Pi 应用页面里的「让 Pi 帮我…」：填进工作台输入框并发送（手机端发送快捷键是 Ctrl+Enter）
+        com.xm486.pimet.ui.FloatingApps.setPiBridge((text, send) -> {
+            if (piWebWebView == null) return;
+            String js = "(function(t,send){var el=document.querySelector('textarea');if(!el)return 'noinput';"
+                    + "var setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;"
+                    + "setter.call(el,t);el.dispatchEvent(new Event('input',{bubbles:true}));el.focus();"
+                    + "if(send){setTimeout(function(){el.dispatchEvent(new KeyboardEvent('keydown',"
+                    + "{key:'Enter',code:'Enter',keyCode:13,which:13,ctrlKey:true,bubbles:true,cancelable:true}));},120);}"
+                    + "return 'ok';})(" + org.json.JSONObject.quote(text) + "," + send + ")";
+            piWebWebView.evaluateJavascript(js, r -> {
+                if (r != null && r.contains("noinput")) {
+                    Toast.makeText(MainActivity.this, "工作台还没打开对话输入框", Toast.LENGTH_SHORT).show();
+                }
+            });
         });
+        new Thread(() -> com.xm486.pimet.ui.FloatingApps.ensureScaffold(MainActivity.this), "pimet-apps-scaffold").start();
         btnFloatTheme.setOnClickListener(v -> {
             cycleThemeQuick();
         });

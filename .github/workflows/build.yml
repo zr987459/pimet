@@ -52,7 +52,10 @@ jobs:
             自动构建 #${{ github.run_number }}
             提交：${{ github.sha }}
           files: app/build/outputs/apk/release/PiMet-*.apk
-          make_latest: true
+          target_commitish: ${{ github.sha }}
+          # 只有 main 的构建是正式版；分支上的测试包标为预发布，不会推送给更新通道
+          make_latest: ${{ github.ref == 'refs/heads/main' }}
+          prerelease: ${{ github.ref != 'refs/heads/main' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
