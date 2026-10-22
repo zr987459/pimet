@@ -275,6 +275,7 @@ public final class FloatingApps {
 
         addBar(bar, "⟳", "刷新", v -> reload());
         addBar(bar, "⌂", "首页", v -> goHome());
+        addBar(bar, "📐", "窗口大小", v -> cycleWindowSize());
         addBar(bar, "⤢", "最大化", v -> toggleMaximize());
         addBar(bar, "—", "最小化", v -> toggleMinimize());
         addBar(bar, "✕", "关闭", v -> {
@@ -1705,6 +1706,42 @@ public final class FloatingApps {
             lp.y = savedY;
         }
         update();
+    }
+
+    private int windowSizePreset = 1;
+
+    private void cycleWindowSize() {
+        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        if (minimized) toggleMinimize();
+        if (maximized) maximized = false;
+
+        windowSizePreset = (windowSizePreset + 1) % 3;
+        float hRatio;
+        String desc;
+        switch (windowSizePreset) {
+            case 0:
+                hRatio = 0.55f;
+                desc = "半屏 (55%)";
+                break;
+            case 2:
+                hRatio = 0.92f;
+                desc = "满幅 (92%)";
+                break;
+            case 1:
+            default:
+                hRatio = 0.72f;
+                desc = "标准大屏 (72%)";
+                break;
+        }
+
+        lp.width = Math.round(dm.widthPixels * 0.96f);
+        lp.height = Math.round(dm.heightPixels * hRatio);
+        lp.x = Math.round(dm.widthPixels * 0.02f);
+        lp.y = Math.round(dm.heightPixels * 0.04f);
+        clampToScreen();
+        update();
+        savePos();
+        Toast.makeText(ctx, "📐 悬浮窗口已设为: " + desc, Toast.LENGTH_SHORT).show();
     }
 
     private void dismiss() {
