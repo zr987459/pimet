@@ -79,16 +79,19 @@ public final class FloatingApps {
         sPiBridge = bridge;
     }
 
-    private final Context ctx;
+    final Context ctx;
     private final WindowManager wm;
     private final WindowManager.LayoutParams lp;
     private final LinearLayout root;
-    private final FrameLayout webFrame;
-    private final WebView web;
+    final FrameLayout webFrame;
+    final WebView web;
     private final EditText urlField;
     private final File appsDir;
     private volatile String currentUrl = "";
-    private boolean minimized = false, maximized = false;
+    volatile boolean pageLoading = false;
+    volatile int pageProgress = 100;
+    boolean minimized = false;
+    private boolean maximized = false;
     private int savedW, savedH, savedX, savedY;
 
     public static void toggle(Context context) {
@@ -103,7 +106,7 @@ public final class FloatingApps {
         final Context app = context.getApplicationContext();
         MAIN.post(() -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(app)) {
-                Toast.makeText(app, "需要悬浮窗权限才能打开应用窗", Toast.LENGTH_SHORT).show();
+                Toast.makeText(app, "需要悬浮窗权限才能打开浏览器窗口", Toast.LENGTH_SHORT).show();
                 try {
                     Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                             Uri.parse("package:" + app.getPackageName()));
@@ -118,7 +121,7 @@ public final class FloatingApps {
                 else sInstance.load(url);
             } catch (Throwable t) {
                 Log.e(TAG, "show failed", t);
-                Toast.makeText(app, "打开应用窗失败: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(app, "打开浏览器窗口失败: " + t.getMessage(), Toast.LENGTH_LONG).show();
             }
         });
     }
@@ -182,7 +185,7 @@ public final class FloatingApps {
         urlField.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         urlField.setTextColor(Color.parseColor("#E6EDF3"));
         urlField.setHintTextColor(Color.parseColor("#6E7681"));
-        urlField.setHint("应用列表 · 输入网址");
+        urlField.setHint("输入网址或搜索");
         urlField.setImeOptions(EditorInfo.IME_ACTION_GO);
         urlField.setSelectAllOnFocus(true);
         urlField.setPadding(dp(8), 0, dp(8), 0);
@@ -209,7 +212,7 @@ public final class FloatingApps {
         bar.addView(urlField, ulp);
 
         addBar(bar, "⟳", "刷新", v -> reload());
-        addBar(bar, "⊞", "应用列表", v -> goHome());
+        addBar(bar, "⌂", "首页", v -> goHome());
         addBar(bar, "⤢", "最大化", v -> toggleMaximize());
         addBar(bar, "—", "最小化", v -> toggleMinimize());
         addBar(bar, "✕", "关闭", v -> dismiss());
@@ -254,12 +257,14 @@ public final class FloatingApps {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                pageLoading = true;
                 currentUrl = url != null ? url : "";
                 showUrl(url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                pageLoading = false;
                 currentUrl = url != null ? url : "";
                 showUrl(url);
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
@@ -271,7 +276,16 @@ public final class FloatingApps {
                 showUrl(url);
             }
         });
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                pageProgress = newProgress;
+            }
+        });
+        try {
+            android.webkit.CookieManager.getInstance().setAcceptCookie(true);
+            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        } catch (Throwable ignored) {}
         webFrame.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 右下角拖动调整大小
@@ -349,6 +363,45 @@ public final class FloatingApps {
             }
             MAIN.post(() -> web.loadUrl("file://" + launcher.getAbsolutePath()));
         }, "pimet-apps-home").start();
+    }
+
+    /** 给 BrowserAgent 用：确保窗口已创建并显示，必须在主线程调用 */
+    static FloatingApps ensureForAgent(Context context) {
+        if (sInstance == null) {
+            sInstance = new FloatingApps(context.getApplicationContext());
+            sInstance.goHome();
+        } else if (sInstance.root.getParent() == null) {
+            sInstance.wm.addView(sInstance.root, sInstance.lp);
+        }
+        return sInstance;
+    }
+
+    static FloatingApps current() {
+        return sInstance;
+    }
+
+    String url() {
+        return currentUrl;
+    }
+
+    void agentLoad(String url) {
+        load(url);
+    }
+
+    void agentHome() {
+        goHome();
+    }
+
+    void agentRestore() {
+        if (minimized) toggleMinimize();
+    }
+
+    void agentMinimize() {
+        if (!minimized) toggleMinimize();
+    }
+
+    void agentClose() {
+        dismiss();
     }
 
     private void load(String url) {
@@ -459,20 +512,18 @@ public final class FloatingApps {
         }
         String body;
         if (apps.isEmpty()) {
-            body = "<div class=\"empty\"><div class=\"big\">🧩</div>"
-                    + "<p>还没有应用。</p>"
-                    + "<p>在工作台里跟 Pi 说，例如：<br><b>「用 pimet-apps 技能给我做一个记账应用」</b></p>"
-                    + "<p class=\"dim\">Pi 会把页面写到 " + APPS_DIR_IN_CONTAINER + "/&lt;名字&gt;/index.html，做好后点 ⟳ 就能看到。</p></div>";
+            body = "";
         } else {
-            body = "<div class=\"grid\">" + cards + "</div>"
-                    + "<p class=\"dim foot\">应用目录：" + APPS_DIR_IN_CONTAINER + " · 让 Pi 修改后点 ⟳ 刷新</p>";
+            body = "<h2>Pi 做的页面</h2><div class=\"grid\">" + cards + "</div>"
+                    + "<p class=\"dim foot\">目录：" + APPS_DIR_IN_CONTAINER + " · 修改后点 ⟳ 刷新</p>";
         }
         return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                + "<title>Pi 应用</title><style>"
+                + "<title>Pi 浏览器</title><style>"
                 + ":root{color-scheme:dark}body{margin:0;padding:16px;background:#0d1117;color:#e6edf3;"
                 + "font-family:system-ui,-apple-system,'PingFang SC','Noto Sans CJK SC',sans-serif}"
-                + "h1{font-size:17px;margin:0 0 14px;font-weight:600}"
+                + "h1{font-size:18px;margin:6px 0 8px;font-weight:600}h2{font-size:14px;margin:22px 0 10px;color:#c9d1d9}"
+                + ".intro{text-align:center;margin-top:8vh;line-height:1.7;padding:0 8px}"
                 + ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}"
                 + ".card{display:flex;flex-direction:column;align-items:center;text-align:center;padding:14px 6px;"
                 + "border-radius:14px;background:#161b22;border:1px solid #30363d;color:inherit;text-decoration:none}"
@@ -482,7 +533,11 @@ public final class FloatingApps {
                 + "-webkit-box-orient:vertical;overflow:hidden}"
                 + ".empty{text-align:center;margin-top:12vh;line-height:1.7;font-size:14px}.big{font-size:44px}"
                 + ".dim{color:#8b949e;font-size:12px}.foot{margin-top:18px;text-align:center}"
-                + "</style></head><body><h1>Pi 应用</h1>" + body + "</body></html>";
+                + "</style></head><body>"
+                + "<div class=\"intro\"><div class=\"big\">🌐</div><h1>Pi 浏览器</h1>"
+                + "<p class=\"dim\">在顶部地址栏输入网址或搜索词。Pi 也能操控这个窗口：在工作台跟 Pi 说"
+                + "「用浏览器打开 xxx 帮我…」，它会打开网页、阅读、点击、输入，你在这里能看到每一步。</p></div>"
+                + body + "</body></html>";
     }
 
     // ------------------------------------------------------------------ JS 桥

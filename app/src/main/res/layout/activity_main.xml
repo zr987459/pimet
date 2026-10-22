@@ -816,14 +816,14 @@
                             android:text="🎨"
                             android:textSize="14sp" />
 
-                        <!-- ⊞ Pi 应用窗（Pi 定制的网页应用 / 内置浏览器） -->
+                        <!-- 🌐 Pi 浏览器（Pi 可操控的悬浮浏览器窗口） -->
                         <TextView
                             android:id="@+id/btnFloatApps"
                             android:layout_width="40dp"
                             android:layout_height="36dp"
-                            android:contentDescription="Pi 应用"
+                            android:contentDescription="Pi 浏览器"
                             android:gravity="center"
-                            android:text="⊞"
+                            android:text="🌐"
                             android:textColor="#D2A8FF"
                             android:textSize="17sp"
                             android:textStyle="bold" />

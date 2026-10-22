@@ -1657,6 +1657,7 @@ public final class PluginManager {
                 Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts updated in container");
             }
             ensureTerminalExtension(context, extDir);
+            ensureAssetExtension(context, extDir, "pimet-browser.ts");
         } catch (Throwable t) {
             Log.w("PiMet.PluginMgr", "Failed to ensure Android bridge extension", t);
         }
@@ -1677,6 +1678,24 @@ public final class PluginManager {
             }
         } catch (Throwable t) {
             Log.w("PiMet.PluginMgr", "Failed to ensure terminal extension", t);
+        }
+    }
+
+    /** 从 assets/extensions/ 同步一个扩展到容器（内容不同才写） */
+    private static void ensureAssetExtension(Context context, File extDir, String name) {
+        try (java.io.InputStream in = context.getAssets().open("extensions/" + name)) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            String code = new String(bo.toByteArray(), StandardCharsets.UTF_8);
+            File f = new File(extDir, name);
+            if (!code.equals(readFileRaw(f))) {
+                writeFile(f, code);
+                Log.i("PiMet.PluginMgr", name + " updated in container");
+            }
+        } catch (Throwable t) {
+            Log.w("PiMet.PluginMgr", "Failed to ensure extension " + name, t);
         }
     }
 

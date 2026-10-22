@@ -210,7 +210,15 @@ public class AppBridgeManager {
                         writeJson(s, resp);
                         return;
                     }
-                    if (isTerminal(json)) {
+                    if (isBrowser(json)) {
+                        if (token == null) token = json.optString("token", null);
+                        if (!getBridgeToken().equals(token)) {
+                            resp = new JSONObject().put("success", false)
+                                    .put("error", "浏览器请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
+                        } else {
+                            resp = com.xm486.pimet.ui.BrowserAgent.handle(appContext, json);
+                        }
+                    } else if (isTerminal(json)) {
                         if (token == null) token = json.optString("token", null);
                         if (!getBridgeToken().equals(token)) {
                             resp = new JSONObject().put("success", false)
@@ -235,6 +243,10 @@ public class AppBridgeManager {
                 Log.w(TAG, "bridge client error: " + t);
             }
         });
+    }
+
+    private static boolean isBrowser(JSONObject json) {
+        return "browser".equals(json.optString("action")) || json.has("browser_action");
     }
 
     private static boolean isTerminal(JSONObject json) {
