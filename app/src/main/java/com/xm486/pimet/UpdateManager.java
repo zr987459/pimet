@@ -124,6 +124,32 @@ public final class UpdateManager {
     }
 
     /**
+     * 向正在运行的 Pi-Web 服务询问它自己的版本（/api/app-update 的 currentVersion，即构建时写入的版本）。
+     * 服务未运行、开了密码或接口不可用时返回 null。
+     */
+    public static String getRunningPiWebVersion(int port) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/api/app-update").openConnection();
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(8000);
+            conn.setUseCaches(false);
+            if (conn.getResponseCode() != 200) return null;
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String l;
+                while ((l = r.readLine()) != null) sb.append(l);
+            }
+            String v = new JSONObject(sb.toString()).optString("currentVersion", "");
+            return v.isEmpty() || "0.0.0".equals(v) ? null : v;
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            if (conn != null) try { conn.disconnect(); } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
      * 解析容器里实际运行的 Pi-Web 包目录（容器内绝对路径，如 /usr/local/lib/node_modules/@agegr/pi-web）。
      * 与 PiWebManager 启动顺序一致：PATH 中 /usr/local/bin 优先于 /usr/bin，pi-web 是指向 bin/pi-web.js 的符号链接。
      */
@@ -192,7 +218,11 @@ public final class UpdateManager {
 
             if (json != null) {
                 String latestVer = json.optString("version", "");
-                String installed = getInstalledPiWebVersion(context);
+                String diskVer = getInstalledPiWebVersion(context);
+                // 磁盘上已是新版但服务仍跑着旧进程时，以运行中的版本为准，让用户能再次点升级（会重新部署并重启服务）
+                String running = getRunningPiWebVersion(PiMetConfig.getWebPort(context));
+                final String installed = (running != null && PluginManager.isVersionNewer(diskVer, running))
+                        ? running : diskVer;
                 boolean hasUpdate = PluginManager.isVersionNewer(latestVer, installed);
 
                 PiWebUpdateInfo info = new PiWebUpdateInfo();
@@ -438,6 +468,18 @@ public final class UpdateManager {
                     try {
                         restarted.await(150, java.util.concurrent.TimeUnit.SECONDS);
                     } catch (InterruptedException ignored) {}
+                }
+
+                // 核对运行中的服务是否真的换成了新版本
+                String runningVer = getRunningPiWebVersion(webPort);
+                if (runningVer != null && !runningVer.equals(newVer)) {
+                    final String msg = "新版本 v" + newVer + " 已安装，但运行中的服务仍是 v" + runningVer
+                            + "，旧进程没有退出。请到「启动」页点「重启服务」，或在系统设置里强行停止 PiMet 后重新打开。";
+                    if (progressListener != null) {
+                        MAIN_HANDLER.post(() -> progressListener.onProgress(0, "服务未切换到新版本", msg));
+                    }
+                    MAIN_HANDLER.post(() -> callback.onResult(false, newVer, msg));
+                    return;
                 }
 
                 if (progressListener != null) {
