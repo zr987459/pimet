@@ -142,6 +142,7 @@ public final class FloatingApps {
             File apps = new File(rootfs, APPS_DIR_IN_CONTAINER.substring(1));
             new File(apps, "pages").mkdirs();
             new File(apps, "scripts").mkdirs();
+            new File(apps, "sites").mkdirs();   // 站点经验 notes.md 与可复用工具 tools/*.mjs
             File cfg = new File(apps, "config.json");
             if (!cfg.exists()) writeIfChanged(cfg, DEFAULT_CONFIG);
             // 旧版（beta.1）技能目录改名
