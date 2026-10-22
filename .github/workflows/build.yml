@@ -2,7 +2,7 @@ name: Build & Release PiMet APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feature/pi-apps ]
   workflow_dispatch:
 
 jobs:

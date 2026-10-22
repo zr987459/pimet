@@ -26,6 +26,7 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -37,6 +38,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.xm486.pimet.AttachmentPickerActivity;
 import com.xm486.pimet.proot.ProotManager;
 
 import org.json.JSONObject;
@@ -116,6 +118,21 @@ public final class FloatingApps {
     boolean minimized = false;
     private boolean maximized = false;
     private int savedW, savedH, savedX, savedY;
+
+    /** WebView <input type=file> 正在等待的文件选择回调（全局唯一，新请求到来会被自动取消）。 */
+    private static volatile ValueCallback<Uri[]> sPendingFileCallback;
+
+    /** 取消并清空当前挂起的 WebView 文件选择回调，避免旧请求悬挂。 */
+    private static void cancelPendingFileChooser() {
+        ValueCallback<Uri[]> cb = sPendingFileCallback;
+        sPendingFileCallback = null;
+        AttachmentPickerActivity.sWebCallback = null;
+        if (cb != null) {
+            try {
+                cb.onReceiveValue(null);
+            } catch (Throwable ignored) {}
+        }
+    }
 
     public static void toggle(Context context) {
         MAIN.post(() -> {
@@ -413,6 +430,9 @@ public final class FloatingApps {
 
     private void closeTab(Tab t) {
         if (t == null || t.closed) return;
+        if (active == null || active == t) {
+            cancelPendingFileChooser();
+        }
         if (tabs.size() <= 1) {
             goHome(t, false);
             return;
@@ -740,6 +760,62 @@ public final class FloatingApps {
             public void onReceivedTitle(WebView view, String title) {
                 t.title = title != null ? title : "";
                 if (!t.pi) refreshTabs();
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
+                cancelPendingFileChooser();
+
+                if (filePathCallback == null) return false;
+                sPendingFileCallback = filePathCallback;
+
+                String acceptTypes = null;
+                boolean allowMultiple = false;
+                if (params != null) {
+                    try {
+                        String[] types = params.getAcceptTypes();
+                        if (types != null && types.length > 0) {
+                            StringBuilder sb = new StringBuilder();
+                            for (String tp : types) {
+                                if (tp == null) continue;
+                                String v = tp.trim();
+                                if (v.isEmpty()) continue;
+                                if (sb.length() > 0) sb.append(',');
+                                sb.append(v);
+                            }
+                            acceptTypes = sb.toString();
+                        }
+                    } catch (Throwable ignored) {}
+                    try {
+                        allowMultiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                    } catch (Throwable ignored) {}
+                }
+
+                final Intent intent = AttachmentPickerActivity.newWebChooserIntent(acceptTypes, allowMultiple);
+                intent.setClass(ctx, AttachmentPickerActivity.class);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION
+                        | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+
+                AttachmentPickerActivity.sWebCallback = uris -> {
+                    MAIN.post(() -> {
+                        ValueCallback<Uri[]> cb = sPendingFileCallback;
+                        sPendingFileCallback = null;
+                        if (cb == null) return;
+                        try {
+                            cb.onReceiveValue(uris);
+                        } catch (Throwable ignored) {}
+                    });
+                };
+
+                try {
+                    ctx.startActivity(intent);
+                    return true;
+                } catch (Throwable ex) {
+                    Log.w(TAG, "start file chooser activity failed", ex);
+                    cancelPendingFileChooser();
+                    return false;
+                }
             }
         });
         try {
@@ -1625,6 +1701,8 @@ public final class FloatingApps {
     }
 
     private void dismiss() {
+        cancelPendingFileChooser();
+        AttachmentPickerActivity.sCallback = null;
         hideIme();
         try {
             if (root.getParent() != null) wm.removeView(root);
