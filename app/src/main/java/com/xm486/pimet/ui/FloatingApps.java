@@ -129,7 +129,7 @@ public final class FloatingApps {
     private static volatile boolean sMinimizedForPicker = false;
 
     /** 取消并清空当前挂起的 WebView 文件选择回调，避免旧请求悬挂。 */
-    private static void cancelPendingFileChooser() {
+    private static void cancelPendingFileChooser(boolean restore) {
         ValueCallback<Uri[]> cb = sPendingFileCallback;
         sPendingFileCallback = null;
         sPendingFileWebView = null;
@@ -139,7 +139,13 @@ public final class FloatingApps {
                 cb.onReceiveValue(null);
             } catch (Throwable ignored) {}
         }
-        restoreIfMinimizedForPicker();
+        if (restore) {
+            restoreIfMinimizedForPicker();
+        }
+    }
+
+    private static void cancelPendingFileChooser() {
+        cancelPendingFileChooser(true);
     }
 
     /** 若因选择器而最小化窗口，本次恢复；多次调用幂等。 */
@@ -787,7 +793,8 @@ public final class FloatingApps {
 
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
-                cancelPendingFileChooser();
+                // 新请求进来先取消旧请求，不触发恢复以防竞态
+                cancelPendingFileChooser(false);
 
                 if (filePathCallback == null) return false;
 

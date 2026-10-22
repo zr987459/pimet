@@ -28,16 +28,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 悬浮窗 AI 对话附件/相册文件选取辅助透明 Activity。
  *
- * 竞态不变量：
- *   1) onCreate 中立刻 "取走" 静态回调到实例字段，之后只认实例字段，
- *      保证后续新请求覆盖静态字段时不会污染本次会话；
- *   2) 回调只触发一次（AtomicBoolean）；
- *   3) 重建（savedInstanceState != null）直接 return，交给原实例兜底，
- *      绝不重新拉起选择器，也绝不误判"取消"。
+ * 职责一（保留）：AI 对话附件选取，回调 {@link #sCallback}（String tag, Uri uri）。
+ * 职责二（新增）：WebView 的 <input type=file> 选择，回调 {@link #sWebCallback}（Uri[]）。
  */
 public class AttachmentPickerActivity extends AppCompatActivity {
-
-    // ---------------------------------------------------------------- AI 附件回调
 
     public interface Callback {
         void onAttachmentPicked(String attachmentTag, Uri uri);
@@ -45,19 +39,13 @@ public class AttachmentPickerActivity extends AppCompatActivity {
 
     public static Callback sCallback;
 
-    // ---------------------------------------------------------------- WebView 文件回调
-
     public interface WebFileChooserCallback {
         void onReceiveFiles(@Nullable Uri[] uris);
     }
 
-    /** WebView onShowFileChooser 的回调；由 FloatingApps 设置、本 Activity 取走。 */
     public static volatile WebFileChooserCallback sWebCallback;
 
-    /** 本次请求的唯一回调：onCreate 时从 sWebCallback 取走，之后只认这里。 */
     private WebFileChooserCallback myWebCb;
-
-    /** 保证回调只执行一次。 */
     private final AtomicBoolean callbackFired = new AtomicBoolean(false);
 
     public static final String EXTRA_WEB_CHOOSER = "web_file_chooser";
@@ -65,8 +53,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
     public static final String EXTRA_ALLOW_MULTIPLE = "allow_multiple";
 
     private boolean isWebMode = false;
-
-    // ---------------------------------------------------------------- 启动入口
 
     public static Intent newWebChooserIntent(@Nullable String acceptTypes, boolean allowMultiple) {
         Intent i = new Intent();
@@ -76,37 +62,42 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         return i;
     }
 
-    // ---------------------------------------------------------------- 生命周期
-
     private final ActivityResultLauncher<Intent> pickerLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
-                try {
-                    if (result.getResultCode() == RESULT_OK && result.getData() != null) {
-                        Intent data = result.getData();
-                        if (isWebMode) {
-                            Uri[] raw = collectWebUris(data);
-                            Uri[] grantable = raw != null ? toGrantableUris(raw) : null;
-                            fireWebCallback(grantable);
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    Intent data = result.getData();
+                    if (isWebMode) {
+                        Uri[] raw = collectWebUris(data);
+                        if (raw != null && raw.length > 0) {
+                            // 异步后台流式拷贝，防止大文件阻塞主线程导致 ANR
+                            new Thread(() -> {
+                                Uri[] grantable = toGrantableUris(raw);
+                                runOnUiThread(() -> {
+                                    fireWebCallback(grantable);
+                                    finish();
+                                });
+                            }, "WebPick-Transfer").start();
+                            return;
                         } else {
-                            Uri uri = data.getData();
-                            if (uri != null) {
-                                handlePickedUri(uri);
-                            } else {
-                                sCallback = null;
-                            }
+                            fireWebCallback(null);
                         }
                     } else {
-                        // 用户取消
-                        if (isWebMode) {
-                            fireWebCallback(null);
+                        Uri uri = data.getData();
+                        if (uri != null) {
+                            handlePickedUri(uri);
                         } else {
                             sCallback = null;
                         }
                     }
-                } finally {
-                    finish();
+                } else {
+                    if (isWebMode) {
+                        fireWebCallback(null);
+                    } else {
+                        sCallback = null;
+                    }
                 }
+                finish();
             }
     );
 
@@ -118,18 +109,16 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         Intent src = getIntent();
         isWebMode = src != null && src.getBooleanExtra(EXTRA_WEB_CHOOSER, false);
 
-        // 【关键】立刻取走静态回调，防止被后续请求覆盖
         if (isWebMode) {
             myWebCb = sWebCallback;
             sWebCallback = null;
-            // 如果没有任何挂起的 Web 请求，直接退出（避免悬挂）
             if (myWebCb == null) {
                 finish();
                 return;
             }
         }
 
-        // 【关键】系统重建：不重新拉起选择器，交给原实例的 onDestroy 兜底
+        // 配置变化重建时，由旧实例在 onDestroy 交接给新实例，避免重复拉起选择器
         if (savedInstanceState != null) {
             return;
         }
@@ -180,13 +169,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         }
     }
 
-    // ---------------------------------------------------------------- MIME 规范化
-
-    /**
-     * 将 WebView accept_types 规范化为 MIME 数组。
-     * - 已是 MIME（含 "/"）直接采用；
-     * - ".jpg" 这类扩展名走 MimeTypeMap，失败回退。
-     */
     private static String[] normalizeMimeTypes(@Nullable String raw) {
         if (raw == null) return new String[0];
         String s = raw.trim();
@@ -204,12 +186,13 @@ public class AttachmentPickerActivity extends AppCompatActivity {
             String mime = mtm.getMimeTypeFromExtension(ext.toLowerCase());
             if (mime != null && !mime.isEmpty()) {
                 set.add(mime);
+            } else {
+                // 只要有一项无法精确识别映射，退回通用兜底，避免限制死用户选文件
+                return new String[]{"*/*"};
             }
         }
         return set.toArray(new String[0]);
     }
-
-    // ---------------------------------------------------------------- WebView Uri 收集
 
     @Nullable
     private static Uri[] collectWebUris(Intent data) {
@@ -227,8 +210,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         return out.isEmpty() ? null : out.toArray(new Uri[0]);
     }
 
-    // ---------------------------------------------------------------- 回调触发（幂等·仅实例字段）
-
     private void fireWebCallback(@Nullable Uri[] uris) {
         if (!isWebMode) return;
         if (!callbackFired.compareAndSet(false, true)) return;
@@ -237,12 +218,9 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         if (cb != null) {
             try {
                 cb.onReceiveFiles(uris);
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable ignored) {}
         }
     }
-
-    // ---------------------------------------------------------------- 原有附件逻辑
 
     private void handlePickedUri(Uri uri) {
         String fileName = "文件";
@@ -261,7 +239,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
             if (cursor != null) cursor.close();
         }
 
-        // DISPLAY_NAME 去斜杠 sanitize，防止路径注入
         fileName = fileName.replace('/', '_').replace('\\', '_');
 
         String localPath = null;
@@ -288,18 +265,29 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         if (cb != null) {
             try {
                 cb.onAttachmentPicked(tag, uri);
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable ignored) {}
         }
     }
-
-    // ---------------------------------------------------------------- Web 模式：Uri 转 FileProvider 授权 Uri
 
     @Nullable
     private Uri[] toGrantableUris(@Nullable Uri[] uris) {
         if (uris == null || uris.length == 0) return null;
         File dir = new File(getCacheDir(), "web_picks");
         if (!dir.exists()) dir.mkdirs();
+
+        // 自动清理 24 小时前的旧文件，防磁盘无限制膨胀
+        try {
+            long now = System.currentTimeMillis();
+            File[] oldFiles = dir.listFiles();
+            if (oldFiles != null) {
+                for (File f : oldFiles) {
+                    if (now - f.lastModified() > 24 * 3600 * 1000L) {
+                        f.delete();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
         List<Uri> grants = new ArrayList<>(uris.length);
         for (Uri src : uris) {
             if (src == null) continue;
@@ -350,7 +338,12 @@ public class AttachmentPickerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (isWebMode && isFinishing()) {
+        if (!isWebMode) return;
+        // 配置变化（分屏、深色模式、语言切换）时将回调平滑交接给重建实例
+        if (isChangingConfigurations()) {
+            sWebCallback = myWebCb;
+            myWebCb = null;
+        } else if (isFinishing()) {
             fireWebCallback(null);
         }
     }
