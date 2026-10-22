@@ -136,6 +136,9 @@ public class PiWebActivity extends AppCompatActivity {
         // 注册通用网页翻译原生桥接
         TranslationBridge transBridge = new TranslationBridge(this, webView);
         webView.addJavascriptInterface(transBridge, "PiMetTranslator");
+        // Pi-Web 设置里切换主题 → 记住并让本页底色/状态栏跟随（主界面回到前台时会按新主题重绘）
+        webView.addJavascriptInterface(new ThemeManager.WebThemeBridge(this, () ->
+                ThemeManager.applyWindowTheme(this, ThemeManager.getEffectivePalette(this))), "PiMetTheme");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -153,12 +156,14 @@ public class PiWebActivity extends AppCompatActivity {
             public void onPageCommitVisible(WebView v, String url) {
                 super.onPageCommitVisible(v, url);
                 com.xm486.pimet.ui.WebPinchZoom.apply(v, url);
+                com.xm486.pimet.ui.PiWebCompat.apply(v, url);
             }
 
             @Override
             public void onPageFinished(WebView v, String url) {
                 ThemeManager.syncThemeToWebView(v, PiWebActivity.this);
                 com.xm486.pimet.ui.WebPinchZoom.apply(v, url);
+                com.xm486.pimet.ui.PiWebCompat.apply(v, url);
                 if (url != null && !url.startsWith("about:") && !url.isEmpty()) {
                     currentUrl = url;
                     if (isExternalUrl(url)) {

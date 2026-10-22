@@ -23,7 +23,9 @@ import java.util.List;
 /**
  * PiMet 界面主题管理器 (ThemeManager)
  * 深度对齐 Pi-Web 官方 UI 设计语言与配色规范。
- * 支持系统自适应与 Light、Dark、Mist、Rose、Pine 5套原生色彩矩阵。
+ * 支持系统自适应与 Pi-Web 0.12.2 全部 13 套色彩矩阵：
+ * 浅色 Light / Mist / Lilac / Sand / Rose / 高对比浅色，深色 Dark / Pine / Dusk / Ember / Slate / 高对比深色 / Zenburn。
+ * 色值与 Pi-Web app/globals.css 的 [data-theme] 变量逐一对应（bgSunken = --tool-bg，accentSubtle = --user-bg）。
  * 具备整树递归无损着色引擎，全面覆盖原生卡片、面板、输入框、按钮及文本。
  * 视觉规范：极简风格 —— 扁平表面、1dp 发丝描边、统一圆角/间距/字号阶梯（见下方 Design Token），
  * 所有颜色均派生自 ThemePalette，切换主题时不引入任何额外色值。
@@ -39,6 +41,15 @@ public class ThemeManager {
     public static final String THEME_MIST = "mist";
     public static final String THEME_ROSE = "rose";
     public static final String THEME_PINE = "pine";
+    // Pi-Web 0.12.2 新增主题（id 与 Pi-Web localStorage「pi-theme」取值完全一致）
+    public static final String THEME_SAND = "sand";
+    public static final String THEME_LILAC = "lilac";
+    public static final String THEME_DUSK = "dusk";
+    public static final String THEME_EMBER = "ember";
+    public static final String THEME_SLATE = "slate";
+    public static final String THEME_CONTRAST_LIGHT = "contrast-light";
+    public static final String THEME_CONTRAST_DARK = "contrast-dark";
+    public static final String THEME_ZENBURN = "zenburn";
 
     public static class ThemePalette {
         public final String id;
@@ -119,6 +130,77 @@ public class ThemeManager {
             true
     );
 
+    public static final ThemePalette PALETTE_SAND = new ThemePalette(
+            THEME_SAND, "暖沙 (Sand)",
+            0xFFFAF6EE, 0xFFF1EBDF, 0xFFEBE3D4, 0xFFF5EFE4,
+            0xFFCDBFA6, 0xFF2E2A22, 0xFF5C5243, 0xFF665B4B,
+            0xFF7A4F10, 0xFF613F0B, 0xFFFFFFFF, 0xFFF2E8D5,
+            false
+    );
+
+    public static final ThemePalette PALETTE_LILAC = new ThemePalette(
+            THEME_LILAC, "丁香 (Lilac)",
+            0xFFF8F6FC, 0xFFEFEBF6, 0xFFE8E2F2, 0xFFF3EFF9,
+            0xFFC4B8D8, 0xFF2B2635, 0xFF574D68, 0xFF625873,
+            0xFF6A43A8, 0xFF56348C, 0xFFFFFFFF, 0xFFECE4F7,
+            false
+    );
+
+    public static final ThemePalette PALETTE_DUSK = new ThemePalette(
+            THEME_DUSK, "暮紫 (Dusk)",
+            0xFF1E1A24, 0xFF26212E, 0xFF302A39, 0xFF241F2B,
+            0xFF54496A, 0xFFEBE6F0, 0xFFC9C0D4, 0xFFB5ABC3,
+            0xFFCDB4F0, 0xFFE0D0F7, 0xFF261A38, 0xFF2E2638,
+            true
+    );
+
+    public static final ThemePalette PALETTE_EMBER = new ThemePalette(
+            THEME_EMBER, "余烬 (Ember)",
+            0xFF1F1A16, 0xFF28211C, 0xFF322A23, 0xFF251F1A,
+            0xFF5A4A3D, 0xFFEDE4DA, 0xFFCFC0B0, 0xFFBBA996,
+            0xFFE8B27A, 0xFFF2CBA0, 0xFF2B1A0C, 0xFF33291F,
+            true
+    );
+
+    public static final ThemePalette PALETTE_SLATE = new ThemePalette(
+            THEME_SLATE, "岩蓝 (Slate)",
+            0xFF161B26, 0xFF1D2331, 0xFF262D3D, 0xFF1B2130,
+            0xFF435069, 0xFFE3E8F2, 0xFFBCC5D6, 0xFFA7B1C5,
+            0xFF8CCFE0, 0xFFB3E2EC, 0xFF0F2229, 0xFF232C3F,
+            true
+    );
+
+    public static final ThemePalette PALETTE_CONTRAST_LIGHT = new ThemePalette(
+            THEME_CONTRAST_LIGHT, "高对比浅色",
+            0xFFFFFFFF, 0xFFF3F3F3, 0xFFE6E6E6, 0xFFF7F7F7,
+            0xFF5C5C5C, 0xFF000000, 0xFF1F1F1F, 0xFF2E2E2E,
+            0xFF0034A0, 0xFF002678, 0xFFFFFFFF, 0xFFEAF0FF,
+            false
+    );
+
+    public static final ThemePalette PALETTE_CONTRAST_DARK = new ThemePalette(
+            THEME_CONTRAST_DARK, "高对比深色",
+            0xFF000000, 0xFF0F0F0F, 0xFF1F1F1F, 0xFF0D0D0D,
+            0xFFA3A3A3, 0xFFFFFFFF, 0xFFEBEBEB, 0xFFD6D6D6,
+            0xFFFFD60A, 0xFFFFE566, 0xFF000000, 0xFF1A1A1A,
+            true
+    );
+
+    public static final ThemePalette PALETTE_ZENBURN = new ThemePalette(
+            THEME_ZENBURN, "Zenburn",
+            0xFF3F3F3F, 0xFF383838, 0xFF474747, 0xFF3A3A3A,
+            0xFF6F6F6F, 0xFFDCDCCC, 0xFFCFCFBF, 0xFFC6C6B6,
+            0xFFF0DFAF, 0xFFF8ECCB, 0xFF3F3F3F, 0xFF4A4A42,
+            true
+    );
+
+    /** 全部具体主题（不含 auto），顺序与 Pi-Web 设置里的色块一致：浅色一行、深色一行、高对比与 Zenburn 一行。 */
+    public static final ThemePalette[] ALL_PALETTES = {
+            PALETTE_LIGHT, PALETTE_MIST, PALETTE_LILAC, PALETTE_SAND, PALETTE_ROSE,
+            PALETTE_DARK, PALETTE_PINE, PALETTE_DUSK, PALETTE_EMBER, PALETTE_SLATE,
+            PALETTE_CONTRAST_LIGHT, PALETTE_CONTRAST_DARK, PALETTE_ZENBURN
+    };
+
     private ThemeManager() {}
 
     public static String getThemePreference(Context context) {
@@ -148,31 +230,55 @@ public class ThemeManager {
     }
 
     public static ThemePalette getPaletteById(String themeId) {
-        if (THEME_LIGHT.equals(themeId)) return PALETTE_LIGHT;
-        if (THEME_MIST.equals(themeId)) return PALETTE_MIST;
-        if (THEME_ROSE.equals(themeId)) return PALETTE_ROSE;
-        if (THEME_PINE.equals(themeId)) return PALETTE_PINE;
+        if (themeId != null) {
+            for (ThemePalette p : ALL_PALETTES) {
+                if (p.id.equals(themeId)) return p;
+            }
+        }
         return PALETTE_DARK;
+    }
+
+    /** 是否为 PiMet / Pi-Web 都认识的主题 id（含 auto）。 */
+    public static boolean isKnownTheme(String themeId) {
+        if (THEME_AUTO.equals(themeId)) return true;
+        if (themeId == null) return false;
+        for (ThemePalette p : ALL_PALETTES) {
+            if (p.id.equals(themeId)) return true;
+        }
+        return false;
     }
 
     public static String getThemeLabel(String themeId) {
         if (THEME_AUTO.equals(themeId)) return "跟随系统 (Auto)";
-        if (THEME_LIGHT.equals(themeId)) return PALETTE_LIGHT.name;
-        if (THEME_DARK.equals(themeId)) return PALETTE_DARK.name;
-        if (THEME_MIST.equals(themeId)) return PALETTE_MIST.name;
-        if (THEME_ROSE.equals(themeId)) return PALETTE_ROSE.name;
-        if (THEME_PINE.equals(themeId)) return PALETTE_PINE.name;
+        if (themeId != null) {
+            for (ThemePalette p : ALL_PALETTES) {
+                if (p.id.equals(themeId)) return p.name;
+            }
+        }
         return "默认主题";
     }
 
+    /** 主题一句话描述（外观页选项副标题）。 */
+    public static String getThemeDescription(String themeId) {
+        if (themeId == null) return "";
+        switch (themeId) {
+            case THEME_SAND: return "温润米沙 · 纸感暖白 · 赭金强调色";
+            case THEME_LILAC: return "淡雅丁香 · 柔和浅紫 · 堇紫强调色";
+            case THEME_DUSK: return "暮色紫灰 · 深夜柔光 · 薰衣草强调色";
+            case THEME_EMBER: return "炭火暖褐 · 少蓝光 · 琥珀强调色";
+            case THEME_SLATE: return "深海岩蓝 · 冷静克制 · 冰青强调色";
+            case THEME_CONTRAST_LIGHT: return "白底黑字 · 文字对比度达 WCAG AAA";
+            case THEME_CONTRAST_DARK: return "黑底白字 · 亮黄强调 · WCAG AAA";
+            case THEME_ZENBURN: return "经典低对比护眼配色 · 麦黄强调色";
+            default: return "";
+        }
+    }
+
+    /** auto + 全部具体主题，顺序同 Pi-Web 设置。 */
     public static List<String> getAllThemes() {
         List<String> list = new ArrayList<>();
         list.add(THEME_AUTO);
-        list.add(THEME_LIGHT);
-        list.add(THEME_DARK);
-        list.add(THEME_MIST);
-        list.add(THEME_ROSE);
-        list.add(THEME_PINE);
+        for (ThemePalette p : ALL_PALETTES) list.add(p.id);
         return list;
     }
 
@@ -217,7 +323,21 @@ public class ThemeManager {
                 "  try {" +
                 "    var theme = '" + effectiveTheme + "';" +
                 "    var isDark = " + isDark + ";" +
-                "    localStorage.setItem('pi-theme', theme);" +
+                // 双向同步：用户在 Pi-Web 设置里点选主题时（写 localStorage「pi-theme」），回调原生让 PiMet 跟着换。
+                // 只挂一次；PiMet 自己写入时打标记，避免回声。
+                "    if (!window.__pimetThemeHook && window.Storage && Storage.prototype.setItem) {" +
+                "      window.__pimetThemeHook = 1;" +
+                "      var rawSet = Storage.prototype.setItem;" +
+                "      Storage.prototype.setItem = function(k, v) {" +
+                "        rawSet.apply(this, arguments);" +
+                "        try {" +
+                "          if (k === 'pi-theme' && !window.__pimetThemeSyncing && window.PiMetTheme" +
+                "              && this === window.localStorage) { window.PiMetTheme.onWebTheme(String(v)); }" +
+                "        } catch (e) {}" +
+                "      };" +
+                "    }" +
+                "    window.__pimetThemeSyncing = true;" +
+                "    try { localStorage.setItem('pi-theme', theme); } finally { window.__pimetThemeSyncing = false; }" +
                 "    document.documentElement.dataset.theme = theme;" +
                 "    document.documentElement.classList.toggle('dark', isDark);" +
                 "    var meta = document.querySelector('meta[name=\"theme-color\"]');" +
@@ -236,6 +356,34 @@ public class ThemeManager {
                 "  } catch (e) {}" +
                 "})();";
         webView.evaluateJavascript(js, null);
+    }
+
+    /**
+     * Pi-Web 主题回传桥（window.PiMetTheme）：用户在 Pi-Web 设置里选了主题，PiMet 原生界面同步切换。
+     * 只接受已知主题 id；回调在 JS 线程，切换动作抛回主线程执行。
+     */
+    public static final class WebThemeBridge {
+        private final Activity activity;
+        private final Runnable onChanged;
+
+        public WebThemeBridge(Activity activity, Runnable onChanged) {
+            this.activity = activity;
+            this.onChanged = onChanged;
+        }
+
+        @android.webkit.JavascriptInterface
+        public void onWebTheme(String themeId) {
+            if (activity == null || !isKnownTheme(themeId)) return;
+            activity.runOnUiThread(() -> {
+                if (activity.isFinishing()) return;
+                String current = getThemePreference(activity);
+                if (themeId.equals(current)) return;
+                // PiMet 选「跟随系统」时会把解析后的具体主题写进网页；网页回报的同一主题不算用户改动
+                if (THEME_AUTO.equals(current) && themeId.equals(getEffectivePalette(activity).id)) return;
+                setThemePreference(activity, themeId);
+                if (onChanged != null) onChanged.run();
+            });
+        }
     }
 
     public static int dpToPx(Context context, float dp) {
