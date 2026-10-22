@@ -88,6 +88,7 @@
         <activity
             android:name=".AttachmentPickerActivity"
             android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- 接收 Shizuku Binder 接入点 -->

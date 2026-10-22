@@ -7,12 +7,14 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.webkit.MimeTypeMap;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -26,12 +28,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 悬浮窗 AI 对话附件/相册文件选取辅助透明 Activity。
  *
- * 职责一（保留）：AI 对话附件选取，回调 {@link #sCallback}（String tag, Uri uri）。
- * 职责二（新增）：WebView 的 <input type=file> 选择，回调 {@link #sWebCallback}（Uri[]）。
- *
- * 回调契约（严格遵守）：
- *   任何退出路径（取消 / 完成 / 异常 / onDestroy）必须且只能调用一次回调；
- *   失败或取消传 null；成功传非空 Uri[]（多选时包含所有选中）。
+ * 竞态不变量：
+ *   1) onCreate 中立刻 "取走" 静态回调到实例字段，之后只认实例字段，
+ *      保证后续新请求覆盖静态字段时不会污染本次会话；
+ *   2) 回调只触发一次（AtomicBoolean）；
+ *   3) 重建（savedInstanceState != null）直接 return，交给原实例兜底，
+ *      绝不重新拉起选择器，也绝不误判"取消"。
  */
 public class AttachmentPickerActivity extends AppCompatActivity {
 
@@ -49,13 +51,15 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         void onReceiveFiles(@Nullable Uri[] uris);
     }
 
-    /** WebView onShowFileChooser 的回调；由 FloatingApps 设置、本 Activity 执行并清空。 */
+    /** WebView onShowFileChooser 的回调；由 FloatingApps 设置、本 Activity 取走。 */
     public static volatile WebFileChooserCallback sWebCallback;
+
+    /** 本次请求的唯一回调：onCreate 时从 sWebCallback 取走，之后只认这里。 */
+    private WebFileChooserCallback myWebCb;
 
     /** 保证回调只执行一次。 */
     private final AtomicBoolean callbackFired = new AtomicBoolean(false);
 
-    /** 本次启动是否为 WebView 文件选择（由 FloatingApps 通过 EXTRA 标记）。 */
     public static final String EXTRA_WEB_CHOOSER = "web_file_chooser";
     public static final String EXTRA_ACCEPT_TYPES = "accept_types";
     public static final String EXTRA_ALLOW_MULTIPLE = "allow_multiple";
@@ -64,7 +68,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
 
     // ---------------------------------------------------------------- 启动入口
 
-    /** 供 FloatingApps 构造 Intent 用。 */
     public static Intent newWebChooserIntent(@Nullable String acceptTypes, boolean allowMultiple) {
         Intent i = new Intent();
         i.putExtra(EXTRA_WEB_CHOOSER, true);
@@ -82,17 +85,24 @@ public class AttachmentPickerActivity extends AppCompatActivity {
                     if (result.getResultCode() == RESULT_OK && result.getData() != null) {
                         Intent data = result.getData();
                         if (isWebMode) {
-                            Uri[] uris = collectWebUris(data);
-                            fireWebCallback(uris != null && uris.length > 0 ? uris : null);
+                            Uri[] raw = collectWebUris(data);
+                            Uri[] grantable = raw != null ? toGrantableUris(raw) : null;
+                            fireWebCallback(grantable);
                         } else {
                             Uri uri = data.getData();
                             if (uri != null) {
                                 handlePickedUri(uri);
+                            } else {
+                                sCallback = null;
                             }
                         }
                     } else {
                         // 用户取消
-                        if (isWebMode) fireWebCallback(null);
+                        if (isWebMode) {
+                            fireWebCallback(null);
+                        } else {
+                            sCallback = null;
+                        }
                     }
                 } finally {
                     finish();
@@ -103,11 +113,26 @@ public class AttachmentPickerActivity extends AppCompatActivity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // WebView 选择器约定：转场无动画
         overridePendingTransition(0, 0);
 
         Intent src = getIntent();
         isWebMode = src != null && src.getBooleanExtra(EXTRA_WEB_CHOOSER, false);
+
+        // 【关键】立刻取走静态回调，防止被后续请求覆盖
+        if (isWebMode) {
+            myWebCb = sWebCallback;
+            sWebCallback = null;
+            // 如果没有任何挂起的 Web 请求，直接退出（避免悬挂）
+            if (myWebCb == null) {
+                finish();
+                return;
+            }
+        }
+
+        // 【关键】系统重建：不重新拉起选择器，交给原实例的 onDestroy 兜底
+        if (savedInstanceState != null) {
+            return;
+        }
 
         Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -128,7 +153,6 @@ public class AttachmentPickerActivity extends AppCompatActivity {
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
             }
         } else {
-            // 原有 AI 附件行为不变
             intent.setType("*/*");
             intent.putExtra(Intent.EXTRA_MIME_TYPES,
                     new String[]{"image/*", "text/*", "application/*"});
@@ -159,54 +183,40 @@ public class AttachmentPickerActivity extends AppCompatActivity {
     // ---------------------------------------------------------------- MIME 规范化
 
     /**
-     * 将 WebView accept_types（如 "image/*,application/pdf,text/plain"）规范化为 MIME 数组。
+     * 将 WebView accept_types 规范化为 MIME 数组。
+     * - 已是 MIME（含 "/"）直接采用；
+     * - ".jpg" 这类扩展名走 MimeTypeMap，失败回退。
      */
     private static String[] normalizeMimeTypes(@Nullable String raw) {
         if (raw == null) return new String[0];
         String s = raw.trim();
         if (s.isEmpty()) return new String[0];
         Set<String> set = new LinkedHashSet<>();
+        MimeTypeMap mtm = MimeTypeMap.getSingleton();
         for (String part : s.split(",")) {
             String t = part.trim();
             if (t.isEmpty()) continue;
-            // 非 MIME 的扩展名（".jpg"）也映射，避免 WebView 传入文件扩展
-            if (t.startsWith(".")) {
-                String m = extToMime(t);
-                if (m != null) set.add(m);
+            if (t.contains("/")) {
+                set.add(t);
                 continue;
             }
-            if (t.contains("/")) set.add(t);
+            String ext = t.startsWith(".") ? t.substring(1) : t;
+            String mime = mtm.getMimeTypeFromExtension(ext.toLowerCase());
+            if (mime != null && !mime.isEmpty()) {
+                set.add(mime);
+            }
         }
         return set.toArray(new String[0]);
     }
 
-    @Nullable
-    private static String extToMime(String ext) {
-        switch (ext.toLowerCase()) {
-            case ".jpg":
-            case ".jpeg": return "image/jpeg";
-            case ".png": return "image/png";
-            case ".gif": return "image/gif";
-            case ".webp": return "image/webp";
-            case ".pdf": return "application/pdf";
-            case ".txt": return "text/plain";
-            case ".mp4": return "video/mp4";
-            case ".mp3": return "audio/mpeg";
-            default: return null;
-        }
-    }
-
     // ---------------------------------------------------------------- WebView Uri 收集
 
-    /** 从 Intent 中收集所有 Uri（多选 & 单选）。 */
     @Nullable
     private static Uri[] collectWebUris(Intent data) {
         if (data == null) return null;
         List<Uri> out = new ArrayList<>();
-        // 单选
         Uri single = data.getData();
         if (single != null) out.add(single);
-        // 多选
         ClipData clip = data.getClipData();
         if (clip != null) {
             for (int i = 0; i < clip.getItemCount(); i++) {
@@ -217,13 +227,13 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         return out.isEmpty() ? null : out.toArray(new Uri[0]);
     }
 
-    // ---------------------------------------------------------------- 回调触发（幂等）
+    // ---------------------------------------------------------------- 回调触发（幂等·仅实例字段）
 
     private void fireWebCallback(@Nullable Uri[] uris) {
         if (!isWebMode) return;
         if (!callbackFired.compareAndSet(false, true)) return;
-        WebFileChooserCallback cb = sWebCallback;
-        sWebCallback = null;
+        WebFileChooserCallback cb = myWebCb;
+        myWebCb = null;
         if (cb != null) {
             try {
                 cb.onReceiveFiles(uris);
@@ -232,7 +242,7 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         }
     }
 
-    // ---------------------------------------------------------------- 原有附件逻辑（不变）
+    // ---------------------------------------------------------------- 原有附件逻辑
 
     private void handlePickedUri(Uri uri) {
         String fileName = "文件";
@@ -242,13 +252,17 @@ public class AttachmentPickerActivity extends AppCompatActivity {
             if (cursor != null && cursor.moveToFirst()) {
                 int nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                 if (nameIdx >= 0) {
-                    fileName = cursor.getString(nameIdx);
+                    String n = cursor.getString(nameIdx);
+                    if (n != null && !n.isEmpty()) fileName = n;
                 }
             }
         } catch (Throwable ignored) {
         } finally {
             if (cursor != null) cursor.close();
         }
+
+        // DISPLAY_NAME 去斜杠 sanitize，防止路径注入
+        fileName = fileName.replace('/', '_').replace('\\', '_');
 
         String localPath = null;
         try {
@@ -279,11 +293,64 @@ public class AttachmentPickerActivity extends AppCompatActivity {
         }
     }
 
+    // ---------------------------------------------------------------- Web 模式：Uri 转 FileProvider 授权 Uri
+
+    @Nullable
+    private Uri[] toGrantableUris(@Nullable Uri[] uris) {
+        if (uris == null || uris.length == 0) return null;
+        File dir = new File(getCacheDir(), "web_picks");
+        if (!dir.exists()) dir.mkdirs();
+        List<Uri> grants = new ArrayList<>(uris.length);
+        for (Uri src : uris) {
+            if (src == null) continue;
+            String name = queryDisplayName(src);
+            if (name == null || name.isEmpty()) name = "pick";
+            name = name.replace('/', '_').replace('\\', '_');
+            File dest = new File(dir, System.currentTimeMillis() + "_" + name);
+            if (!copyToFile(src, dest)) continue;
+            try {
+                grants.add(FileProvider.getUriForFile(this,
+                        getPackageName() + ".fileprovider", dest));
+            } catch (Throwable ignored) {}
+        }
+        return grants.isEmpty() ? null : grants.toArray(new Uri[0]);
+    }
+
+    @Nullable
+    private String queryDisplayName(Uri uri) {
+        Cursor c = null;
+        try {
+            c = getContentResolver().query(uri,
+                    new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return c.getString(idx);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return null;
+    }
+
+    private boolean copyToFile(Uri src, File dest) {
+        try (InputStream in = getContentResolver().openInputStream(src);
+             FileOutputStream out = new FileOutputStream(dest)) {
+            if (in == null) return false;
+            byte[] buf = new byte[8192];
+            int len;
+            while ((len = in.read(buf)) != -1) out.write(buf, 0, len);
+            return true;
+        } catch (Throwable ignored) {
+            try { dest.delete(); } catch (Throwable ignored2) {}
+            return false;
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (isWebMode) {
-            // Activity 被系统回收/主动结束但回调未触发：兜底取消，且只触发一次
+        if (isWebMode && isFinishing()) {
             fireWebCallback(null);
         }
     }
