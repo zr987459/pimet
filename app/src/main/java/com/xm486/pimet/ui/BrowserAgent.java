@@ -127,6 +127,8 @@ public final class BrowserAgent {
             case "minimize":
                 onMain(() -> { win.agentMinimize(); return null; }, 3000);
                 return ok().put("result", "浏览器窗口已最小化（仍可继续操作，但只能用 JS 点击，也不能截图）");
+            case "downloads":
+                return ok().put("result", FloatingApps.downloadsText(ctx));
             case "reload_ui":
             case "reload_config":
                 onMain(() -> { win.reloadConfigNow(); return null; }, 3000);
@@ -268,7 +270,9 @@ public final class BrowserAgent {
                 return out.put("url", tab.url).put("result", v[1]);
             }
             case "screenshot": {
-                onMain(() -> { win.agentRestore(); return null; }, 3000);
+                if (Boolean.TRUE.equals(onMain(() -> win.minimized, 2000))) {
+                    return err("浏览器窗口被用户收起（最小化）了，截不了图。不要擅自弹出窗口：能用 snapshot / eval 读页面就用它们；确实需要看画面时先问用户，或用 show 打开后再截图。");
+                }
                 // 后台标签在操作期间是「可见但压在当前标签下面」，刚变可见时要等一帧画出来
                 SystemClock.sleep(onMain(() -> win.isActive(tab), 2000) ? 250 : 600);
                 String b64 = onMain(() -> capture(tab.web), 8000);

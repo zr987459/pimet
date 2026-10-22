@@ -108,6 +108,10 @@ public final class FloatingApps {
     private long configMtime = -1;
     /** 窗口是 Pi 刚打开的（用户还没看任何网页）：第一个 Pi 标签直接放到前台 */
     private boolean freshForAgent = false;
+    /** 顶栏左侧的拖动柄；窗口最小化且 Pi 在后台操作时显示成闪烁的 🤖 */
+    private TextView grip;
+    /** 用户亲手点过 ✕：之后 Pi 再需要窗口时，悄悄建好并保持最小化，不再整窗弹出来 */
+    private static volatile boolean sUserClosed = false;
     private JSONObject config = new JSONObject();
     boolean minimized = false;
     private boolean maximized = false;
@@ -180,6 +184,14 @@ public final class FloatingApps {
 
     @SuppressLint({"ClickableViewAccessibility", "SetJavaScriptEnabled", "JavascriptInterface"})
     private FloatingApps(Context app) {
+        this(app, false);
+    }
+
+    /**
+     * quiet=true：给 Pi 用、但用户之前亲手关掉了窗口。先以全透明、不可触摸的方式加到屏幕上，让 WebView 完成一次布局
+     * （否则页面视口是 0×0），随后立刻收成最小化的小条，再恢复不透明。用户只会看到一条最小化的标题栏。
+     */
+    private FloatingApps(Context app, boolean quiet) {
         this.ctx = app;
         this.wm = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
         this.appsDir = new File(ProotManager.getRootfsDir(app), APPS_DIR_IN_CONTAINER.substring(1));
@@ -206,7 +218,7 @@ public final class FloatingApps {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(2), 0, dp(2), 0);
 
-        TextView grip = barBtn("⠿", "拖动（点按最小化）");
+        grip = barBtn("⠿", "拖动（点按最小化）");
         grip.setOnTouchListener(new DragMover());
         bar.addView(grip, new LinearLayout.LayoutParams(dp(26), dp(36)));
         addBar(bar, "‹", "后退", v -> goBack());
@@ -246,7 +258,10 @@ public final class FloatingApps {
         addBar(bar, "⌂", "首页", v -> goHome());
         addBar(bar, "⤢", "最大化", v -> toggleMaximize());
         addBar(bar, "—", "最小化", v -> toggleMinimize());
-        addBar(bar, "✕", "关闭", v -> dismiss());
+        addBar(bar, "✕", "关闭", v -> {
+            sUserClosed = true;
+            dismiss();
+        });
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
 
         // ---- 标签栏：用户标签 / 🤖 Pi 标签 / ＋ / 接管 / 停止 Pi
@@ -308,7 +323,20 @@ public final class FloatingApps {
         });
 
         reloadConfigIfChanged();
+        if (quiet) {
+            lp.alpha = 0f;
+            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        }
         wm.addView(root, lp);
+        if (quiet) {
+            MAIN.postDelayed(() -> {
+                if (sInstance != this) return;
+                if (!minimized) toggleMinimize();
+                lp.alpha = 1f;
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                update();
+            }, 450);
+        }
     }
 
     // ------------------------------------------------------------------ 标签页
@@ -511,7 +539,30 @@ public final class FloatingApps {
 
     private android.animation.ObjectAnimator busyPulse;
 
+    private android.animation.ObjectAnimator gripPulse;
+
+    /** 最小化时，Pi 在后台操作就把拖动柄换成闪烁的 🤖，让用户知道它在干活 */
+    private void refreshGrip() {
+        if (grip == null) return;
+        boolean busy = false;
+        for (Tab x : tabs) if (x.busy > 0) busy = true;
+        boolean show = minimized && busy;
+        grip.setText(show ? "🤖" : "⠿");
+        if (show && gripPulse == null) {
+            gripPulse = android.animation.ObjectAnimator.ofFloat(grip, "alpha", 1f, 0.35f);
+            gripPulse.setDuration(600);
+            gripPulse.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            gripPulse.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            gripPulse.start();
+        } else if (!show && gripPulse != null) {
+            gripPulse.cancel();
+            gripPulse = null;
+            grip.setAlpha(1f);
+        }
+    }
+
     private void refreshTabs() {
+        refreshGrip();
         if (tabStrip == null) return;
         if (busyPulse != null) {
             busyPulse.cancel();
@@ -632,6 +683,7 @@ public final class FloatingApps {
         ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
         w.setBackgroundColor(pageColor);
         w.addJavascriptInterface(new Bridge(t), "PiMetNative");
+        w.setDownloadListener((url, ua, contentDisposition, mime, length) -> startDownload(t, url, ua, contentDisposition, mime));
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
@@ -702,6 +754,210 @@ public final class FloatingApps {
         return w;
     }
 
+    // ------------------------------------------------------------------ 下载
+
+    /**
+     * 网页触发的下载（用户点的、或 Pi 在 Pi 标签里点的）。
+     * http(s)：交给系统 DownloadManager，带上该网址的 Cookie / UA / Referer（登录后才能下的文件也行），存到 下载/PiMet/。
+     * blob: / data:：DownloadManager 下不了，在触发下载的那个页面里用 JS 读出来，分块经 JS 桥传回宿主再写文件。
+     * JS 桥的 saveChunk 只接受宿主刚生成的一次性 nonce，普通网页无法借它往手机里写文件。
+     */
+    static final class DownloadRecord {
+        String name, url, path, status;
+        long dmId = -1;
+        long time = System.currentTimeMillis();
+    }
+
+    static final List<DownloadRecord> sDownloads = Collections.synchronizedList(new ArrayList<>());
+
+    private static final class PendingBlob {
+        String name, mime;
+        File tmp;
+        FileOutputStream out;
+        DownloadRecord rec;
+    }
+
+    private final java.util.Map<String, PendingBlob> pendingBlobs = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static void remember(DownloadRecord r) {
+        sDownloads.add(0, r);
+        while (sDownloads.size() > 30) sDownloads.remove(sDownloads.size() - 1);
+    }
+
+    private void startDownload(Tab t, String url, String ua, String contentDisposition, String mime) {
+        String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
+        if (name == null || name.isEmpty()) name = "download";
+        name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+        DownloadRecord rec = new DownloadRecord();
+        rec.name = name;
+        rec.url = url.length() > 300 ? url.substring(0, 300) + "…" : url;
+        remember(rec);
+        if (url.startsWith("blob:") || url.startsWith("data:")) {
+            startBlobDownload(t, url, name, mime, rec);
+            return;
+        }
+        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+            rec.status = "不支持的下载地址";
+            Toast.makeText(ctx, "无法下载：不支持的地址", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            android.app.DownloadManager dm = (android.app.DownloadManager) ctx.getSystemService(Context.DOWNLOAD_SERVICE);
+            android.app.DownloadManager.Request req = new android.app.DownloadManager.Request(Uri.parse(url));
+            String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+            if (cookie != null && !cookie.isEmpty()) req.addRequestHeader("Cookie", cookie);
+            if (ua != null && !ua.isEmpty()) req.addRequestHeader("User-Agent", ua);
+            if (t.url.startsWith("http")) req.addRequestHeader("Referer", t.url);
+            if (mime != null && !mime.isEmpty()) req.setMimeType(mime);
+            req.setTitle(name);
+            req.setDescription("PiMet 浏览器下载");
+            req.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            req.allowScanningByMediaScanner();
+            String where;
+            try {
+                req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "PiMet/" + name);
+                where = "下载/PiMet/" + name;
+            } catch (Throwable noPublic) {
+                // 没有存储权限时退回应用自己的目录（不需要权限）
+                req.setDestinationInExternalFilesDir(ctx, android.os.Environment.DIRECTORY_DOWNLOADS, name);
+                File d = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+                where = d != null ? new File(d, name).getAbsolutePath() : name;
+            }
+            rec.dmId = dm.enqueue(req);
+            rec.path = where;
+            rec.status = "下载中";
+            Toast.makeText(ctx, "开始下载：" + name, Toast.LENGTH_SHORT).show();
+        } catch (Throwable e) {
+            Log.w(TAG, "download failed", e);
+            rec.status = "失败: " + e.getMessage();
+            Toast.makeText(ctx, "下载失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void startBlobDownload(Tab t, String url, String name, String mime, DownloadRecord rec) {
+        String nonce = UUID_NONCE();
+        PendingBlob pb = new PendingBlob();
+        pb.name = name;
+        pb.mime = mime;
+        pb.rec = rec;
+        try {
+            pb.tmp = File.createTempFile("pimet-dl", ".part", ctx.getCacheDir());
+            pb.out = new FileOutputStream(pb.tmp);
+        } catch (Throwable e) {
+            rec.status = "失败: " + e.getMessage();
+            return;
+        }
+        pendingBlobs.put(nonce, pb);
+        rec.status = "下载中";
+        Toast.makeText(ctx, "开始下载：" + name, Toast.LENGTH_SHORT).show();
+        String js = "(function(u,n){fetch(u).then(function(r){return r.blob()}).then(function(b){"
+                + "var CH=393216,off=0;function next(){var part=b.slice(off,off+CH);var fr=new FileReader();"
+                + "fr.onload=function(){var s=String(fr.result),i=s.indexOf(',');off+=CH;var last=off>=b.size;"
+                + "PiMetNative.saveChunk(n,i>=0?s.slice(i+1):'',last,'');if(!last)setTimeout(next,0);};"
+                + "fr.onerror=function(){PiMetNative.saveChunk(n,'',true,'读取失败')};fr.readAsDataURL(part);}"
+                + "if(b.size===0){PiMetNative.saveChunk(n,'',true,'');}else next();"
+                + "}).catch(function(e){PiMetNative.saveChunk(n,'',true,'读取失败: '+e+'（网页可能已释放这个 blob）')});})("
+                + JSONObject.quote(url) + "," + JSONObject.quote(nonce) + ")";
+        t.web.evaluateJavascript(js, null);
+    }
+
+    private static String UUID_NONCE() {
+        return java.util.UUID.randomUUID().toString().replace("-", "");
+    }
+
+    /** JS 桥回调（任意线程）：写入一块；last=true 时收尾 */
+    private void onBlobChunk(String nonce, String b64, boolean last, String error) {
+        PendingBlob pb = pendingBlobs.get(nonce);
+        if (pb == null) return; // 不是宿主发起的下载，忽略
+        try {
+            if (error == null && b64 != null && !b64.isEmpty()) pb.out.write(android.util.Base64.decode(b64, android.util.Base64.DEFAULT));
+        } catch (Throwable e) {
+            error = "写入失败: " + e.getMessage();
+        }
+        if (!last && error == null) return;
+        pendingBlobs.remove(nonce);
+        try { pb.out.close(); } catch (Throwable ignored) {}
+        String err = error;
+        String where = null;
+        if (err == null) {
+            try {
+                where = publishFile(pb.tmp, pb.name, pb.mime);
+            } catch (Throwable e) {
+                err = "保存失败: " + e.getMessage();
+            }
+        }
+        pb.tmp.delete();
+        pb.rec.status = err == null ? "完成" : "失败: " + err;
+        pb.rec.path = where;
+        final String msg = err == null ? "已下载：" + where : "下载失败：" + err;
+        MAIN.post(() -> Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show());
+    }
+
+    /** 把临时文件放进 下载/PiMet/：Android 10+ 走 MediaStore（无需权限），以下版本有权限写公共目录，否则写应用目录 */
+    private String publishFile(File src, String name, String mime) throws Exception {
+        if (Build.VERSION.SDK_INT >= 29) {
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name);
+            if (mime != null && !mime.isEmpty()) cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+            cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/PiMet");
+            Uri uri = ctx.getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri != null) {
+                try (InputStream in = new FileInputStream(src); java.io.OutputStream o = ctx.getContentResolver().openOutputStream(uri)) {
+                    copy(in, o);
+                }
+                return "下载/PiMet/" + name;
+            }
+        }
+        File dir = new File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "PiMet");
+        boolean canPublic = Build.VERSION.SDK_INT < 23 || ctx.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!canPublic || (!dir.isDirectory() && !dir.mkdirs())) {
+            dir = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+            if (dir == null) dir = new File(ctx.getFilesDir(), "downloads");
+            dir.mkdirs();
+        }
+        File dst = new File(dir, name);
+        for (int i = 1; dst.exists() && i < 100; i++) {
+            int dot = name.lastIndexOf('.');
+            dst = new File(dir, dot > 0 ? name.substring(0, dot) + "(" + i + ")" + name.substring(dot) : name + "(" + i + ")");
+        }
+        try (InputStream in = new FileInputStream(src); java.io.OutputStream o = new FileOutputStream(dst)) {
+            copy(in, o);
+        }
+        return dst.getAbsolutePath();
+    }
+
+    private static void copy(InputStream in, java.io.OutputStream o) throws Exception {
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) != -1) o.write(buf, 0, n);
+    }
+
+    /** 给 BrowserAgent 的 downloads 动作：最近的下载及状态 */
+    static String downloadsText(Context ctx) {
+        StringBuilder sb = new StringBuilder();
+        android.app.DownloadManager dm = (android.app.DownloadManager) ctx.getSystemService(Context.DOWNLOAD_SERVICE);
+        synchronized (sDownloads) {
+            for (DownloadRecord r : sDownloads) {
+                String st = r.status;
+                if (r.dmId >= 0 && dm != null) {
+                    try (android.database.Cursor c = dm.query(new android.app.DownloadManager.Query().setFilterById(r.dmId))) {
+                        if (c != null && c.moveToFirst()) {
+                            int s = c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS));
+                            long got = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                            long all = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                            st = s == android.app.DownloadManager.STATUS_SUCCESSFUL ? "完成"
+                                    : s == android.app.DownloadManager.STATUS_FAILED ? "失败(原因码 " + c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_REASON)) + ")"
+                                    : "下载中 " + got / 1024 + "KB" + (all > 0 ? "/" + all / 1024 + "KB" : "");
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                sb.append(r.name).append("  ").append(st).append(r.path != null ? "  → " + r.path : "").append("\n    来源: ").append(r.url).append('\n');
+            }
+        }
+        return sb.length() == 0 ? "还没有下载记录" : sb.toString().trim();
+    }
+
     // ------------------------------------------------------------------ 导航
 
     private String appsUrlPrefix() {
@@ -756,9 +1012,10 @@ public final class FloatingApps {
     /** 给 BrowserAgent 用：确保窗口已创建并显示，必须在主线程调用 */
     static FloatingApps ensureForAgent(Context context) {
         if (sInstance == null) {
-            sInstance = new FloatingApps(context.getApplicationContext());
-            sInstance.goHome();
-            sInstance.freshForAgent = true;
+            boolean quiet = sUserClosed;
+            sInstance = new FloatingApps(context.getApplicationContext(), quiet);
+            sInstance.goHome(sInstance.active, false);
+            sInstance.freshForAgent = !quiet;
         } else if (sInstance.root.getParent() == null) {
             sInstance.wm.addView(sInstance.root, sInstance.lp);
         }
@@ -781,12 +1038,13 @@ public final class FloatingApps {
         return active != null ? active.url : "";
     }
 
+    /** Pi 的操作从不把用户收起（最小化）的窗口弹出来；要给用户看时用 show / switch_tab */
     void agentLoad(Tab t, String url) {
-        loadIn(t, url, t == active);
+        loadIn(t, url, false);
     }
 
     void agentHome(Tab t) {
-        goHome(t, t == active);
+        goHome(t, false);
     }
 
     void agentRestore() {
@@ -1199,6 +1457,12 @@ public final class FloatingApps {
             });
         }
 
+        /** blob/data 下载的分块回传；只认宿主生成的一次性 nonce（见 startBlobDownload） */
+        @JavascriptInterface
+        public void saveChunk(String nonce, String b64, boolean last, String error) {
+            onBlobChunk(nonce, b64, last, error == null || error.isEmpty() ? null : error);
+        }
+
         @JavascriptInterface
         public void close() {
             if (!isTrusted(tab.url)) return;
@@ -1322,6 +1586,7 @@ public final class FloatingApps {
 
     private void toggleMinimize() {
         minimized = !minimized;
+        refreshGrip();
         webFrame.setVisibility(minimized ? View.GONE : View.VISIBLE);
         tabScroll.setVisibility(minimized ? View.GONE : View.VISIBLE);
         customScroll.setVisibility(!minimized && customStrip.getChildCount() > 0 ? View.VISIBLE : View.GONE);

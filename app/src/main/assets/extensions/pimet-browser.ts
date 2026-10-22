@@ -400,15 +400,16 @@ export default function (pi: ExtensionAPI) {
       "【做网站任务前先 action=tools】看 /root/pimet-browser/sites 下有没有现成工具和 notes.md 经验；成功后按 pimet-browser 技能把稳定步骤沉淀成工具、把坑写进 notes.md。\n" +
       "【单步探索用原来的 action】open(url 或搜索词) | snapshot(mode=interactive 只要元素列表) | click(ref 或 text) | type(ref,text,clear,submit) | select(ref,value) | press(key) | " +
       "scroll(direction/amount 或 ref) | back | forward | reload | home | wait(ms 或 text) | eval(script) | screenshot | show | hide | close | reload_ui | status | " +
-      "tabs | new_tab(url) | switch_tab(tab) | close_tab(tab)。快照里可交互元素编号为 [e3]，ref 只在最近一次快照内有效，页面变化后要重新 snapshot。\n" +
+      "tabs | new_tab(url) | switch_tab(tab) | close_tab(tab) | downloads(最近下载及状态，文件存到手机 下载/PiMet/)。快照里可交互元素编号为 [e3]，ref 只在最近一次快照内有效，页面变化后要重新 snapshot。\n" +
       "【标签】默认在 Pi 专属标签里操作（不打扰用户正在看的页面，共用登录 Cookie）；只有用户明确要你操作他当前页面时才传 tab=\"user\"。" +
+      "用户把窗口收起（最小化）时不要用 show 把它弹出来，照常在后台操作即可（此时不能截图）。" +
       "如果返回「用户已叫停」，立即停止所有浏览器操作并告诉用户，等用户重新允许。\n" +
       "遇到验证码、支付、登录确认等需要用户本人操作的情况，停下来让用户在窗口里完成。" +
       "这个浏览器的按钮、配色、首页、用户脚本、自定义页面也都可以由你修改，方法见 pimet-browser 技能。",
     parameters: Type.Object({
       action: Type.String({
         description:
-          "run | tools | open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | tabs | new_tab | switch_tab | close_tab",
+          "run | tools | open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | tabs | new_tab | switch_tab | close_tab | downloads",
       }),
       code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果" })),
       tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tabs 列出的 id（如 t3）" })),
