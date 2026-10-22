@@ -288,6 +288,10 @@ public class MainActivity extends AppCompatActivity {
     private View themeRowPine;
     private TextView tvThemeTitlePine;
     private TextView tvThemeCheckPine;
+    /** Pi-Web 0.12.2 新增主题的选项行（代码生成，追加在 XML 六个选项之后）：id -> {row, title, check} */
+    private final java.util.LinkedHashMap<String, View[]> extraThemeRows = new java.util.LinkedHashMap<>();
+    /** 上次 applyAppTheme 时的主题偏好；在工作台独立窗口里经 Pi-Web 改了主题，回到主界面时据此重绘 */
+    private String lastAppliedThemePref;
 
     // 二级设置独立窗口组件
     private View viewSettingsSubWindow;
@@ -598,6 +602,7 @@ public class MainActivity extends AppCompatActivity {
         if (themeRowMist != null) themeRowMist.setOnClickListener(v -> selectTheme(ThemeManager.THEME_MIST));
         if (themeRowRose != null) themeRowRose.setOnClickListener(v -> selectTheme(ThemeManager.THEME_ROSE));
         if (themeRowPine != null) themeRowPine.setOnClickListener(v -> selectTheme(ThemeManager.THEME_PINE));
+        buildExtraThemeRows();
 
         cardSettingsPorts = findViewById(R.id.cardSettingsPorts);
         cardSettingsUpdate = findViewById(R.id.cardSettingsUpdate);
@@ -2990,6 +2995,11 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         piWebWebView.addJavascriptInterface(transBridge, "PiMetTranslator");
+        // Pi-Web 设置里切换主题 → PiMet 原生界面跟随
+        piWebWebView.addJavascriptInterface(new ThemeManager.WebThemeBridge(this, () -> {
+            updateThemeUIState();
+            applyAppTheme();
+        }), "PiMetTheme");
 
         piWebWebView.setWebViewClient(new WebViewClient() {
             @Override
@@ -3003,6 +3013,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageCommitVisible(WebView view, String url) {
                 super.onPageCommitVisible(view, url);
                 com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
+                com.xm486.pimet.ui.PiWebCompat.apply(view, url);
             }
 
             @Override
@@ -3010,6 +3021,7 @@ public class MainActivity extends AppCompatActivity {
                 super.onPageFinished(view, url);
                 ThemeManager.syncThemeToWebView(view, MainActivity.this);
                 com.xm486.pimet.ui.WebPinchZoom.apply(view, url);
+                com.xm486.pimet.ui.PiWebCompat.apply(view, url);
                 if (url != null && url.startsWith("http://127.0.0.1:")) {
                     // 清理历史残留的输入草稿缓存，防止旧消息重复回填至输入框
                     view.evaluateJavascript(
@@ -3581,22 +3593,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void cycleThemeQuick() {
-        String currentPref = ThemeManager.getThemePreference(this);
-        String nextTheme;
-        if (ThemeManager.THEME_AUTO.equals(currentPref)) {
-            nextTheme = ThemeManager.THEME_LIGHT;
-        } else if (ThemeManager.THEME_LIGHT.equals(currentPref)) {
-            nextTheme = ThemeManager.THEME_DARK;
-        } else if (ThemeManager.THEME_DARK.equals(currentPref)) {
-            nextTheme = ThemeManager.THEME_MIST;
-        } else if (ThemeManager.THEME_MIST.equals(currentPref)) {
-            nextTheme = ThemeManager.THEME_ROSE;
-        } else if (ThemeManager.THEME_ROSE.equals(currentPref)) {
-            nextTheme = ThemeManager.THEME_PINE;
-        } else {
-            nextTheme = ThemeManager.THEME_AUTO;
-        }
-        selectTheme(nextTheme);
+        java.util.List<String> all = ThemeManager.getAllThemes();
+        int idx = all.indexOf(ThemeManager.getThemePreference(this));
+        selectTheme(all.get((idx + 1) % all.size()));
     }
 
     private void toggleFullscreen(boolean fullscreen) {
@@ -3619,6 +3618,8 @@ public class MainActivity extends AppCompatActivity {
             decorView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
             Toast.makeText(this, "已退出全屏", Toast.LENGTH_SHORT).show();
         }
+        // setSystemUiVisibility 会整体覆盖标志位，浅色主题的深色状态栏/导航栏图标需要补回
+        ThemeManager.applyWindowTheme(this, ThemeManager.getEffectivePalette(this));
     }
 
     private int dpToPx(int dp) {
@@ -5635,6 +5636,10 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (piWebWebView != null) piWebWebView.onResume();
         } catch (Throwable ignored) {}
+        if (lastAppliedThemePref != null
+                && !lastAppliedThemePref.equals(ThemeManager.getThemePreference(this))) {
+            applyAppTheme();
+        }
         initPetMonitor();
         applyPetParams();
         boolean isPetRunning = PetOverlayService.isRunning();
@@ -5790,6 +5795,80 @@ public class MainActivity extends AppCompatActivity {
         updateThemeOptionRow(themeRowMist, tvThemeTitleMist, tvThemeCheckMist, ThemeManager.THEME_MIST.equals(currentPref), effPalette);
         updateThemeOptionRow(themeRowRose, tvThemeTitleRose, tvThemeCheckRose, ThemeManager.THEME_ROSE.equals(currentPref), effPalette);
         updateThemeOptionRow(themeRowPine, tvThemeTitlePine, tvThemeCheckPine, ThemeManager.THEME_PINE.equals(currentPref), effPalette);
+        for (java.util.Map.Entry<String, View[]> e : extraThemeRows.entrySet()) {
+            View[] r = e.getValue();
+            updateThemeOptionRow(r[0], (TextView) r[1], (TextView) r[2], e.getKey().equals(currentPref), effPalette);
+        }
+    }
+
+    /**
+     * 追加 Pi-Web 0.12.2 新增的 8 个主题选项（暖沙、丁香、暮紫、余烬、岩蓝、高对比浅/深色、Zenburn），
+     * 样式与 XML 中的选项行一致；左侧用该主题自己的底色 + 强调色画一个色块，便于一眼区分。
+     */
+    private void buildExtraThemeRows() {
+        if (themeRowPine == null || !(themeRowPine.getParent() instanceof ViewGroup)) return;
+        ViewGroup parent = (ViewGroup) themeRowPine.getParent();
+        String[] ids = {
+                ThemeManager.THEME_SAND, ThemeManager.THEME_LILAC, ThemeManager.THEME_DUSK,
+                ThemeManager.THEME_EMBER, ThemeManager.THEME_SLATE, ThemeManager.THEME_CONTRAST_LIGHT,
+                ThemeManager.THEME_CONTRAST_DARK, ThemeManager.THEME_ZENBURN
+        };
+        int padMd = dpToPx(12);
+        for (String id : ids) {
+            if (extraThemeRows.containsKey(id)) continue;
+            ThemeManager.ThemePalette p = ThemeManager.getPaletteById(id);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(padMd, padMd, padMd, padMd);
+            row.setClickable(true);
+            row.setFocusable(true);
+
+            View swatch = new View(this);
+            GradientDrawable sw = new GradientDrawable();
+            sw.setShape(GradientDrawable.OVAL);
+            sw.setColor(p.bg);
+            sw.setStroke(dpToPx(4), p.accent);
+            swatch.setBackground(sw);
+            row.addView(swatch, new LinearLayout.LayoutParams(dpToPx(22), dpToPx(22)));
+
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            tlp.setMarginStart(padMd);
+            row.addView(texts, tlp);
+
+            TextView title = new TextView(this);
+            title.setText(p.name);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, ThemeManager.TEXT_BODY_SMALL);
+            title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            title.setTag("theme_role:primary");
+            texts.addView(title);
+
+            TextView sub = new TextView(this);
+            sub.setText(ThemeManager.getThemeDescription(id));
+            sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, ThemeManager.TEXT_CAPTION);
+            sub.setTag("theme_role:muted");
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            slp.topMargin = dpToPx(2);
+            texts.addView(sub, slp);
+
+            TextView check = new TextView(this);
+            check.setTextSize(TypedValue.COMPLEX_UNIT_SP, ThemeManager.TEXT_BODY);
+            check.setTag("theme_role:accent");
+            row.addView(check, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp.topMargin = dpToPx(8);
+            parent.addView(row, rlp);
+
+            row.setOnClickListener(v -> selectTheme(id));
+            extraThemeRows.put(id, new View[]{row, title, check});
+        }
     }
 
     private void updateThemeOptionRow(View row, TextView title, TextView check, boolean isSelected, ThemeManager.ThemePalette effPalette) {
@@ -5815,6 +5894,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void applyAppTheme() {
+        lastAppliedThemePref = ThemeManager.getThemePreference(this);
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         ThemeManager.applyWindowTheme(this, palette);
 

@@ -261,9 +261,14 @@ public final class ProotManager {
             for (File sw : swFiles) {
                 if (sw.exists() && sw.canWrite()) {
                     String content = readFileToString(sw);
-                    if (content != null && content.contains("NAVIGATION_TIMEOUT_MS = 2500;")) {
-                        content = content.replace("NAVIGATION_TIMEOUT_MS = 2500;", "NAVIGATION_TIMEOUT_MS = 15000;");
-                        writeStringToFile(sw, content);
+                    // Pi-Web 历代版本的取值不同（早期为 2500，0.12.2 为 8000），统一放宽到 15 秒以适配手机冷启动
+                    if (content != null) {
+                        java.util.regex.Matcher m = java.util.regex.Pattern
+                                .compile("NAVIGATION_TIMEOUT_MS = (\\d+);").matcher(content);
+                        if (m.find() && Integer.parseInt(m.group(1)) < 15000) {
+                            content = m.replaceFirst("NAVIGATION_TIMEOUT_MS = 15000;");
+                            writeStringToFile(sw, content);
+                        }
                     }
                 }
             }
