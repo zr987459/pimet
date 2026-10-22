@@ -119,17 +119,12 @@ public final class FloatingApps {
     private boolean maximized = false;
     private int savedW, savedH, savedX, savedY;
 
-    /** WebView <input type=file> 正在等待的文件选择回调（全局唯一，新请求到来会被自动取消）。 */
+    /** WebView <input type=file> 正在等待的文件选择回调。 */
     private static volatile ValueCallback<Uri[]> sPendingFileCallback;
-
-    /** 发起本次文件选择的 WebView；closeTab 时只认它才取消回调。 */
     private static volatile WebView sPendingFileWebView;
 
-    /** 为让选择器 Activity 前置而临时最小化了窗口，回调/取消后需要恢复。 */
-    private static volatile boolean sMinimizedForPicker = false;
-
     /** 取消并清空当前挂起的 WebView 文件选择回调，避免旧请求悬挂。 */
-    private static void cancelPendingFileChooser(boolean restore) {
+    private static void cancelPendingFileChooser() {
         ValueCallback<Uri[]> cb = sPendingFileCallback;
         sPendingFileCallback = null;
         sPendingFileWebView = null;
@@ -139,27 +134,6 @@ public final class FloatingApps {
                 cb.onReceiveValue(null);
             } catch (Throwable ignored) {}
         }
-        if (restore) {
-            restoreIfMinimizedForPicker();
-        }
-    }
-
-    private static void cancelPendingFileChooser() {
-        cancelPendingFileChooser(true);
-    }
-
-    /** 若因选择器而最小化窗口，本次恢复；多次调用幂等。 */
-    private static void restoreIfMinimizedForPicker() {
-        if (!sMinimizedForPicker) return;
-        sMinimizedForPicker = false;
-        final FloatingApps inst = sInstance;
-        if (inst == null) return;
-        MAIN.post(() -> {
-            if (sInstance != inst) return;
-            if (inst.minimized) {
-                try { inst.toggleMinimize(); } catch (Throwable ignored) {}
-            }
-        });
     }
 
     public static void toggle(Context context) {
@@ -793,23 +767,13 @@ public final class FloatingApps {
 
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
-                // 新请求进来先取消旧请求，不触发恢复以防竞态
-                cancelPendingFileChooser(false);
+                cancelPendingFileChooser();
 
                 if (filePathCallback == null) return false;
 
-                // 身份绑定：先拿本地不可变引用，再写入静态
                 final ValueCallback<Uri[]> mine = filePathCallback;
                 sPendingFileCallback = mine;
                 sPendingFileWebView = webView;
-
-                // 悬浮窗遮挡避让：主动最小化，让系统选择器正常前置显示，避免被全屏/大窗口盖住
-                try {
-                    if (!minimized) {
-                        toggleMinimize();
-                        sMinimizedForPicker = true;
-                    }
-                } catch (Throwable ignored) {}
 
                 String acceptTypes = null;
                 boolean allowMultiple = false;
@@ -836,19 +800,18 @@ public final class FloatingApps {
                 final Intent intent = AttachmentPickerActivity.newWebChooserIntent(acceptTypes, allowMultiple);
                 intent.setClass(ctx, AttachmentPickerActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
 
                 AttachmentPickerActivity.sWebCallback = uris -> {
                     MAIN.post(() -> {
-                        // 身份校验：只处理属于 mine 的回调，彻底避免竞态串台
                         if (sPendingFileCallback != mine) return;
                         sPendingFileCallback = null;
                         sPendingFileWebView = null;
                         AttachmentPickerActivity.sWebCallback = null;
                         try {
-                            mine.onReceiveValue(uris != null && uris.length > 0 ? uris : null);
+                            mine.onReceiveValue(uris);
                         } catch (Throwable ignored) {}
-                        restoreIfMinimizedForPicker();
                     });
                 };
 
