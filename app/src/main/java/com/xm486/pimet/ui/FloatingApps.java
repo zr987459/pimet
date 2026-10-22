@@ -56,7 +56,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Pi 应用窗：悬浮的「定制网页」窗口。
  * <p>
- * Pi 在容器的 /root/pimet-apps/&lt;应用名&gt;/ 下写一个 index.html（可带 app.json 写名字和图标），
+ * 容器 /root/pimet-browser/ 决定这个浏览器的样子和功能，Pi 可以随时改：config.json（工具栏按钮、配色、首页）、
+ * scripts/*.js（油猴风格用户脚本，按 @match 注入任意网站）、pages/&lt;id&gt;/index.html（自定义页面，可用 window.pimet）、home.html（自定义首页）。
  * 这里就会出现一个应用，点开在窗口里运行。可以有任意多个。页面里能用 window.pimet 调容器命令、
  * 给 Pi 发消息等（只对这个目录下的本地页面开放）。窗口本身也能当普通浏览器打开任意网址。
  */
@@ -65,7 +66,7 @@ public final class FloatingApps {
     private static final String TAG = "PiMet.Apps";
     private static final String PREFS = "pimet_floating_apps";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    public static final String APPS_DIR_IN_CONTAINER = "/root/pimet-apps";
+    public static final String APPS_DIR_IN_CONTAINER = "/root/pimet-browser";
     private static FloatingApps sInstance;
 
     /** 由 MainActivity 注册：把文字放进 Pi-Web 输入框，send=true 时直接发送 */
@@ -86,7 +87,14 @@ public final class FloatingApps {
     final FrameLayout webFrame;
     final WebView web;
     private final EditText urlField;
-    private final File appsDir;
+    private final File appsDir;   // /root/pimet-browser：config.json、scripts/、pages/、home.html
+    private final File pagesDir;  // /root/pimet-browser/pages/<id>/index.html
+    private final GradientDrawable rootBg;
+    private final LinearLayout bar;
+    private final LinearLayout customStrip;
+    private final android.widget.HorizontalScrollView customScroll;
+    private long configMtime = -1;
+    private JSONObject config = new JSONObject();
     private volatile String currentUrl = "";
     volatile boolean pageLoading = false;
     volatile int pageProgress = 100;
@@ -132,10 +140,20 @@ public final class FloatingApps {
             File rootfs = ProotManager.getRootfsDir(context);
             if (rootfs == null || !new File(rootfs, "bin").exists()) return;
             File apps = new File(rootfs, APPS_DIR_IN_CONTAINER.substring(1));
-            if (!apps.exists()) apps.mkdirs();
-            String guide = readAsset(context, "pimet-apps/SKILL.md");
+            new File(apps, "pages").mkdirs();
+            new File(apps, "scripts").mkdirs();
+            File cfg = new File(apps, "config.json");
+            if (!cfg.exists()) writeIfChanged(cfg, DEFAULT_CONFIG);
+            // 旧版（beta.1）技能目录改名
+            File old = new File(rootfs, "root/.pi/agent/skills/pimet-apps");
+            if (old.isDirectory()) {
+                File[] fs = old.listFiles();
+                if (fs != null) for (File f : fs) f.delete();
+                old.delete();
+            }
+            String guide = readAsset(context, "pimet-browser/SKILL.md");
             if (guide == null) return;
-            File skillDir = new File(rootfs, "root/.pi/agent/skills/pimet-apps");
+            File skillDir = new File(rootfs, "root/.pi/agent/skills/pimet-browser");
             skillDir.mkdirs();
             writeIfChanged(new File(skillDir, "SKILL.md"), guide);
             // 应用目录里也放一份，方便直接查看
@@ -153,7 +171,8 @@ public final class FloatingApps {
         this.ctx = app;
         this.wm = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
         this.appsDir = new File(ProotManager.getRootfsDir(app), APPS_DIR_IN_CONTAINER.substring(1));
-        if (!appsDir.exists()) appsDir.mkdirs();
+        this.pagesDir = new File(appsDir, "pages");
+        if (!pagesDir.exists()) pagesDir.mkdirs();
         new Thread(() -> ensureScaffold(app), "pimet-apps-scaffold").start();
 
         DisplayMetrics dm = app.getResources().getDisplayMetrics();
@@ -161,16 +180,16 @@ public final class FloatingApps {
 
         root = new LinearLayout(app);
         root.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.parseColor("#F5141418"));
-        bg.setCornerRadius(dp(12));
-        bg.setStroke(dp(1), Color.parseColor("#3A3F4B"));
-        root.setBackground(bg);
+        rootBg = new GradientDrawable();
+        rootBg.setColor(Color.parseColor("#F5141418"));
+        rootBg.setCornerRadius(dp(12));
+        rootBg.setStroke(dp(1), Color.parseColor("#3A3F4B"));
+        root.setBackground(rootBg);
         root.setClipToOutline(true);
         root.setPadding(dp(2), dp(2), dp(2), dp(2));
 
         // ---- 顶栏：拖动 · 后退 · 地址栏 · 刷新 · 应用列表 · 最大化 · 最小化 · 关闭
-        LinearLayout bar = new LinearLayout(app);
+        bar = new LinearLayout(app);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(2), 0, dp(2), 0);
@@ -217,6 +236,17 @@ public final class FloatingApps {
         addBar(bar, "—", "最小化", v -> toggleMinimize());
         addBar(bar, "✕", "关闭", v -> dismiss());
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
+
+        // ---- 自定义按钮栏（config.json 的 buttons，由 Pi 编辑）
+        customScroll = new android.widget.HorizontalScrollView(app);
+        customScroll.setHorizontalScrollBarEnabled(false);
+        customStrip = new LinearLayout(app);
+        customStrip.setOrientation(LinearLayout.HORIZONTAL);
+        customStrip.setGravity(Gravity.CENTER_VERTICAL);
+        customStrip.setPadding(dp(4), 0, dp(4), dp(2));
+        customScroll.addView(customStrip);
+        customScroll.setVisibility(View.GONE);
+        root.addView(customScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
 
         // ---- 网页
         webFrame = new FrameLayout(app);
@@ -268,6 +298,8 @@ public final class FloatingApps {
                 currentUrl = url != null ? url : "";
                 showUrl(url);
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
+                reloadConfigIfChanged();
+                injectUserScripts(view, url);
             }
 
             @Override
@@ -326,6 +358,7 @@ public final class FloatingApps {
             return false;
         });
 
+        reloadConfigIfChanged();
         wm.addView(root, lp);
     }
 
@@ -354,6 +387,16 @@ public final class FloatingApps {
     private void goHome() {
         if (root.getParent() == null) wm.addView(root, lp);
         if (minimized) toggleMinimize();
+        File custom = new File(appsDir, "home.html");
+        String homeCfg = config.optString("home", "");
+        if (!homeCfg.isEmpty()) {
+            load(homeCfg.startsWith("/") ? "file://" + new File(ProotManager.getRootfsDir(ctx), homeCfg.substring(1)).getAbsolutePath() : homeCfg);
+            return;
+        }
+        if (custom.isFile()) {
+            web.loadUrl("file://" + custom.getAbsolutePath());
+            return;
+        }
         new Thread(() -> {
             File launcher = new File(appsDir, ".launcher.html");
             try {
@@ -434,7 +477,7 @@ public final class FloatingApps {
             urlField.setText("");
             return;
         }
-        String prefix = appsUrlPrefix();
+        String prefix = "file://" + pagesDir.getAbsolutePath() + "/";
         if (url.startsWith(prefix)) {
             String rel = url.substring(prefix.length());
             int slash = rel.indexOf('/');
@@ -450,7 +493,7 @@ public final class FloatingApps {
         if (s.isEmpty()) return "";
         if (s.startsWith("应用 · ")) {
             String id = s.substring("应用 · ".length()).trim();
-            return "file://" + new File(appsDir, id + "/index.html").getAbsolutePath();
+            return "file://" + new File(pagesDir, id + "/index.html").getAbsolutePath();
         }
         if (s.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*")) return s;
         if (s.startsWith("localhost") || s.startsWith("127.0.0.1") || s.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+(:\\d+)?(/.*)?$")) {
@@ -459,6 +502,200 @@ public final class FloatingApps {
         if (s.matches("^:\\d+(/.*)?$")) return "http://127.0.0.1" + s;
         if (!s.contains(" ") && s.contains(".")) return "https://" + s;
         return "https://www.bing.com/search?q=" + Uri.encode(s);
+    }
+
+    // ------------------------------------------------------------------ 可定制：config.json / 用户脚本
+
+    static final String DEFAULT_CONFIG = "{\n"
+            + "  \"buttons\": [\n"
+            + "    {\"icon\": \"📝\", \"title\": \"让 Pi 总结本页\", \"askPi\": \"用 browser 工具读一下当前页面（{url}），给我简要总结。\"}\n"
+            + "  ],\n"
+            + "  \"theme\": {},\n"
+            + "  \"home\": \"\"\n"
+            + "}\n";
+
+    /** 给 BrowserAgent / 外部调用：立即重新读取配置 */
+    void reloadConfigNow() {
+        configMtime = -1;
+        reloadConfigIfChanged();
+    }
+
+    private void reloadConfigIfChanged() {
+        File f = new File(appsDir, "config.json");
+        long m = f.isFile() ? f.lastModified() : 0;
+        if (m == configMtime) return;
+        configMtime = m;
+        JSONObject c = new JSONObject();
+        if (m > 0) {
+            try {
+                c = new JSONObject(readFile(f));
+            } catch (Throwable t) {
+                Toast.makeText(ctx, "浏览器配置 config.json 格式错误：" + t.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }
+        config = c;
+        applyConfig();
+    }
+
+    private static int color(JSONObject o, String key, int def) {
+        String v = o.optString(key, "");
+        if (v.isEmpty()) return def;
+        try {
+            return Color.parseColor(v);
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    private void applyConfig() {
+        JSONObject th = config.optJSONObject("theme");
+        if (th == null) th = new JSONObject();
+        rootBg.setColor(color(th, "background", Color.parseColor("#F5141418")));
+        rootBg.setStroke(dp(1), color(th, "border", Color.parseColor("#3A3F4B")));
+        int fg = color(th, "text", Color.parseColor("#C9D1D9"));
+        for (int i = 0; i < bar.getChildCount(); i++) {
+            View v = bar.getChildAt(i);
+            if (v instanceof TextView && !(v instanceof EditText)) ((TextView) v).setTextColor(fg);
+        }
+        GradientDrawable ub = new GradientDrawable();
+        ub.setColor(color(th, "addressBar", Color.parseColor("#22272E")));
+        ub.setCornerRadius(dp(8));
+        urlField.setBackground(ub);
+        urlField.setTextColor(color(th, "addressText", Color.parseColor("#E6EDF3")));
+        web.setBackgroundColor(color(th, "page", Color.parseColor("#0D1117")));
+
+        customStrip.removeAllViews();
+        org.json.JSONArray btns = config.optJSONArray("buttons");
+        if (btns != null) {
+            for (int i = 0; i < btns.length(); i++) {
+                JSONObject b = btns.optJSONObject(i);
+                if (b == null) continue;
+                TextView t = new TextView(ctx);
+                String icon = b.optString("icon", "");
+                String label = b.optString("label", "");
+                t.setText(label.isEmpty() ? (icon.isEmpty() ? "●" : icon) : (icon.isEmpty() ? label : icon + " " + label));
+                t.setContentDescription(b.optString("title", label));
+                t.setTextColor(color(b, "color", fg));
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                t.setGravity(Gravity.CENTER);
+                t.setPadding(dp(10), 0, dp(10), 0);
+                GradientDrawable cb = new GradientDrawable();
+                cb.setColor(color(th, "button", Color.parseColor("#22272E")));
+                cb.setCornerRadius(dp(14));
+                t.setBackground(cb);
+                t.setOnClickListener(v -> runCustomButton(b));
+                t.setOnLongClickListener(v -> {
+                    Toast.makeText(ctx, b.optString("title", label.isEmpty() ? icon : label), Toast.LENGTH_SHORT).show();
+                    return true;
+                });
+                LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(26));
+                blp.setMargins(0, 0, dp(6), 0);
+                customStrip.addView(t, blp);
+            }
+        }
+        customScroll.setVisibility(customStrip.getChildCount() > 0 && !minimized ? View.VISIBLE : View.GONE);
+    }
+
+    /** 自定义按钮：script（在当前页执行 JS）| open（打开网址/本地页面）| askPi（把文字发给 Pi，可用 {url} {title} {selection}） */
+    private void runCustomButton(JSONObject b) {
+        String script = b.optString("script", "");
+        String open = b.optString("open", "");
+        String ask = b.optString("askPi", "");
+        if (!script.isEmpty()) {
+            web.evaluateJavascript("(function(){try{" + script + "\n}catch(e){alert('按钮脚本出错：'+e)}})()", null);
+        }
+        if (!open.isEmpty()) {
+            if (open.startsWith("pages/") || open.startsWith("home.html")) load("file://" + new File(appsDir, open).getAbsolutePath());
+            else if (open.startsWith("/")) load("file://" + new File(ProotManager.getRootfsDir(ctx), open.substring(1)).getAbsolutePath());
+            else load(normalizeUrl(open));
+        }
+        if (!ask.isEmpty()) {
+            web.evaluateJavascript("JSON.stringify({t:document.title,s:String(window.getSelection?getSelection():'')})", v -> {
+                String title = "", sel = "";
+                try {
+                    JSONObject j = new JSONObject(new org.json.JSONTokener(v).nextValue().toString());
+                    title = j.optString("t");
+                    sel = j.optString("s");
+                } catch (Throwable ignored) {}
+                String text = ask.replace("{url}", currentUrl).replace("{title}", title).replace("{selection}", sel);
+                boolean send = b.optBoolean("send", true);
+                if (sPiBridge != null) {
+                    sPiBridge.askPi(text, send);
+                    Toast.makeText(ctx, send ? "已发给 Pi" : "已填入 Pi 输入框", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(ctx, "工作台未就绪", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+    }
+
+    private static final class UserScript {
+        String name;
+        long mtime;
+        String code;
+        List<java.util.regex.Pattern> include = new ArrayList<>();
+        List<java.util.regex.Pattern> exclude = new ArrayList<>();
+    }
+
+    private final java.util.Map<String, UserScript> scriptCache = new java.util.HashMap<>();
+
+    /** 油猴风格的匹配：* 任意字符；以 / 包围则为正则 */
+    private static java.util.regex.Pattern globToPattern(String g) {
+        g = g.trim();
+        if (g.length() > 2 && g.startsWith("/") && g.endsWith("/")) {
+            return java.util.regex.Pattern.compile(g.substring(1, g.length() - 1));
+        }
+        if (g.equals("<all_urls>")) g = "*";
+        StringBuilder sb = new StringBuilder("^");
+        for (char c : g.toCharArray()) {
+            if (c == '*') sb.append(".*");
+            else if ("\\.[]{}()+-?^$|".indexOf(c) >= 0) sb.append('\\').append(c);
+            else sb.append(c);
+        }
+        return java.util.regex.Pattern.compile(sb.append("$").toString());
+    }
+
+    private UserScript loadScript(File f) {
+        UserScript cached = scriptCache.get(f.getName());
+        if (cached != null && cached.mtime == f.lastModified()) return cached;
+        UserScript u = new UserScript();
+        u.name = f.getName();
+        u.mtime = f.lastModified();
+        try {
+            u.code = readFile(f);
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("(?m)^\\s*//\\s*@(match|include|exclude)\\s+(\\S+)").matcher(u.code);
+            while (m.find()) {
+                try {
+                    if (m.group(1).equals("exclude")) u.exclude.add(globToPattern(m.group(2)));
+                    else u.include.add(globToPattern(m.group(2)));
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable t) {
+            u.code = null;
+        }
+        scriptCache.put(f.getName(), u);
+        return u;
+    }
+
+    private void injectUserScripts(WebView view, String url) {
+        if (url == null || isLauncher(url)) return;
+        File dir = new File(appsDir, "scripts");
+        File[] files = dir.listFiles((d, n) -> n.endsWith(".js") && !n.startsWith("."));
+        if (files == null || files.length == 0) return;
+        Arrays.sort(files);
+        for (File f : files) {
+            UserScript u = loadScript(f);
+            if (u.code == null || u.include.isEmpty()) continue;
+            boolean hit = false;
+            for (java.util.regex.Pattern p : u.include) if (p.matcher(url).matches()) { hit = true; break; }
+            if (!hit) continue;
+            for (java.util.regex.Pattern p : u.exclude) if (p.matcher(url).matches()) { hit = false; break; }
+            if (!hit) continue;
+            String guard = "__pimet_us_" + u.name.replaceAll("[^A-Za-z0-9_]", "_");
+            view.evaluateJavascript("(function(){if(window." + guard + ")return;window." + guard + "=1;try{\n" + u.code
+                    + "\n}catch(e){console.error('[PiMet 用户脚本 " + u.name.replace("'", "") + "]',e)}})()", null);
+        }
     }
 
     // ------------------------------------------------------------------ 应用列表
@@ -470,7 +707,7 @@ public final class FloatingApps {
 
     private List<AppInfo> scanApps() {
         List<AppInfo> list = new ArrayList<>();
-        File[] dirs = appsDir.listFiles();
+        File[] dirs = pagesDir.listFiles();
         if (dirs == null) return list;
         for (File d : dirs) {
             if (!d.isDirectory() || d.getName().startsWith(".")) continue;
@@ -501,7 +738,7 @@ public final class FloatingApps {
         List<AppInfo> apps = scanApps();
         StringBuilder cards = new StringBuilder();
         for (AppInfo a : apps) {
-            String href = Uri.encode(a.id) + "/index.html";
+            String href = "pages/" + Uri.encode(a.id) + "/index.html";
             cards.append("<a class=\"card\" href=\"").append(href).append("\">")
                     .append("<div class=\"icon\">").append(esc(a.icon)).append("</div>")
                     .append("<div class=\"name\">").append(esc(a.name)).append("</div>");
@@ -536,7 +773,9 @@ public final class FloatingApps {
                 + "</style></head><body>"
                 + "<div class=\"intro\"><div class=\"big\">🌐</div><h1>Pi 浏览器</h1>"
                 + "<p class=\"dim\">在顶部地址栏输入网址或搜索词。Pi 也能操控这个窗口：在工作台跟 Pi 说"
-                + "「用浏览器打开 xxx 帮我…」，它会打开网页、阅读、点击、输入，你在这里能看到每一步。</p></div>"
+                + "「用浏览器打开 xxx 帮我…」，它会打开网页、阅读、点击、输入，你在这里能看到每一步。</p>"
+                + "<p class=\"dim\">这个浏览器本身也能让 Pi 改：工具栏按钮、配色、首页、给某个网站加功能的脚本、自己的小页面。"
+                + "跟 Pi 说「给 Pi 浏览器加一个…」就行。</p></div>"
                 + body + "</body></html>";
     }
 
@@ -714,6 +953,7 @@ public final class FloatingApps {
     private void toggleMinimize() {
         minimized = !minimized;
         webFrame.setVisibility(minimized ? View.GONE : View.VISIBLE);
+        customScroll.setVisibility(!minimized && customStrip.getChildCount() > 0 ? View.VISIBLE : View.GONE);
         if (minimized) {
             savedH = lp.height;
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;

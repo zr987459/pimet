@@ -80,10 +80,11 @@ export default function (pi: ExtensionAPI) {
       "action：open(打开 url，也可以直接写搜索词) | snapshot(重新读取页面) | click(按 ref 点击，或用 text 点击包含该文字的元素) | " +
       "type(向 ref 输入 text；clear 默认 true；submit=true 输入后提交/回车) | select(下拉框 ref 选 value) | press(按键 key：Enter/Tab/Escape/Backspace/ArrowDown…) | " +
       "scroll(direction=up/down/left/right，amount=屏数，默认 0.8；或给 ref 滚动到该元素) | back | forward | reload | home | " +
-      "wait(ms 毫秒，或等页面出现 text) | eval(在页面里执行 JS，支持 await 和 return，返回结果) | screenshot(截图给你看) | show | hide(最小化，仍可操作) | close。" +
+      "wait(ms 毫秒，或等页面出现 text) | eval(在页面里执行 JS，支持 await 和 return，返回结果) | screenshot(截图给你看) | show | hide(最小化，仍可操作) | close | reload_ui(修改 /root/pimet-browser/config.json 后让按钮/配色立即生效)。" +
+      "这个浏览器的工具栏按钮、配色、首页、用户脚本、自定义页面都可以由你修改，方法见 pimet-browser 技能。" +
       "注意：ref 只在最近一次快照内有效，页面变化后请重新 snapshot；遇到需要用户本人操作的情况（登录验证码、支付确认）请停下来让用户在窗口里完成。",
     parameters: Type.Object({
-      action: Type.String({ description: "open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close" }),
+      action: Type.String({ description: "open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui" }),
       url: Type.Optional(Type.String({ description: "open 的网址或搜索词" })),
       ref: Type.Optional(Type.String({ description: "元素编号，如 e12（来自最近一次快照）" })),
       text: Type.Optional(Type.String({ description: "type 要输入的文字；click 时按包含的文字查找元素；wait 时等待出现的文字" })),

@@ -213,6 +213,12 @@ public final class BrowserAgent {
                 result = "浏览器窗口已最小化（仍可继续操作）";
                 wantSnapshot = false;
                 break;
+            case "reload_ui":
+            case "reload_config":
+                onMain(() -> { win.reloadConfigNow(); return null; }, 3000);
+                result = "已重新加载浏览器配置（config.json）；用户脚本会在下次打开/刷新网页时生效";
+                wantSnapshot = false;
+                break;
             case "status":
                 result = "url: " + win.url();
                 wantSnapshot = false;
