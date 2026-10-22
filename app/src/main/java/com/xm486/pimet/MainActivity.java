@@ -4328,6 +4328,13 @@ public class MainActivity extends AppCompatActivity {
                 if (settingsPiWebVersionTv != null) {
                     settingsPiWebVersionTv.setText("已安装版本: v" + newVer);
                 }
+                // 工作台 WebView 里还开着旧版页面（单页应用不会自己换代码）：清缓存并重新加载，不论当前是否在工作台页
+                if (piWebWebView != null) {
+                    try {
+                        piWebWebView.clearCache(true);
+                        piWebWebView.reload();
+                    } catch (Throwable ignored) {}
+                }
                 new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                         .setTitle("✨ 升级成功")
                         .setMessage("Pi-Web 工作台已成功平滑升级至 v" + newVer + "！\n所有本地配置与工程数据完整保留。")

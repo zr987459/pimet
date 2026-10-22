@@ -98,11 +98,14 @@ public final class UpdateManager {
     public static String getInstalledPiWebVersion(Context context) {
         try {
             File rootfs = ProotManager.getRootfsDir(context);
-            File[] candidates = new File[]{
-                    new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/package.json"),
-                    new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/package.json"),
-                    new File(rootfs, "root/.pi/agent/npm/node_modules/@agegr/pi-web/package.json")
-            };
+            List<File> candidates = new java.util.ArrayList<>();
+            // 先认「实际被启动的那一份」：PiWebManager 用 PATH 里的 pi-web 拉起服务，
+            // 只看 /usr/local 会把一份没被使用的副本当成已安装版本（升级后界面仍是旧版、却提示已是最新）
+            String running = resolveRunningPiWebDir(context);
+            if (running != null) candidates.add(new File(rootfs, running.substring(1) + "/package.json"));
+            candidates.add(new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/package.json"));
+            candidates.add(new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/package.json"));
+            candidates.add(new File(rootfs, "root/.pi/agent/npm/node_modules/@agegr/pi-web/package.json"));
             for (File f : candidates) {
                 if (f.exists() && f.canRead()) {
                     try (BufferedReader reader = new BufferedReader(
@@ -118,6 +121,35 @@ public final class UpdateManager {
             }
         } catch (Throwable ignored) {}
         return "0.11.0";
+    }
+
+    /**
+     * 解析容器里实际运行的 Pi-Web 包目录（容器内绝对路径，如 /usr/local/lib/node_modules/@agegr/pi-web）。
+     * 与 PiWebManager 启动顺序一致：PATH 中 /usr/local/bin 优先于 /usr/bin，pi-web 是指向 bin/pi-web.js 的符号链接。
+     */
+    public static String resolveRunningPiWebDir(Context context) {
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            for (String binDir : new String[]{"/usr/local/bin", "/usr/bin"}) {
+                File bin = new File(rootfs, binDir.substring(1) + "/pi-web");
+                java.nio.file.Path bp = bin.toPath();
+                if (!java.nio.file.Files.isSymbolicLink(bp)) continue;
+                String target = java.nio.file.Files.readSymbolicLink(bp).toString();
+                String abs = target.startsWith("/") ? target : binDir + "/" + target;
+                String js = new java.net.URI(null, null, abs, null).normalize().getPath();
+                // .../@agegr/pi-web/bin/pi-web.js -> .../@agegr/pi-web
+                if (js == null || !js.endsWith("/bin/pi-web.js")) continue;
+                String dir = js.substring(0, js.length() - "/bin/pi-web.js".length());
+                if (new File(rootfs, dir.substring(1) + "/package.json").exists()) return dir;
+            }
+            if (new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/package.json").exists()) {
+                return "/usr/local/lib/node_modules/@agegr/pi-web";
+            }
+            if (new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/package.json").exists()) {
+                return "/usr/lib/node_modules/@agegr/pi-web";
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     /**
@@ -236,6 +268,9 @@ public final class UpdateManager {
                 if (!tmpDir.exists()) tmpDir.mkdirs();
                 File targetTgz = new File(tmpDir, "pi-web-update.tgz");
 
+                String resolvedDir = resolveRunningPiWebDir(context);
+                final String targetDir = resolvedDir != null ? resolvedDir : "/usr/local/lib/node_modules/@agegr/pi-web";
+
                 // 【引擎 A: 极速直下增量安装引擎】(Direct Tarball Engine)
                 if (downloadTarball != null && !downloadTarball.isEmpty()) {
                     try {
@@ -296,11 +331,17 @@ public final class UpdateManager {
 
                             if (targetTgz.exists() && targetTgz.length() > 100000) {
                                 if (progressListener != null) {
-                                    MAIN_HANDLER.post(() -> progressListener.onProgress(75, "下载完成，正在原地增量部署至 Linux 容器...", "tar -xzf /tmp/pi-web-update.tgz -C /usr/local/lib/node_modules/@agegr/pi-web --strip-components=1"));
+                                    MAIN_HANDLER.post(() -> progressListener.onProgress(75, "下载完成，正在原地增量部署至 Linux 容器...", "tar -xzf /tmp/pi-web-update.tgz -> " + targetDir));
                                 }
 
-                                String extractCmd = "mkdir -p /usr/local/lib/node_modules/@agegr/pi-web && " +
-                                        "tar -xzf /tmp/pi-web-update.tgz -C /usr/local/lib/node_modules/@agegr/pi-web --strip-components=1 2>&1";
+                                // 部署到实际运行的那一份；先解到临时目录，再整体替换 .next / public / bin，
+                                // 避免旧版构建产物（BUILD_ID、旧 chunk）残留与新文件混在一起。依赖 node_modules 原样保留。
+                                String extractCmd = "set -e; T='" + targetDir + "'; S=/tmp/pi-web-update; " +
+                                        "rm -rf \"$S\"; mkdir -p \"$S\" \"$T\"; " +
+                                        "tar -xzf /tmp/pi-web-update.tgz -C \"$S\" --strip-components=1; " +
+                                        "test -f \"$S/package.json\"; " +
+                                        "rm -rf \"$T/.next\" \"$T/public\" \"$T/bin\"; " +
+                                        "cp -a \"$S/.\" \"$T/\"; chmod +x \"$T\"/bin/*.js 2>/dev/null || true; rm -rf \"$S\"";
                                 int extCode = ProotManager.executeCommandSync(context, extractCmd);
                                 targetTgz.delete();
 
@@ -379,10 +420,24 @@ public final class UpdateManager {
                     MAIN_HANDLER.post(() -> progressListener.onProgress(95, "正在重载 Pi-Web 工作台服务...", "检测端口连通性..."));
                 }
 
-                // 若 Pi-Web 服务正在后台运行，平滑重启以加载新代码
+                // 若 Pi-Web 服务正在后台运行，重启以加载新代码，并等新服务真正就绪后再报告成功：
+                // 之前是异步重启后立刻返回，界面马上 reload 时旧进程还没被杀，拿到的仍是旧版页面。
                 int webPort = PiMetConfig.getWebPort(context);
                 if (ProotManager.isPiWebPortAlive(webPort)) {
-                    PiWebManager.restart(context, null);
+                    final java.util.concurrent.CountDownLatch restarted = new java.util.concurrent.CountDownLatch(1);
+                    PiWebManager.restart(context, new PiWebManager.StateListener() {
+                        @Override public void onLog(String log) {}
+                        @Override public void onProgress(String message, int percent) {
+                            if (progressListener != null && message != null) {
+                                progressListener.onProgress(96, "正在重启 Pi-Web 服务以加载新版本...", message);
+                            }
+                        }
+                        @Override public void onStarted() { restarted.countDown(); }
+                        @Override public void onError(String error) { restarted.countDown(); }
+                    });
+                    try {
+                        restarted.await(150, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException ignored) {}
                 }
 
                 if (progressListener != null) {
