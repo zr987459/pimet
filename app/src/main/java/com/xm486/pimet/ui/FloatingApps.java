@@ -830,6 +830,8 @@ public final class FloatingApps {
             android.webkit.CookieManager.getInstance().setAcceptCookie(true);
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
         } catch (Throwable ignored) {}
+        w.setLongClickable(true);
+        w.setHapticFeedbackEnabled(true);
         // 点窗口内：可输入
         w.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == MotionEvent.ACTION_DOWN && !sAgentTouch) setFocusable(true);
