@@ -1108,73 +1108,196 @@ public final class FloatingApps {
 
     // ---- 页面缩放 / 桌面版
 
-    private int textZoom() {
-        return prefs().getInt("text_zoom", 100);
+    /**
+     * 页面缩放和 Pi-Web 工作台同一套逻辑：改布局宽度让页面重排（25%–300%），不是放大镜。
+     * Pi-Web 等本地页面与工作台共用一个值；外部网站另存一个值（所有外部网站共用）；桌面版网站不改动。
+     */
+    private int zoomFor(Tab t, String url) {
+        if (WebPinchZoom.isLocal(url)) return WebPinchZoom.getZoom(ctx);
+        if (t != null && t.desktop) return 100;
+        return WebPinchZoom.clamp(prefs().getInt("page_zoom", 100));
     }
 
-    private void showZoomDialog() {
-        if (host == null) return;
-        if (active != null && WebPinchZoom.isLocal(active.url)) {
-            showLayoutZoomDialog();
-            return;
-        }
-        LinearLayout box = new LinearLayout(host);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), 0);
-        TextView label = new TextView(host);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        label.setGravity(Gravity.CENTER);
-        SeekBar sb = new SeekBar(host);
-        sb.setMax(15); // 50% … 200%，步长 10%
-        int cur = textZoom();
-        sb.setProgress(Math.max(0, Math.min(15, (cur - 50) / 10)));
-        label.setText("文字大小 " + cur + "%（双指捏合可放大缩小页面）");
-        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+    private WebPinchZoom.Store zoomStore(Tab t) {
+        return new WebPinchZoom.Store() {
             @Override
-            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                int z = 50 + p * 10;
-                label.setText("文字大小 " + z + "%（双指捏合可放大缩小页面）");
-                prefs().edit().putInt("text_zoom", z).apply();
-                for (Tab t : tabs) if (t.web != null && !WebPinchZoom.isLocal(t.url)) t.web.getSettings().setTextZoom(z);
-                refreshBall();
+            public int get(String url) {
+                return zoomFor(t, url);
             }
 
             @Override
-            public void onStartTrackingTouch(SeekBar s) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) {}
-        });
-        box.addView(label);
-        box.addView(sb);
-        new AlertDialog.Builder(host).setTitle("页面缩放").setView(box)
-                .setNeutralButton("恢复 100%", (d, w) -> {
-                    prefs().edit().putInt("text_zoom", 100).apply();
-                    for (Tab t : tabs) if (t.web != null) t.web.getSettings().setTextZoom(100);
-                    refreshBall();
-                })
-                .setPositiveButton("完成", null).show();
+            public void set(String url, int pct) {
+                saveZoom(t, url, pct, t);
+            }
+        };
     }
 
-    /** Pi-Web 等本地页面：和工作台悬浮球一样的布局缩放（25%–300%，与工作台共用同一个值） */
-    private void showLayoutZoomDialog() {
-        final int[] presets = {50, 75, 90, 100, 110, 125, 150};
-        String[] items = new String[presets.length];
-        int cur = WebPinchZoom.getZoom(ctx);
-        int checked = -1;
-        for (int i = 0; i < presets.length; i++) {
-            items[i] = presets[i] + "%" + (presets[i] == 100 ? "（默认）" : "");
-            if (presets[i] == cur) checked = i;
+    /** 保存缩放值并应用到同类页面的其它标签（skip 那个标签已由手势自己应用） */
+    private void saveZoom(Tab from, String url, int pct, Tab skip) {
+        boolean local = WebPinchZoom.isLocal(url);
+        if (!local && from != null && from.desktop) {
+            MAIN.post(() -> Toast.makeText(ctx, "桌面版网站不支持缩放，先在 ⋮ 里关掉桌面版", Toast.LENGTH_SHORT).show());
+            return;
         }
-        new AlertDialog.Builder(host).setTitle("工作台显示缩放 · 当前 " + cur + "%（也可双指缩放）")
-                .setSingleChoiceItems(items, checked, (d, which) -> {
-                    int z = presets[which];
-                    for (Tab t : tabs) if (t.web != null && WebPinchZoom.isLocal(t.url)) WebPinchZoom.setZoom(t.web, z);
-                    com.xm486.pimet.PiMetConfig.setWebZoom(ctx, z);
-                    refreshBall();
-                    d.dismiss();
-                })
-                .setNegativeButton("取消", null).show();
+        int z = WebPinchZoom.clamp(pct);
+        if (local) com.xm486.pimet.PiMetConfig.setWebZoom(ctx, z);
+        else prefs().edit().putInt("page_zoom", z).apply();
+        MAIN.post(() -> {
+            for (Tab t : tabs) {
+                if (t == skip || t.web == null || WebPinchZoom.isLocal(t.url) != local) continue;
+                applyZoom(t);
+            }
+            refreshBall();
+        });
+    }
+
+    private void applyZoom(Tab t) {
+        if (t == null || t.web == null) return;
+        String u = t.web.getUrl();
+        if (u == null) u = t.url;
+        if (u == null || u.startsWith("about:")) return;
+        t.web.getSettings().setTextZoom(100);
+        WebPinchZoom.applyPercent(t.web, zoomFor(t, u));
+    }
+
+    /** 和工作台一样的缩放面板：预设 50/75/100/125/150、自定义 25–300、完成 */
+    private void showZoomDialog() {
+        if (host == null || active == null) return;
+        final Tab tab = active;
+        final String url = tab.url;
+        final boolean local = WebPinchZoom.isLocal(url);
+        ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(host);
+        final int minZ = WebPinchZoom.MIN_ZOOM, maxZ = WebPinchZoom.MAX_ZOOM;
+        final int onPrimary = palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF;
+
+        LinearLayout layout = new LinearLayout(host);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(24), dp(16), dp(24), dp(16));
+        layout.setBackground(ThemeManager.createCardDrawable(host, palette, 14f));
+
+        TextView title = new TextView(host);
+        title.setText(local ? "工作台显示缩放" : "页面缩放");
+        title.setTextSize(16f);
+        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        title.setTextColor(palette.text);
+        layout.addView(title);
+
+        TextView tvVal = new TextView(host);
+        tvVal.setTextSize(13f);
+        tvVal.setTextColor(palette.accent);
+        tvVal.setPadding(0, dp(8), 0, dp(12));
+        layout.addView(tvVal);
+
+        LinearLayout presetRow = new LinearLayout(host);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        presetRow.setGravity(Gravity.CENTER);
+        final int[] presets = {50, 75, 100, 125, 150};
+        final List<TextView> presetViews = new ArrayList<>();
+        final Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            int z = zoomFor(tab, url);
+            tvVal.setText("当前 " + z + "% · 也可双指缩放" + (local ? "（与工作台同步）" : ""));
+            for (int i = 0; i < presets.length; i++) {
+                boolean on = presets[i] == z;
+                presetViews.get(i).setTextColor(on ? onPrimary : palette.textMuted);
+                presetViews.get(i).setBackground(on
+                        ? ThemeManager.createPrimaryButtonDrawable(host, palette, 6f)
+                        : ThemeManager.createSecondaryButtonDrawable(host, palette, 6f));
+            }
+        };
+        for (int i = 0; i < presets.length; i++) {
+            final int pv = presets[i];
+            TextView b = new TextView(host);
+            b.setText(pv + "%");
+            b.setTextSize(12f);
+            b.setSingleLine(true);
+            b.setGravity(Gravity.CENTER);
+            b.setPadding(0, dp(8), 0, dp(8));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) lp.leftMargin = dp(6);
+            b.setOnClickListener(v -> {
+                saveZoom(tab, url, pv, null);
+                MAIN.post(refresh[0]);
+            });
+            presetViews.add(b);
+            presetRow.addView(b, lp);
+        }
+        layout.addView(presetRow);
+
+        LinearLayout customRow = new LinearLayout(host);
+        customRow.setOrientation(LinearLayout.HORIZONTAL);
+        customRow.setGravity(Gravity.CENTER_VERTICAL);
+        customRow.setPadding(0, dp(12), 0, 0);
+        EditText et = new EditText(host);
+        et.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        et.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(3)});
+        et.setSingleLine(true);
+        et.setHint("自定义 " + minZ + "–" + maxZ);
+        et.setTextSize(13f);
+        et.setTextColor(palette.text);
+        et.setHintTextColor(palette.textDim);
+        et.setBackground(ThemeManager.createSecondaryButtonDrawable(host, palette, 8f));
+        et.setPadding(dp(12), dp(8), dp(12), dp(8));
+        et.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        customRow.addView(et, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView pct = new TextView(host);
+        pct.setText("%");
+        pct.setTextSize(13f);
+        pct.setTextColor(palette.textMuted);
+        pct.setPadding(dp(6), 0, dp(8), 0);
+        customRow.addView(pct);
+        TextView apply = new TextView(host);
+        apply.setText("应用");
+        apply.setTextSize(12f);
+        apply.setSingleLine(true);
+        apply.setTextColor(palette.accent);
+        apply.setBackground(ThemeManager.createSecondaryButtonDrawable(host, palette, 8f));
+        apply.setPadding(dp(14), dp(8), dp(14), dp(8));
+        customRow.addView(apply);
+        layout.addView(customRow);
+
+        final Runnable applyCustom = () -> {
+            String txt = et.getText() == null ? "" : et.getText().toString().trim();
+            int v;
+            try {
+                v = Integer.parseInt(txt);
+            } catch (NumberFormatException e) {
+                Toast.makeText(ctx, "请输入 " + minZ + "–" + maxZ + " 之间的数字", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int z = WebPinchZoom.clamp(v);
+            if (z != v) Toast.makeText(ctx, "已限制在 " + minZ + "–" + maxZ + "%，应用 " + z + "%", Toast.LENGTH_SHORT).show();
+            saveZoom(tab, url, z, null);
+            et.setText(String.valueOf(z));
+            et.setSelection(et.getText().length());
+            MAIN.post(refresh[0]);
+        };
+        apply.setOnClickListener(v -> applyCustom.run());
+        et.setOnEditorActionListener((v, actionId, ev) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                applyCustom.run();
+                return true;
+            }
+            return false;
+        });
+        refresh[0].run();
+
+        TextView done = new TextView(host);
+        done.setText("完成");
+        done.setTextSize(13f);
+        done.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        done.setGravity(Gravity.CENTER);
+        done.setTextColor(onPrimary);
+        done.setBackground(ThemeManager.createPrimaryButtonDrawable(host, palette, 8f));
+        done.setPadding(0, dp(12), 0, dp(12));
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = dp(16);
+        layout.addView(done, dlp);
+
+        AlertDialog dialog = new AlertDialog.Builder(host).setView(layout).create();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        done.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
     }
 
     private static volatile String sDefaultUa;
@@ -1195,6 +1318,7 @@ public final class FloatingApps {
         }
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
+ applyZoom(t);
         t.web.reload();
         Toast.makeText(ctx, t.desktop ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
     }
@@ -1273,9 +1397,9 @@ public final class FloatingApps {
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
-        // 双指布局缩放：Pi-Web 等本地页面重排适配屏宽（和工作台共用缩放值），外部网站保持原生双指缩放
-        WebPinchZoom.attach(w, (pct, committed) -> { if (committed) MAIN.post(this::refreshBall); });
-        ws.setTextZoom(textZoom());
+        // 双指布局缩放：和 Pi-Web 工作台同一套（所有网页重排适配屏宽，不横向溢出）
+        WebPinchZoom.attach(w, (pct, committed) -> { if (committed) MAIN.post(this::refreshBall); }, zoomStore(t));
+        ws.setTextZoom(100);
         w.setBackgroundColor(pageColor);
         w.addJavascriptInterface(new Bridge(t), "PiMetNative");
         w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
@@ -1316,10 +1440,10 @@ public final class FloatingApps {
             public void onPageFinished(WebView view, String url) {
                 t.loading = false;
                 if (t == active) updateProgress();
+                applyZoom(t);
                 if (WebPinchZoom.isLocal(url)) {
-                    // Pi-Web：主题同步、布局缩放、键盘误判修正（和工作台一致）
+                    // Pi-Web：主题同步、键盘误判修正（和工作台一致）
                     ThemeManager.syncThemeToWebView(view, ctx);
-                    WebPinchZoom.apply(view, url);
                     PiWebCompat.apply(view, url);
                 }
                 t.url = url != null ? url : "";
@@ -1336,13 +1460,8 @@ public final class FloatingApps {
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
-                boolean local = WebPinchZoom.isLocal(url);
-                // 本地页面用布局缩放，文字缩放固定 100%，避免叠加；外部网站用「页面缩放」里的文字大小
-                view.getSettings().setTextZoom(local ? 100 : textZoom());
-                if (local) {
-                    WebPinchZoom.apply(view, url);
-                    PiWebCompat.apply(view, url);
-                }
+                applyZoom(t);
+                if (WebPinchZoom.isLocal(url)) PiWebCompat.apply(view, url);
             }
 
             @Override
@@ -2362,30 +2481,35 @@ public final class FloatingApps {
         return prefs().getBoolean("ball_on", true);
     }
 
-    /** 构造时调用：可拖动的悬浮球，点开竖向菜单：全屏 · 刷新 · 译 · 主题 · 缩放 · 终端 · 问 Pi · 工作台 · 外部浏览器 */
+    /**
+     * 构造时调用：和工作台一模一样的悬浮球（🌐、44dp、默认右上 80dp，拖动时顶部留 64dp），
+     * 菜单顺序同工作台：⛶ 全屏 · 🔄 刷新 · 译 · 🎨 主题 · 🌐 回工作台 · >_ 终端 · ↗ 外部浏览器，
+     * 另加：缩放百分比 · 🤖 问 Pi · ✕ 收起。
+     */
     private void buildBall() {
         ballWrap = new LinearLayout(vctx);
         ballWrap.setOrientation(LinearLayout.VERTICAL);
         ballWrap.setGravity(Gravity.CENTER_HORIZONTAL);
+        ballWrap.setElevation(dp(20));
+        ballWrap.setOutlineProvider(null);
         ball = new TextView(vctx);
-        ball.setText("π");
+        ball.setText("🌐");
         ball.setGravity(Gravity.CENTER);
-        ball.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
-        ball.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        ball.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         ball.setContentDescription("悬浮球（拖动移动，点按展开）");
         ball.setElevation(dp(6));
+        ball.setOutlineProvider(null);
         ball.setOnTouchListener(new BallDrag());
         ballWrap.addView(ball, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         ballMenu = new LinearLayout(vctx);
         ballMenu.setOrientation(LinearLayout.VERTICAL);
         ballMenu.setGravity(Gravity.CENTER_HORIZONTAL);
-        ballMenu.setPadding(0, dp(6), 0, dp(6));
-        ballMenu.setElevation(dp(6));
+        ballMenu.setPadding(0, dp(8), 0, dp(8));
         ballMenu.setVisibility(View.GONE);
-        ballFull = ballItem("⛶", "全屏", v -> { setFullscreen(!fullscreen); collapseBall(); });
-        ballItem("🔄", "刷新", v -> { reload(); collapseBall(); });
-        ballTranslate = ballItem("译", "网页翻译（长按选翻译引擎）", v -> toggleTranslate());
+        ballFull = ballItem("⛶", "全屏", 16, v -> { setFullscreen(!fullscreen); collapseBall(); });
+        ballItem("🔄", "刷新", 14, v -> { reload(); collapseBall(); });
+        ballTranslate = ballItem("译", "网页翻译（长按选翻译引擎）", 14, v -> toggleTranslate());
         ballTranslate.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         ballTranslate.setOnLongClickListener(v -> {
             if (host != null && web != null) {
@@ -2393,22 +2517,23 @@ public final class FloatingApps {
             }
             return true;
         });
-        ballItem("🎨", "切换主题", v -> cycleTheme());
-        ballZoom = ballItem("🔍", "页面缩放", v -> { collapseBall(); showZoomDialog(); });
-        ballZoom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        TextView term = ballItem(">_", "终端", v -> {
+        ballItem("🎨", "切换主题", 14, v -> cycleTheme());
+        TextView wb = ballItem("🌐", "回到工作台（浏览器留在后台）", 17, v -> { collapseBall(); openWorkbench(); });
+        wb.setTag("keep:#D2A8FF");
+        TextView term = ballItem(">_", "终端", 14, v -> {
             collapseBall();
             try { com.xm486.pimet.terminal.FloatingTerminal.toggle(ctx); } catch (Throwable t) {
                 Toast.makeText(ctx, "打开终端失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
         term.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
-        term.setTextColor(Color.parseColor("#3FB950"));
-        ballItem("🤖", "问 Pi", this::showAskPiMenu);
-        ballItem("🏠", "回到工作台", v -> { collapseBall(); openWorkbench(); });
-        ballItem("↗", "用其他浏览器打开", v -> { collapseBall(); openInOtherBrowser(); });
-        TextView close = ballItem("✕", "收起", v -> collapseBall());
-        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        term.setTag("keep:#3FB950");
+        ballItem("↗", "用其他浏览器打开", 15, v -> { collapseBall(); openInOtherBrowser(); });
+        ballZoom = ballItem("100%", "页面缩放（也可双指缩放）", 11, v -> { collapseBall(); showZoomDialog(); });
+        ballItem("🤖", "问 Pi", 15, this::showAskPiMenu);
+        TextView close = ballItem("✕", "收起", 12, v -> collapseBall());
+        close.getLayoutParams().height = dp(28);
+        close.setTag("muted");
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(50), ViewGroup.LayoutParams.WRAP_CONTENT);
         mlp.topMargin = dp(8);
         ballWrap.addView(ballMenu, mlp);
@@ -2420,52 +2545,59 @@ public final class FloatingApps {
         });
     }
 
-    private TextView ballItem(String text, String desc, View.OnClickListener l) {
+    private TextView ballItem(String text, String desc, int sp, View.OnClickListener l) {
         TextView t = new TextView(vctx);
         t.setText(text);
         t.setContentDescription(desc);
         t.setGravity(Gravity.CENTER);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
         t.setSingleLine(true);
         t.setOnClickListener(l);
         t.setOnLongClickListener(v -> {
             Toast.makeText(ctx, desc, Toast.LENGTH_SHORT).show();
             return true;
         });
-        ballMenu.addView(t, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        ballMenu.addView(t, new LinearLayout.LayoutParams(dp(40), dp(36)));
         return t;
     }
 
+    /** 配色同工作台：球 = 面板底色 + 边框 + 强调色图标；菜单 = 卡片底 12dp 圆角 */
     private void styleBall() {
         if (ball == null) return;
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(ctx);
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
-        bg.setColor(blend(cBar, cDark ? Color.WHITE : Color.BLACK, 0.06f));
-        bg.setStroke(dp(1), cBorder);
+        bg.setColor(p.bgPanel);
+        bg.setStroke(Math.max(1, dp(1)), p.border);
         ball.setBackground(bg);
-        ball.setTextColor(cAccent);
-        GradientDrawable mb = new GradientDrawable();
-        mb.setCornerRadius(dp(25));
-        mb.setColor(blend(cBar, cDark ? Color.WHITE : Color.BLACK, 0.04f));
-        mb.setStroke(dp(1), cBorder);
-        ballMenu.setBackground(mb);
+        ball.setTextColor(p.accent);
+        ballMenu.setBackground(ThemeManager.createCardDrawable(ctx, p, 12f));
         for (int i = 0; i < ballMenu.getChildCount(); i++) {
             View v = ballMenu.getChildAt(i);
-            if (v instanceof TextView && !">_".contentEquals(((TextView) v).getText())) ((TextView) v).setTextColor(cFg);
+            if (!(v instanceof TextView)) continue;
+            Object tag = v.getTag();
+            if (tag instanceof String && ((String) tag).startsWith("keep:")) {
+                ((TextView) v).setTextColor(Color.parseColor(((String) tag).substring(5)));
+            } else if ("muted".equals(tag)) {
+                ((TextView) v).setTextColor(p.textMuted);
+            } else {
+                ((TextView) v).setTextColor(p.text);
+            }
         }
+        ballFull.setTextColor(p.accent);
         refreshBall();
     }
 
     /** 刷新菜单里会变的按钮：全屏 ⛶/✕、译/原、缩放百分比 */
     private void refreshBall() {
         if (ballMenu == null) return;
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(ctx);
         ballFull.setText(fullscreen ? "✕" : "⛶");
         ballFull.setContentDescription(fullscreen ? "退出全屏" : "全屏");
         boolean tr = active != null && active.translated;
         ballTranslate.setText(tr ? "原" : "译");
-        ballTranslate.setTextColor(tr ? cAccent : cFg);
-        boolean local = active != null && WebPinchZoom.isLocal(active.url);
-        ballZoom.setText((local ? WebPinchZoom.getZoom(ctx) : textZoom()) + "%");
+        ballTranslate.setTextColor(tr ? p.accent : p.text);
+        ballZoom.setText(zoomFor(active, active == null ? null : active.url) + "%");
         // 悬浮球开着时它就能退出全屏，右上角 ⤡ 不再需要
         exitFullBtn.setVisibility(fullscreen && !ballEnabled() ? View.VISIBLE : View.GONE);
     }
@@ -2493,18 +2625,23 @@ public final class FloatingApps {
         refreshBall();
     }
 
-    /** 按保存的位置摆放悬浮球（默认右上，避开顶栏），并夹在屏幕内 */
+    /** 按保存的位置摆放悬浮球（默认同工作台：右上、距顶 80dp、距右 16dp），边界同工作台：顶 64dp、底 16dp、左右 8dp */
     private void placeBall() {
         if (ballWrap == null || root.getWidth() <= 0) return;
-        int w = root.getWidth(), h = root.getHeight();
-        int bw = Math.max(ballWrap.getWidth(), dp(50)), bh = Math.max(ballWrap.getHeight(), dp(44));
         float x = prefs().getFloat("ball_x", -1f), y = prefs().getFloat("ball_y", -1f);
         if (x < 0 || y < 0) {
-            x = w - bw - dp(12);
-            y = dp(130);
+            x = root.getWidth() - dp(44) - dp(3) - dp(16);
+            y = dp(80);
         }
-        ballWrap.setX(Math.max(0, Math.min(x, w - bw)));
-        ballWrap.setY(Math.max(0, Math.min(y, h - bh)));
+        moveBall(x, y);
+    }
+
+    private void moveBall(float x, float y) {
+        int w = root.getWidth(), h = root.getHeight();
+        int bw = Math.max(ballWrap.getWidth(), dp(50)), bh = Math.max(ballWrap.getHeight(), dp(44));
+        float side = dp(8), top = dp(64), bottom = dp(16);
+        ballWrap.setX(Math.max(side, Math.min(x, w - bw - side)));
+        ballWrap.setY(Math.max(top, Math.min(y, h - bh - bottom)));
     }
 
     private final class BallDrag implements View.OnTouchListener {
@@ -2523,11 +2660,9 @@ public final class FloatingApps {
                     return true;
                 case MotionEvent.ACTION_MOVE: {
                     float dx = ev.getRawX() - sx, dy = ev.getRawY() - sy;
-                    if (!moved && Math.abs(dx) < dp(6) && Math.abs(dy) < dp(6)) return true;
+                    if (!moved && Math.abs(dx) <= 8 && Math.abs(dy) <= 8) return true;
                     moved = true;
-                    int w = root.getWidth(), h = root.getHeight();
-                    ballWrap.setX(Math.max(0, Math.min(ox + dx, w - ballWrap.getWidth())));
-                    ballWrap.setY(Math.max(0, Math.min(oy + dy, h - ballWrap.getHeight())));
+                    moveBall(ox + dx, oy + dy);
                     return true;
                 }
                 case MotionEvent.ACTION_UP:

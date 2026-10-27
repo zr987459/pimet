@@ -47,6 +47,16 @@ public final class WebPinchZoom {
     }
 
     /**
+     * 自定义缩放值存取（Pi 浏览器用）：提供后<b>所有网页</b>都按布局缩放处理，值由调用方按网址分开保存；
+     * get 返回 100 表示该页不改动（如桌面版网站）。不提供时只作用于本地页面、使用工作台共享值。
+     */
+    public interface Store {
+        int get(String url);
+
+        void set(String url, int pct);
+    }
+
+    /**
      * 注入脚本：只追加/更新<b>我们自己的</b> viewport meta（id=__pimet_vp，置于 head 末尾，后出现者生效），
      * 绝不删除或改写页面自带的 meta —— Pi-Web 基于 Next.js/React 19，head 里的 viewport meta 由 React 管理，
      * 外部删除后 React 在切换会话/路由时卸载它会抛错（parentNode 为 null），导致页面交互与滚动失效。
@@ -92,6 +102,7 @@ public final class WebPinchZoom {
 
     private final WebView webView;
     private final Listener listener;
+    private final Store store;
     private final ScaleGestureDetector detector;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -121,10 +132,11 @@ public final class WebPinchZoom {
         }
     };
 
-    private WebPinchZoom(WebView webView, Listener listener) {
+    private WebPinchZoom(WebView webView, Listener listener, Store store) {
         this.webView = webView;
         this.listener = listener;
-        this.liveZoom = getZoom(webView.getContext());
+        this.store = store;
+        this.liveZoom = cur();
         this.detector = new ScaleGestureDetector(webView.getContext(),
                 new ScaleGestureDetector.SimpleOnScaleGestureListener() {
                     @Override
@@ -142,17 +154,35 @@ public final class WebPinchZoom {
 
     /** 安装双指布局缩放手势（同时完成 WebSettings 配置）。 */
     public static WebPinchZoom attach(WebView webView, Listener listener) {
+        return attach(webView, listener, null);
+    }
+
+    /** 带自定义存取的版本：所有网页都用布局缩放（Pi 浏览器）。 */
+    public static WebPinchZoom attach(WebView webView, Listener listener, Store store) {
         if (webView == null) return null;
         configure(webView);
-        WebPinchZoom z = new WebPinchZoom(webView, listener);
+        WebPinchZoom z = new WebPinchZoom(webView, listener, store);
         webView.setOnTouchListener((v, e) -> z.onTouch(e));
         webView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             // 仅宽度变化（转屏/分屏）且非 100% 时重算；高度变化（键盘弹出）不触碰页面
-            if ((r - l) != (or - ol) && (r - l) > 0 && getZoom(webView.getContext()) != 100) {
-                apply(webView, webView.getUrl());
+            if ((r - l) != (or - ol) && (r - l) > 0 && z.handles(webView.getUrl()) && z.cur() != 100) {
+                applyPct(webView, z.cur());
             }
         });
         return z;
+    }
+
+    private boolean handles(String url) {
+        return store != null ? (url != null && !url.startsWith("about:")) : isLocal(url);
+    }
+
+    private int cur() {
+        return store != null ? clamp(store.get(webView.getUrl())) : getZoom(webView.getContext());
+    }
+
+    /** 直接按百分比应用到当前页面（100 = 恢复页面原始 viewport）。 */
+    public static void applyPercent(WebView webView, int pct) {
+        if (webView != null) applyPct(webView, clamp(pct));
     }
 
     /**
@@ -240,15 +270,15 @@ public final class WebPinchZoom {
                 pinching = false;
                 commit();
             }
-            if (isLocal(webView.getUrl())) detector.onTouchEvent(e);
+            if (handles(webView.getUrl())) detector.onTouchEvent(e);
             return false;
         }
         if (!pinching) {
-            if (!isLocal(webView.getUrl())) return false;
+            if (!handles(webView.getUrl())) return false;
             detector.onTouchEvent(e);
             if (a == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() >= 2) {
                 pinching = true;
-                liveZoom = getZoom(webView.getContext());
+                liveZoom = cur();
                 lastAppliedPct = Math.round(liveZoom);
                 // 取消网页里已开始的单指手势：只携带第一根手指，与网页已收到的事件流保持一致
                 MotionEvent cancel = MotionEvent.obtain(e.getDownTime(), e.getEventTime(),
@@ -300,7 +330,8 @@ public final class WebPinchZoom {
         else pct = Math.round(pct / 5f) * 5;
         pct = clamp(pct);
         liveZoom = pct;
-        PiMetConfig.setWebZoom(webView.getContext(), pct);
+        if (store != null) store.set(webView.getUrl(), pct);
+        else PiMetConfig.setWebZoom(webView.getContext(), pct);
         lastAppliedPct = pct;
         applyPct(webView, pct);
         showIndicator(pct);
@@ -313,9 +344,20 @@ public final class WebPinchZoom {
 
     private void showIndicator(int pct) {
         Context ctx = webView.getContext();
+        // 悬浮/浏览器里的 WebView 用的是 ContextWrapper，向下找到真正承载它的 Activity
+        Context base = ctx;
+        while (!(base instanceof Activity) && base instanceof android.content.ContextWrapper
+                && ((android.content.ContextWrapper) base).getBaseContext() != base) {
+            base = ((android.content.ContextWrapper) base).getBaseContext();
+        }
+        if (indicator != null && (indicator.getContext() != base || !indicator.isAttachedToWindow())) {
+            if (indicator.getParent() instanceof ViewGroup) ((ViewGroup) indicator.getParent()).removeView(indicator);
+            indicator = null;
+        }
         if (indicator == null) {
-            if (!(ctx instanceof Activity)) return;
-            View content = ((Activity) ctx).findViewById(android.R.id.content);
+            if (!(base instanceof Activity)) return;
+            ctx = base;
+            View content = ((Activity) base).findViewById(android.R.id.content);
             if (!(content instanceof ViewGroup)) return;
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(ctx);
             float d = ctx.getResources().getDisplayMetrics().density;
