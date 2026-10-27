@@ -2892,34 +2892,56 @@ public final class FloatingApps {
         if (on) Toast.makeText(ctx, ballEnabled() ? "已全屏，点悬浮球里的 ✕ 或按返回键退出" : "已全屏，点右上角 ⤡ 或按返回键退出", Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * 系统栏状态（参数仅为兼容旧调用，实际按当前状态决定）：
+     * - 网页视频全屏：真沉浸式，隐藏状态栏和导航栏，内容铺进刘海区；
+     * - 浏览器全屏：和工作台全屏一样，保留顶部状态栏（时间、电量），只隐藏导航栏和顶栏，状态栏用页面底色；
+     * - 普通：状态栏颜色跟顶栏。
+     */
     @SuppressWarnings("deprecation")
-    private void applyImmersive(boolean on) {
+    private void applyImmersive(boolean ignored) {
         if (host == null) return;
-        View decor = host.getWindow().getDecorView();
-        if (on) {
+        Window w = host.getWindow();
+        View decor = w.getDecorView();
+        boolean video = customView != null;
+        if (Build.VERSION.SDK_INT >= 28) {
+            try {
+                android.view.WindowManager.LayoutParams lp = w.getAttributes();
+                int mode = video ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+                if (lp.layoutInDisplayCutoutMode != mode) {
+                    lp.layoutInDisplayCutoutMode = mode;
+                    w.setAttributes(lp);
+                }
+            } catch (Throwable ignored2) {}
+        }
+        if (video) {
             decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                     | View.SYSTEM_UI_FLAG_FULLSCREEN
                     | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
-        } else {
-            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
-            applyWindowColors();
+            return;
         }
+        decor.setSystemUiVisibility(fullscreen
+                ? View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                : View.SYSTEM_UI_FLAG_VISIBLE);
+        applyWindowColors();
     }
 
-    /** 状态栏 / 导航栏颜色跟顶栏一致 */
+    /** 状态栏 / 导航栏颜色：普通时跟顶栏；全屏时顶栏隐藏，状态栏跟页面底色，图标深浅随之切换 */
     @SuppressWarnings("deprecation")
     private void applyWindowColors() {
-        if (host == null || fullscreen) return;
+        if (host == null || customView != null) return;
         try {
             Window w = host.getWindow();
-            w.setStatusBarColor(cBar);
+            int status = fullscreen ? pageColor : cBar;
+            w.setStatusBarColor(status);
             w.setNavigationBarColor(pageColor);
             View decor = w.getDecorView();
             int f = decor.getSystemUiVisibility();
-            if (isLightColor(cBar)) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (isLightColor(status)) f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             else f &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             if (Build.VERSION.SDK_INT >= 26) {
                 if (isLightColor(pageColor)) f |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
