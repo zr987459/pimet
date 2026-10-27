@@ -255,6 +255,7 @@ public final class FloatingApps {
         hideCustomView();
         hideIme();
         closeSwitcher();
+        collapseBall();
         if (root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
         host = null;
         vctx.setBaseContext(ctx);
@@ -503,6 +504,9 @@ public final class FloatingApps {
         elp.setMargins(0, dp(10), dp(10), 0);
         root.addView(exitFullBtn, elp);
 
+        // ---- 悬浮球（全屏、刷新、翻译、主题、缩放、终端、问 Pi…）
+        buildBall();
+
         switchTo(newTab(false));
         reloadConfigIfChanged();
         layoutOffscreen();
@@ -539,6 +543,7 @@ public final class FloatingApps {
         boolean agentVisible;    // 后台标签被 Pi 操作时临时可见（压在当前标签下面）
         boolean desktop;         // 桌面版网站
         Bitmap thumb;            // 标签页网格里的缩略图
+        volatile boolean translated; // 网页翻译已开启（悬浮球显示「原」）
         long lastUsed = System.currentTimeMillis();
 
         Tab(String id, boolean pi) {
@@ -565,6 +570,7 @@ public final class FloatingApps {
         t.lastUsed = System.currentTimeMillis();
         applyVisibility();
         updateProgress();
+        refreshBall();
         String u = t.url;
         if (!urlField.hasFocus()) {
             urlField.setText("");
@@ -919,7 +925,7 @@ public final class FloatingApps {
         m.add(0, 4, 0, isBookmarked(u) ? "★ 已加书签（点按移除）" : "☆ 添加书签").setEnabled(webPage);
         m.add(0, 5, 0, "书签");
         m.add(0, 6, 0, "下载内容");
-        m.add(0, 7, 0, "网页翻译").setEnabled(webPage);
+        m.add(0, 7, 0, active != null && active.translated ? "显示原文" : "网页翻译").setEnabled(webPage);
         m.add(0, 8, 0, "页面缩放…");
         m.add(0, 9, 0, "桌面版网站").setCheckable(true).setChecked(active != null && active.desktop);
         m.add(0, 10, 0, fullscreen ? "退出全屏" : "全屏");
@@ -927,6 +933,9 @@ public final class FloatingApps {
         m.add(0, 12, 0, "复制链接").setEnabled(webPage);
         m.add(0, 13, 0, "用其他浏览器打开").setEnabled(webPage);
         if (lastPiTab() != null || sPiStopped) m.add(0, 14, 0, sPiStopped ? "▶ 允许 Pi 操作浏览器" : "⏹ 停止 Pi 操作浏览器");
+        m.add(0, 16, 0, "Pi 工作台（新标签打开）");
+        m.add(0, 17, 0, "回到 PiMet 工作台");
+        m.add(0, 18, 0, "悬浮球").setCheckable(true).setChecked(ballEnabled());
         m.add(0, 15, 0, "关闭浏览器（关闭全部标签）");
         pm.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -936,13 +945,7 @@ public final class FloatingApps {
                 case 4: toggleBookmark(); break;
                 case 5: showBookmarks(); break;
                 case 6: showDownloads(); break;
-                case 7:
-                    try {
-                        com.xm486.pimet.translation.WebTranslationManager.toggleTranslation(web, host);
-                    } catch (Throwable t) {
-                        Toast.makeText(ctx, "翻译失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
-                    }
-                    break;
+                case 7: toggleTranslate(); break;
                 case 8: showZoomDialog(); break;
                 case 9: toggleDesktop(); break;
                 case 10: setFullscreen(!fullscreen); break;
@@ -951,6 +954,9 @@ public final class FloatingApps {
                 case 13: openInOtherBrowser(); break;
                 case 14: togglePiStopped(); break;
                 case 15: confirmCloseBrowser(); break;
+                case 16: openPiWebTab(); break;
+                case 17: openWorkbench(); break;
+                case 18: setBallEnabled(!ballEnabled()); break;
                 default: return false;
             }
             return true;
@@ -1108,6 +1114,10 @@ public final class FloatingApps {
 
     private void showZoomDialog() {
         if (host == null) return;
+        if (active != null && WebPinchZoom.isLocal(active.url)) {
+            showLayoutZoomDialog();
+            return;
+        }
         LinearLayout box = new LinearLayout(host);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(12), dp(20), 0);
@@ -1125,7 +1135,8 @@ public final class FloatingApps {
                 int z = 50 + p * 10;
                 label.setText("文字大小 " + z + "%（双指捏合可放大缩小页面）");
                 prefs().edit().putInt("text_zoom", z).apply();
-                for (Tab t : tabs) if (t.web != null) t.web.getSettings().setTextZoom(z);
+                for (Tab t : tabs) if (t.web != null && !WebPinchZoom.isLocal(t.url)) t.web.getSettings().setTextZoom(z);
+                refreshBall();
             }
 
             @Override
@@ -1140,8 +1151,30 @@ public final class FloatingApps {
                 .setNeutralButton("恢复 100%", (d, w) -> {
                     prefs().edit().putInt("text_zoom", 100).apply();
                     for (Tab t : tabs) if (t.web != null) t.web.getSettings().setTextZoom(100);
+                    refreshBall();
                 })
                 .setPositiveButton("完成", null).show();
+    }
+
+    /** Pi-Web 等本地页面：和工作台悬浮球一样的布局缩放（25%–300%，与工作台共用同一个值） */
+    private void showLayoutZoomDialog() {
+        final int[] presets = {50, 75, 90, 100, 110, 125, 150};
+        String[] items = new String[presets.length];
+        int cur = WebPinchZoom.getZoom(ctx);
+        int checked = -1;
+        for (int i = 0; i < presets.length; i++) {
+            items[i] = presets[i] + "%" + (presets[i] == 100 ? "（默认）" : "");
+            if (presets[i] == cur) checked = i;
+        }
+        new AlertDialog.Builder(host).setTitle("工作台显示缩放 · 当前 " + cur + "%（也可双指缩放）")
+                .setSingleChoiceItems(items, checked, (d, which) -> {
+                    int z = presets[which];
+                    for (Tab t : tabs) if (t.web != null && WebPinchZoom.isLocal(t.url)) WebPinchZoom.setZoom(t.web, z);
+                    com.xm486.pimet.PiMetConfig.setWebZoom(ctx, z);
+                    refreshBall();
+                    d.dismiss();
+                })
+                .setNegativeButton("取消", null).show();
     }
 
     private static volatile String sDefaultUa;
@@ -1240,9 +1273,13 @@ public final class FloatingApps {
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
+        // 双指布局缩放：Pi-Web 等本地页面重排适配屏宽（和工作台共用缩放值），外部网站保持原生双指缩放
+        WebPinchZoom.attach(w, (pct, committed) -> { if (committed) MAIN.post(this::refreshBall); });
         ws.setTextZoom(textZoom());
         w.setBackgroundColor(pageColor);
         w.addJavascriptInterface(new Bridge(t), "PiMetNative");
+        w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
+        w.addJavascriptInterface(new ThemeBridge(t), "PiMetTheme");
         w.setDownloadListener((url, ua, contentDisposition, mime, length) -> startDownload(t, url, ua, contentDisposition, mime));
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -1269,7 +1306,8 @@ public final class FloatingApps {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 t.loading = true;
-                if (t == active) updateProgress();
+                t.translated = false;
+                if (t == active) { updateProgress(); refreshBall(); }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
             }
@@ -1278,6 +1316,12 @@ public final class FloatingApps {
             public void onPageFinished(WebView view, String url) {
                 t.loading = false;
                 if (t == active) updateProgress();
+                if (WebPinchZoom.isLocal(url)) {
+                    // Pi-Web：主题同步、布局缩放、键盘误判修正（和工作台一致）
+                    ThemeManager.syncThemeToWebView(view, ctx);
+                    WebPinchZoom.apply(view, url);
+                    PiWebCompat.apply(view, url);
+                }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
                 String title = view.getTitle();
@@ -1288,6 +1332,17 @@ public final class FloatingApps {
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
                 reloadConfigIfChanged();
                 injectUserScripts(view, url);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                boolean local = WebPinchZoom.isLocal(url);
+                // 本地页面用布局缩放，文字缩放固定 100%，避免叠加；外部网站用「页面缩放」里的文字大小
+                view.getSettings().setTextZoom(local ? 100 : textZoom());
+                if (local) {
+                    WebPinchZoom.apply(view, url);
+                    PiWebCompat.apply(view, url);
+                }
             }
 
             @Override
@@ -1905,6 +1960,7 @@ public final class FloatingApps {
         }
         boolean showBar = config.optBoolean("showButtonBar", false);
         customScroll.setVisibility(showBar && customStrip.getChildCount() > 0 && !fullscreen ? View.VISIBLE : View.GONE);
+        styleBall();
     }
 
     private static int blend(int a, int b, float t) {
@@ -2058,7 +2114,7 @@ public final class FloatingApps {
     /** 首页需要的数据（在主线程取好，再到后台线程生成 HTML） */
     private static final class HomeData {
         JSONArray bookmarks;
-        String recentId, recentTitle, recentUrl;
+        String recentId, recentTitle, recentUrl, piWeb;
         boolean dark;
         String page, fg, card, pill, accent, dim;
     }
@@ -2066,6 +2122,7 @@ public final class FloatingApps {
     private HomeData homeData(Tab forTab) {
         HomeData h = new HomeData();
         h.bookmarks = bookmarks();
+        h.piWeb = piWebUrl();
         Tab recent = null;
         for (Tab x : tabs) {
             if (x == forTab || x.pi || x.url.isEmpty() || isLauncher(x.url)) continue;
@@ -2093,6 +2150,7 @@ public final class FloatingApps {
     private String buildLauncherHtml(HomeData h) {
         List<AppInfo> apps = scanApps();
         StringBuilder tiles = new StringBuilder();
+        tiles.append("<a class=\"tile\" href=\"").append(esc(h.piWeb)).append("\"><div class=\"ico\"><span class=\"e\">π</span></div><div class=\"tn\">Pi 工作台</div></a>");
         for (int i = 0; i < h.bookmarks.length(); i++) {
             JSONObject o = h.bookmarks.optJSONObject(i);
             if (o == null) continue;
@@ -2108,9 +2166,10 @@ public final class FloatingApps {
             tiles.append("<a class=\"tile\" href=\"").append(href).append("\"><div class=\"ico\"><span class=\"e\">")
                     .append(esc(a.icon)).append("</span></div><div class=\"tn\">").append(esc(a.name)).append("</div></a>");
         }
-        String grid = tiles.length() == 0
-                ? "<div class=\"panel hint\">打开网页后在 ⋮ 菜单点「☆ 添加书签」，常用网站会出现在这里。<br>Pi 做的小页面也会出现在这里。</div>"
-                : "<div class=\"panel\"><div class=\"grid\">" + tiles + "</div></div>";
+        String grid = "<div class=\"panel\"><div class=\"grid\">" + tiles + "</div>"
+                + (h.bookmarks.length() == 0 && apps.isEmpty()
+                ? "<div class=\"hint\">打开网页后在 ⋮ 菜单点「☆ 添加书签」，常用网站会出现在这里。Pi 做的小页面也会出现在这里。</div>" : "")
+                + "</div>";
         String recent = "";
         if (h.recentId != null) {
             String hostName = Uri.parse(h.recentUrl).getHost();
@@ -2292,6 +2351,367 @@ public final class FloatingApps {
         } catch (Throwable ignored) {}
     }
 
+    // ------------------------------------------------------------------ 悬浮球（和工作台的悬浮球同一套功能）
+
+    private LinearLayout ballWrap;
+    private TextView ball;
+    private LinearLayout ballMenu;
+    private TextView ballFull, ballTranslate, ballZoom;
+
+    private boolean ballEnabled() {
+        return prefs().getBoolean("ball_on", true);
+    }
+
+    /** 构造时调用：可拖动的悬浮球，点开竖向菜单：全屏 · 刷新 · 译 · 主题 · 缩放 · 终端 · 问 Pi · 工作台 · 外部浏览器 */
+    private void buildBall() {
+        ballWrap = new LinearLayout(vctx);
+        ballWrap.setOrientation(LinearLayout.VERTICAL);
+        ballWrap.setGravity(Gravity.CENTER_HORIZONTAL);
+        ball = new TextView(vctx);
+        ball.setText("π");
+        ball.setGravity(Gravity.CENTER);
+        ball.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        ball.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        ball.setContentDescription("悬浮球（拖动移动，点按展开）");
+        ball.setElevation(dp(6));
+        ball.setOnTouchListener(new BallDrag());
+        ballWrap.addView(ball, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        ballMenu = new LinearLayout(vctx);
+        ballMenu.setOrientation(LinearLayout.VERTICAL);
+        ballMenu.setGravity(Gravity.CENTER_HORIZONTAL);
+        ballMenu.setPadding(0, dp(6), 0, dp(6));
+        ballMenu.setElevation(dp(6));
+        ballMenu.setVisibility(View.GONE);
+        ballFull = ballItem("⛶", "全屏", v -> { setFullscreen(!fullscreen); collapseBall(); });
+        ballItem("🔄", "刷新", v -> { reload(); collapseBall(); });
+        ballTranslate = ballItem("译", "网页翻译（长按选翻译引擎）", v -> toggleTranslate());
+        ballTranslate.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        ballTranslate.setOnLongClickListener(v -> {
+            if (host != null && web != null) {
+                try { com.xm486.pimet.translation.WebTranslationDialog.show(host, web); } catch (Throwable ignored) {}
+            }
+            return true;
+        });
+        ballItem("🎨", "切换主题", v -> cycleTheme());
+        ballZoom = ballItem("🔍", "页面缩放", v -> { collapseBall(); showZoomDialog(); });
+        ballZoom.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        TextView term = ballItem(">_", "终端", v -> {
+            collapseBall();
+            try { com.xm486.pimet.terminal.FloatingTerminal.toggle(ctx); } catch (Throwable t) {
+                Toast.makeText(ctx, "打开终端失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+        term.setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
+        term.setTextColor(Color.parseColor("#3FB950"));
+        ballItem("🤖", "问 Pi", this::showAskPiMenu);
+        ballItem("🏠", "回到工作台", v -> { collapseBall(); openWorkbench(); });
+        ballItem("↗", "用其他浏览器打开", v -> { collapseBall(); openInOtherBrowser(); });
+        TextView close = ballItem("✕", "收起", v -> collapseBall());
+        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(50), ViewGroup.LayoutParams.WRAP_CONTENT);
+        mlp.topMargin = dp(8);
+        ballWrap.addView(ballMenu, mlp);
+
+        root.addView(ballWrap, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        ballWrap.setVisibility(ballEnabled() ? View.VISIBLE : View.GONE);
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (r - l != or - ol || b - t != ob - ot) MAIN.post(this::placeBall);
+        });
+    }
+
+    private TextView ballItem(String text, String desc, View.OnClickListener l) {
+        TextView t = new TextView(vctx);
+        t.setText(text);
+        t.setContentDescription(desc);
+        t.setGravity(Gravity.CENTER);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        t.setSingleLine(true);
+        t.setOnClickListener(l);
+        t.setOnLongClickListener(v -> {
+            Toast.makeText(ctx, desc, Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        ballMenu.addView(t, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        return t;
+    }
+
+    private void styleBall() {
+        if (ball == null) return;
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.OVAL);
+        bg.setColor(blend(cBar, cDark ? Color.WHITE : Color.BLACK, 0.06f));
+        bg.setStroke(dp(1), cBorder);
+        ball.setBackground(bg);
+        ball.setTextColor(cAccent);
+        GradientDrawable mb = new GradientDrawable();
+        mb.setCornerRadius(dp(25));
+        mb.setColor(blend(cBar, cDark ? Color.WHITE : Color.BLACK, 0.04f));
+        mb.setStroke(dp(1), cBorder);
+        ballMenu.setBackground(mb);
+        for (int i = 0; i < ballMenu.getChildCount(); i++) {
+            View v = ballMenu.getChildAt(i);
+            if (v instanceof TextView && !">_".contentEquals(((TextView) v).getText())) ((TextView) v).setTextColor(cFg);
+        }
+        refreshBall();
+    }
+
+    /** 刷新菜单里会变的按钮：全屏 ⛶/✕、译/原、缩放百分比 */
+    private void refreshBall() {
+        if (ballMenu == null) return;
+        ballFull.setText(fullscreen ? "✕" : "⛶");
+        ballFull.setContentDescription(fullscreen ? "退出全屏" : "全屏");
+        boolean tr = active != null && active.translated;
+        ballTranslate.setText(tr ? "原" : "译");
+        ballTranslate.setTextColor(tr ? cAccent : cFg);
+        boolean local = active != null && WebPinchZoom.isLocal(active.url);
+        ballZoom.setText((local ? WebPinchZoom.getZoom(ctx) : textZoom()) + "%");
+        // 悬浮球开着时它就能退出全屏，右上角 ⤡ 不再需要
+        exitFullBtn.setVisibility(fullscreen && !ballEnabled() ? View.VISIBLE : View.GONE);
+    }
+
+    private void collapseBall() {
+        if (ballMenu != null) ballMenu.setVisibility(View.GONE);
+        MAIN.post(this::placeBall);
+    }
+
+    private void toggleBallMenu() {
+        boolean open = ballMenu.getVisibility() != View.VISIBLE;
+        if (open) refreshBall();
+        ballMenu.setVisibility(open ? View.VISIBLE : View.GONE);
+        ballWrap.bringToFront();
+        MAIN.post(this::placeBall);
+    }
+
+    private void setBallEnabled(boolean on) {
+        prefs().edit().putBoolean("ball_on", on).apply();
+        ballWrap.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) {
+            ballWrap.bringToFront();
+            MAIN.post(this::placeBall);
+        }
+        refreshBall();
+    }
+
+    /** 按保存的位置摆放悬浮球（默认右上，避开顶栏），并夹在屏幕内 */
+    private void placeBall() {
+        if (ballWrap == null || root.getWidth() <= 0) return;
+        int w = root.getWidth(), h = root.getHeight();
+        int bw = Math.max(ballWrap.getWidth(), dp(50)), bh = Math.max(ballWrap.getHeight(), dp(44));
+        float x = prefs().getFloat("ball_x", -1f), y = prefs().getFloat("ball_y", -1f);
+        if (x < 0 || y < 0) {
+            x = w - bw - dp(12);
+            y = dp(130);
+        }
+        ballWrap.setX(Math.max(0, Math.min(x, w - bw)));
+        ballWrap.setY(Math.max(0, Math.min(y, h - bh)));
+    }
+
+    private final class BallDrag implements View.OnTouchListener {
+        private float sx, sy, ox, oy;
+        private boolean moved;
+
+        @Override
+        public boolean onTouch(View v, MotionEvent ev) {
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    sx = ev.getRawX();
+                    sy = ev.getRawY();
+                    ox = ballWrap.getX();
+                    oy = ballWrap.getY();
+                    moved = false;
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float dx = ev.getRawX() - sx, dy = ev.getRawY() - sy;
+                    if (!moved && Math.abs(dx) < dp(6) && Math.abs(dy) < dp(6)) return true;
+                    moved = true;
+                    int w = root.getWidth(), h = root.getHeight();
+                    ballWrap.setX(Math.max(0, Math.min(ox + dx, w - ballWrap.getWidth())));
+                    ballWrap.setY(Math.max(0, Math.min(oy + dy, h - ballWrap.getHeight())));
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (moved) {
+                        prefs().edit().putFloat("ball_x", ballWrap.getX()).putFloat("ball_y", ballWrap.getY()).apply();
+                    } else if (ev.getActionMasked() == MotionEvent.ACTION_UP) {
+                        toggleBallMenu();
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    // ---- 悬浮球功能
+
+    private void toggleTranslate() {
+        if (web == null || host == null) return;
+        try {
+            com.xm486.pimet.translation.WebTranslationManager.toggleTranslation(web, host);
+        } catch (Throwable t) {
+            Toast.makeText(ctx, "翻译失败：" + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** 🎨：和工作台悬浮球一样按顺序切换主题；Pi-Web 页面和浏览器配色一起跟着变，工作台回到前台时也会跟随 */
+    private void cycleTheme() {
+        List<String> all = ThemeManager.getAllThemes();
+        int idx = all.indexOf(ThemeManager.getThemePreference(ctx));
+        String next = all.get((idx + 1) % all.size());
+        ThemeManager.setThemePreference(ctx, next);
+        onThemeChanged();
+        Toast.makeText(ctx, "已应用主题: " + ThemeManager.getThemeLabel(next), Toast.LENGTH_SHORT).show();
+    }
+
+    private void onThemeChanged() {
+        applyConfig();
+        for (Tab t : tabs) {
+            if (t.web != null && WebPinchZoom.isLocal(t.url)) ThemeManager.syncThemeToWebView(t.web, ctx);
+        }
+        if (isLauncher(currentUrl())) goHome();
+    }
+
+    private void showAskPiMenu(View anchor) {
+        if (host == null) return;
+        PopupMenu pm = new PopupMenu(host, anchor);
+        Menu m = pm.getMenu();
+        m.add(0, 1, 0, "📝 让 Pi 总结本页");
+        m.add(0, 2, 0, "✂️ 把选中的文字发给 Pi");
+        m.add(0, 3, 0, "🤖 让 Pi 接手这个页面…");
+        m.add(0, 4, 0, "💬 只把网址填进 Pi 输入框");
+        pm.setOnMenuItemClickListener(item -> {
+            collapseBall();
+            switch (item.getItemId()) {
+                case 1: askPiAbout("用 browser 工具读一下当前页面（{url}），给我简要总结。", true); break;
+                case 2: askPiAbout("{selection}\n\n（来自 {title} {url}）", false); break;
+                case 3: askPiAbout("用 browser 工具在 Pi 标签打开 {url}，然后帮我：", false); break;
+                case 4: askPiAbout("{url}", false); break;
+                default: return false;
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    /** 把模板（可用 {url} {title} {selection}）发到工作台的 Pi 输入框，然后回到工作台 */
+    private void askPiAbout(String template, boolean send) {
+        if (web == null) return;
+        web.evaluateJavascript("JSON.stringify({t:document.title,s:String(window.getSelection?getSelection():'')})", v -> {
+            String title = "", sel = "";
+            try {
+                JSONObject j = new JSONObject(new org.json.JSONTokener(v).nextValue().toString());
+                title = j.optString("t");
+                sel = j.optString("s");
+            } catch (Throwable ignored) {}
+            if (template.contains("{selection}") && sel.trim().isEmpty()) {
+                Toast.makeText(ctx, "先在网页里长按选中一段文字", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String text = template.replace("{url}", currentUrl()).replace("{title}", title).replace("{selection}", sel);
+            if (sPiBridge == null) {
+                Toast.makeText(ctx, "工作台未就绪：先打开 PiMet 工作台", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            sPiBridge.askPi(text, send);
+            Toast.makeText(ctx, send ? "已发给 Pi" : "已填入 Pi 输入框", Toast.LENGTH_SHORT).show();
+            openWorkbench();
+        });
+    }
+
+    /** 回到 PiMet 工作台（浏览器留在后台，标签都在） */
+    private void openWorkbench() {
+        try {
+            Intent i = new Intent(ctx, com.xm486.pimet.MainActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            ctx.startActivity(i);
+        } catch (Throwable t) {
+            Toast.makeText(ctx, "打开工作台失败", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** 在新标签里打开 Pi-Web 工作台网页（同一个本地服务） */
+    private void openPiWebTab() {
+        int port = com.xm486.pimet.pet.PetRegistry.getPiWebPort(ctx);
+        userTouched = true;
+        Tab t = newTab(false);
+        switchTo(t);
+        t.web.loadUrl("http://127.0.0.1:" + port + "/");
+    }
+
+    private String piWebUrl() {
+        return "http://127.0.0.1:" + com.xm486.pimet.pet.PetRegistry.getPiWebPort(ctx) + "/";
+    }
+
+    // ---- Pi-Web 页面需要的原生桥（与工作台一致）。它们需要 Activity，所以按当前承载的 Activity 现取
+
+    /** window.PiMetTranslator：网页翻译脚本分批请求翻译、打开引擎设置、回报状态 */
+    private final class TranslatorBridge {
+        private final Tab tab;
+        private com.xm486.pimet.translation.TranslationBridge real;
+        private Activity realHost;
+
+        TranslatorBridge(Tab tab) {
+            this.tab = tab;
+        }
+
+        private com.xm486.pimet.translation.TranslationBridge real() {
+            Activity h = host;
+            WebView w = tab.web;
+            if (h == null || w == null) return null;
+            if (real == null || realHost != h) {
+                real = new com.xm486.pimet.translation.TranslationBridge(h, w);
+                realHost = h;
+            }
+            return real;
+        }
+
+        @JavascriptInterface
+        public void requestBatch(String batchId, String textsJson) {
+            com.xm486.pimet.translation.TranslationBridge r = real();
+            if (r != null) r.requestBatch(batchId, textsJson);
+        }
+
+        @JavascriptInterface
+        public void openSettingsDialog() {
+            com.xm486.pimet.translation.TranslationBridge r = real();
+            if (r != null) r.openSettingsDialog();
+        }
+
+        @JavascriptInterface
+        public void onStateChanged(boolean isTranslated, int doneCount, int totalCount) {
+            tab.translated = isTranslated;
+            MAIN.post(FloatingApps.this::refreshBall);
+            com.xm486.pimet.translation.TranslationBridge r = real();
+            if (r != null) r.onStateChanged(isTranslated, doneCount, totalCount);
+        }
+
+        @JavascriptInterface
+        public void showToast(String message) {
+            if (message != null) MAIN.post(() -> Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show());
+        }
+    }
+
+    /** window.PiMetTheme：在 Pi-Web 设置里换主题 → PiMet 跟随（只认本地 Pi-Web 页面） */
+    private final class ThemeBridge {
+        private final Tab tab;
+
+        ThemeBridge(Tab tab) {
+            this.tab = tab;
+        }
+
+        @JavascriptInterface
+        public void onWebTheme(String themeId) {
+            if (!WebPinchZoom.isLocal(tab.url)) return;
+            MAIN.post(() -> {
+                Activity h = host;
+                if (h == null) return;
+                new ThemeManager.WebThemeBridge(h, FloatingApps.this::onThemeChanged).onWebTheme(themeId);
+            });
+        }
+    }
+
     // ------------------------------------------------------------------ 窗口行为
 
     private SharedPreferences prefs() {
@@ -2329,11 +2749,12 @@ public final class FloatingApps {
         hideIme();
         bar.setVisibility(on ? View.GONE : View.VISIBLE);
         progress.setVisibility(on ? View.GONE : (active != null && active.loading ? View.VISIBLE : View.INVISIBLE));
-        exitFullBtn.setVisibility(on ? View.VISIBLE : View.GONE);
+        refreshBall();
         exitFullBtn.bringToFront();
+        if (ballWrap != null) ballWrap.bringToFront();
         applyConfig();
         applyImmersive(on);
-        if (on) Toast.makeText(ctx, "已全屏，点右上角 ⤡ 或按返回键退出", Toast.LENGTH_SHORT).show();
+        if (on) Toast.makeText(ctx, ballEnabled() ? "已全屏，点悬浮球里的 ✕ 或按返回键退出" : "已全屏，点右上角 ⤡ 或按返回键退出", Toast.LENGTH_SHORT).show();
     }
 
     @SuppressWarnings("deprecation")
