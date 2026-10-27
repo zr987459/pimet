@@ -78,6 +78,17 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Pi 浏览器：独立全屏窗口（单独任务，可分屏/小窗；标签由 FloatingApps 单例持有） -->
+        <activity
+            android:name=".PiBrowserActivity"
+            android:exported="false"
+            android:label="Pi 浏览器"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.browser"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- 宠物商城与 PetDex 社区素材市场 -->
         <activity
             android:name=".PetShopActivity"

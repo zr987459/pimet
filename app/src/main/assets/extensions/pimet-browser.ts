@@ -1,6 +1,6 @@
 /**
  * PiMet Browser Extension
- * 让 Pi 操控 PiMet 的「Pi 浏览器」悬浮窗（Android WebView，用户能实时看到并接手）。
+ * 让 Pi 操控 PiMet 的「Pi 浏览器」（独立全屏窗口，Android WebView，用户能实时看到并接手）。
  * 用法借鉴 Playwright MCP / browser-use / ego-lite：
  *   - 单步：先拿页面快照，可交互元素带编号 [e1] [e2]…，再按编号点击 / 输入；
  *   - 代码模式 run：一段 async JS 一次跑完多步（b.open / b.fill / b.js …），省去来回；
@@ -390,7 +390,7 @@ export default function (pi: ExtensionAPI) {
     name: "browser",
     label: "Browser",
     description:
-      "操控 PiMet 手机上的「Pi 浏览器」悬浮窗口（真实的 Android WebView，用户会实时看到，也能随时接手）。" +
+      "操控 PiMet 手机上的「Pi 浏览器」（独立的全屏浏览器窗口，真实的 Android WebView，用户打开它就能看到你的操作，也能随时接手）。" +
       "用于需要真正打开网页的任务：搜索/阅读动态页面、登录后的网站、填表、点按钮、查看你做的本地页面等。\n" +
       "【多步任务优先用 action=run】传 code（一段 async 函数体，可用 await），通过对象 b 一次跑完整个流程，只把 log 和 return 的结果返回给你：" +
       "b.open(url)→{url,title}；b.snapshot({mode})→快照文本；b.click(ref 或文字)；b.fill(ref,text,{submit,clear})（别名 type）；b.select(ref,value)；" +
@@ -402,7 +402,7 @@ export default function (pi: ExtensionAPI) {
       "scroll(direction/amount 或 ref) | back | forward | reload | home | wait(ms 或 text) | eval(script) | screenshot | show | hide | close | reload_ui | status | " +
       "tabs | new_tab(url) | switch_tab(tab) | close_tab(tab) | downloads(最近下载及状态，文件存到手机 下载/PiMet/)。快照里可交互元素编号为 [e3]，ref 只在最近一次快照内有效，页面变化后要重新 snapshot。\n" +
       "【标签】默认在 Pi 专属标签里操作（不打扰用户正在看的页面，共用登录 Cookie）；只有用户明确要你操作他当前页面时才传 tab=\"user\"。" +
-      "用户把窗口收起（最小化）时不要用 show 把它弹出来，照常在后台操作即可（此时不能截图）。" +
+      "浏览器窗口不在前台时不要用 show 把它切过来打断用户，照常在后台操作即可（此时只能 JS 点击、不能截图）。" +
       "如果返回「用户已叫停」，立即停止所有浏览器操作并告诉用户，等用户重新允许。\n" +
       "遇到验证码、支付、登录确认等需要用户本人操作的情况，停下来让用户在窗口里完成。" +
       "这个浏览器的按钮、配色、首页、用户脚本、自定义页面也都可以由你修改，方法见 pimet-browser 技能。",
