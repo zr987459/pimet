@@ -545,6 +545,8 @@ public final class FloatingApps {
         volatile String errorDesc = "";
         /** 主框架 HTTP 状态码（仅 >=400 时记录，0 = 未知/正常） */
         volatile int httpStatus = 0;
+        /** 用户最后一次在这个标签里真实点击/按键的时间（SystemClock.uptimeMillis），0 = 从没有 */
+        volatile long userInputAt = 0;
         /** 同一标签上的 Pi 操作串行；不同标签可以并行 */
         final Object lock = new Object();
         int busy = 0;            // 只在主线程读写
@@ -1460,7 +1462,20 @@ public final class FloatingApps {
 
     @SuppressLint({"ClickableViewAccessibility", "SetJavaScriptEnabled", "JavascriptInterface"})
     private WebView createWebView(Tab t) {
-        WebView w = new WebView(vctx);
+        WebView w = new WebView(vctx) {
+            // 记录用户真实触摸 / 按键（Pi 的合成触摸 sAgentTouch=true 不算），BrowserAgent 据此判断「用户接手了」
+            @Override
+            public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+                if (!sAgentTouch && e.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) t.userInputAt = android.os.SystemClock.uptimeMillis();
+                return super.dispatchTouchEvent(e);
+            }
+
+            @Override
+            public boolean dispatchKeyEvent(android.view.KeyEvent e) {
+                if (!sAgentTouch && e.getAction() == android.view.KeyEvent.ACTION_DOWN && e.getDeviceId() != android.view.KeyCharacterMap.VIRTUAL_KEYBOARD) t.userInputAt = android.os.SystemClock.uptimeMillis();
+                return super.dispatchKeyEvent(e);
+            }
+        };
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
