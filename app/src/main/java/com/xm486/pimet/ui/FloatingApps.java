@@ -1472,7 +1472,11 @@ public final class FloatingApps {
 
             @Override
             public boolean dispatchKeyEvent(android.view.KeyEvent e) {
-                if (!sAgentTouch && e.getAction() == android.view.KeyEvent.ACTION_DOWN && e.getDeviceId() != android.view.KeyCharacterMap.VIRTUAL_KEYBOARD) t.userInputAt = android.os.SystemClock.uptimeMillis();
+                int kc = e.getKeyCode();
+                boolean sysKey = kc == android.view.KeyEvent.KEYCODE_VOLUME_UP || kc == android.view.KeyEvent.KEYCODE_VOLUME_DOWN || kc == android.view.KeyEvent.KEYCODE_VOLUME_MUTE
+                        || kc == android.view.KeyEvent.KEYCODE_POWER || kc == android.view.KeyEvent.KEYCODE_HEADSETHOOK || kc == android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                        || kc == android.view.KeyEvent.KEYCODE_CAMERA;
+                if (!sAgentTouch && !sysKey && e.getAction() == android.view.KeyEvent.ACTION_DOWN && e.getDeviceId() != android.view.KeyCharacterMap.VIRTUAL_KEYBOARD) t.userInputAt = android.os.SystemClock.uptimeMillis();
                 return super.dispatchKeyEvent(e);
             }
         };

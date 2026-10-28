@@ -65,7 +65,7 @@ public final class BrowserAgent {
     /** 请求超时后留给收尾（快照、回传错误）的时间 */
     private static final long GRACE_MS = 8000;
     private static final long LOCK_WAIT_MAX = 15000;
-    private static final long SETTLE_MAX = 3000;
+    private static final long SETTLE_MAX = 1500;
 
     private BrowserAgent() {}
 
@@ -573,6 +573,8 @@ public final class BrowserAgent {
                 return true;
             }
             if (SystemClock.uptimeMillis() >= end) return false;
+            // 3 秒内导航都没开始（下载链接 / 跳外部 App）就不再干等
+            if (tab.navSeq == seq && !tab.loading && SystemClock.uptimeMillis() - (end - maxMs) > 3000) return false;
             SystemClock.sleep(100);
         }
     }
@@ -598,10 +600,11 @@ public final class BrowserAgent {
             return e;
         }
         if (!loaded) {
-            JSONObject e = err("页面在 " + timeoutOf() + "ms 内没有加载完（当前 " + tab.url + "）。可以先 snapshot 看已加载的部分，或加大 timeout 重试")
-                    .put("loaded", false);
-            if (http >= 400) e.put("http_status", http);
-            return e;
+            // 超时不算失败（慢站点/广告/长连接常见）：返回成功 + loaded:false，TS 会给出提示
+            out.put("loaded", false);
+            if (http >= 400) out.put("http_status", http);
+            out.put("result", okText + "（" + timeoutOf() + "ms 内未完全加载完，可先 snapshot 看已加载的部分）");
+            return null;
         }
         out.put("loaded", true);
         if (http >= 400) out.put("http_status", http);
@@ -634,7 +637,8 @@ public final class BrowserAgent {
                 r = null;
             }
             if (r != null && r.optBoolean("nofn")) { fallback = true; break; }
-            if (r != null && r.optBoolean("stable")) break;
+            if (r != null && (r.optBoolean("stable")
+                    || (r.optInt("pending", 1) == 0 && SystemClock.uptimeMillis() - start >= 700))) break;
             sleep(150);
         }
         if (fallback) {
@@ -771,7 +775,7 @@ public final class BrowserAgent {
             if (nativeOk && armed) {
                 // 触摸事件在渲染进程里异步分发：最多等 500ms 看目标是否收到
                 int hit = 0;
-                long until = SystemClock.uptimeMillis() + 500;
+                long until = SystemClock.uptimeMillis() + 1000;
                 while (true) {
                     sleep(60);
                     if (tab.navSeq != seq || tab.loading) { hit = -1; break; }
@@ -780,8 +784,8 @@ public final class BrowserAgent {
                 }
                 evalRawSafe(tab, HIT_OFF_JS, 2000);
                 if (hit == 0 && tab.navSeq == seq && !tab.loading) {
-                    nativeOk = false;
-                    note = "（真实触摸没有送达目标，已改用 JS 点击）";
+                    // 不自动补 JS 点击：触摸可能只是还没分发或被页面拦了监听，补点会变成双击
+                    note = "（未确认触摸送达目标；页面若没反应，用 js=true 重试）";
                 } else if (hit == 2) {
                     note = "；注意：触摸落在了" + (coveredBy.isEmpty() ? "遮挡物" : "遮挡物「" + coveredBy + "」") + "上，目标没有收到点击，必要时加 js=true 重试";
                 }
@@ -800,7 +804,7 @@ public final class BrowserAgent {
 
     /** 在目标元素所在窗口挂一次性捕获监听，记录触摸是否落在目标上：1 = 目标，2 = 其它元素，0 = 没收到 */
     private static final String HIT_ARM_JS = "(function(){try{var el=window.__pimetTarget;window.__pimetHit=0;if(window.__pimetHitOff)window.__pimetHitOff();"
-            + "if(!el)return 0;var W=(el.ownerDocument&&el.ownerDocument.defaultView)||window;var ev=['pointerdown','touchstart','mousedown'];"
+            + "if(!el)return 0;var W=(el.ownerDocument&&el.ownerDocument.defaultView)||window;var ev=['pointerdown','touchstart','mousedown','click'];"
             + "function h(e){var p=e.composedPath?e.composedPath():[];var t=e.target;"
             + "if(t===el||p.indexOf(el)>=0||(t&&t.nodeType===1&&el.contains&&el.contains(t)))window.__pimetHit=1;else if(!window.__pimetHit)window.__pimetHit=2;}"
             + "for(var i=0;i<ev.length;i++)W.addEventListener(ev[i],h,true);"
@@ -896,7 +900,9 @@ public final class BrowserAgent {
         // 校验：A.type 回读了 value（密码框只回 len）
         if (clear && r.has("value") && !r.isNull("value")) {
             String v = r.optString("value");
-            if (!v.equals(text)) {
+            String vt = v.trim(), tt = text.trim();
+            boolean same = vt.equals(tt) || (vt.endsWith("…") && tt.startsWith(vt.substring(0, vt.length() - 1)));
+            if (!same) {
                 res += "（注意：输入框现在的值是「" + (v.length() > 60 ? v.substring(0, 60) + "…" : v) + "」，可能被页面格式化或限制了长度）";
             }
         } else if (clear && r.has("len") && r.optInt("len", -1) != text.length()) {

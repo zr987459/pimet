@@ -715,9 +715,8 @@
       }
     } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       var bi = mkEvent(W, 'beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: text }, 'InputEvent');
-      var go = true;
-      try { go = el.dispatchEvent(bi); } catch (e) {}
-      if (go) {
+      try { el.dispatchEvent(bi); } catch (e) {}
+      {
         var nv = (clear ? '' : el.value) + text;
         var ml = el.maxLength;
         if (ml > 0 && nv.length > ml) nv = nv.slice(0, ml);

@@ -237,7 +237,7 @@ public class AppBridgeManager {
                 }
                 String body = new String(bodyBytes, 0, got, StandardCharsets.UTF_8);
                 if (body.trim().isEmpty()) {
-                    safeWrite(s, 400, err("请求体为空：POST /api/app-control 需要 JSON 正文"));
+                    safeWrite(s, 200, new JSONObject().put("success", true).put("result", "OK")); // 兼容旧版存活检测
                     return;
                 }
 
