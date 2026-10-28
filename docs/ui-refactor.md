@@ -22,3 +22,8 @@
 
 ## 规则
 只在 feature/pi-browser-opt 提交；未经用户确认不合并 main。
+
+## beta.20（插件页对齐 Pi-Web）
+- 插件页改为 模型 / 技能 / 子代理 / 插件 / MCP 五类，直接调用 Pi-Web 本机 API（见 docs/piweb-api.md，客户端 PiWebApi.java），Pi-Web 是唯一真相
+- Pi-Web 未运行时显示「启动 Pi / 重试」
+- 仅插件类变更后提示重载 Pi

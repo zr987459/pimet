@@ -93,6 +93,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -194,7 +195,12 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvPluginEmpty;
     private EditText inputCustomPlugin;
     private View btnInstallCustomPlugin;
-    private int currentPluginCategory = 0;
+    public static final int PLUGIN_CAT_MODELS = 0;
+    public static final int PLUGIN_CAT_SKILLS = 1;
+    public static final int PLUGIN_CAT_SUBAGENTS = 2;
+    public static final int PLUGIN_CAT_PLUGINS = 3;
+    public static final int PLUGIN_CAT_MCP = 4;
+    private int currentPluginCategory = PLUGIN_CAT_MODELS;
     private TextView settingsShizukuStatusTv;
     private View btnSyncAiFromContainer;
 
@@ -5041,101 +5047,85 @@ public class MainActivity extends AppCompatActivity {
         inputCustomPlugin = findViewById(R.id.inputCustomPlugin);
         btnInstallCustomPlugin = findViewById(R.id.btnInstallCustomPlugin);
 
-        if (chipCatAll != null) chipCatAll.setOnClickListener(v -> selectPluginCategory(0));
-        if (chipCatExtensions != null) chipCatExtensions.setOnClickListener(v -> selectPluginCategory(1));
-        if (chipCatSkills != null) chipCatSkills.setOnClickListener(v -> selectPluginCategory(2));
-        if (chipCatMcp != null) {
-            chipCatMcp.setVisibility(View.GONE);
-            chipCatMcp.setOnClickListener(v -> selectPluginCategory(3));
+        // 隐藏已移除的商店和旧版多余操作按钮，仅保留“刷新列表”
+        View chipCatStore = findViewById(R.id.chipCatStore);
+        if (chipCatStore != null) chipCatStore.setVisibility(View.GONE);
+
+        View btnPluginStore = findViewById(R.id.btnPluginStore);
+        if (btnPluginStore != null) btnPluginStore.setVisibility(View.GONE);
+
+        View btnCheckUpdates = findViewById(R.id.btnCheckUpdates);
+        if (btnCheckUpdates != null) btnCheckUpdates.setVisibility(View.GONE);
+
+        View btnUpdateAllPlugins = findViewById(R.id.btnUpdateAllPlugins);
+        if (btnUpdateAllPlugins != null) btnUpdateAllPlugins.setVisibility(View.GONE);
+
+        View btnAddPluginConfig = findViewById(R.id.btnAddPluginConfig);
+        if (btnAddPluginConfig != null) btnAddPluginConfig.setVisibility(View.GONE);
+
+        // 映射 5 大分类 chip：模型、技能、子代理、插件、MCP
+        if (chipCatAll != null) {
+            chipCatAll.setText("🧠 模型");
+            chipCatAll.setVisibility(View.VISIBLE);
+            chipCatAll.setOnClickListener(v -> selectPluginCategory(PLUGIN_CAT_MODELS));
+        }
+        if (chipCatSkills != null) {
+            chipCatSkills.setText("⚡ 技能");
+            chipCatSkills.setVisibility(View.VISIBLE);
+            chipCatSkills.setOnClickListener(v -> selectPluginCategory(PLUGIN_CAT_SKILLS));
         }
         if (chipCatSubagents != null) {
-            chipCatSubagents.setVisibility(View.GONE);
-            chipCatSubagents.setOnClickListener(v -> selectPluginCategory(4));
+            chipCatSubagents.setText("🤖 子代理");
+            chipCatSubagents.setVisibility(View.VISIBLE);
+            chipCatSubagents.setOnClickListener(v -> selectPluginCategory(PLUGIN_CAT_SUBAGENTS));
+        }
+        if (chipCatExtensions != null) {
+            chipCatExtensions.setText("🧩 插件");
+            chipCatExtensions.setVisibility(View.VISIBLE);
+            chipCatExtensions.setOnClickListener(v -> selectPluginCategory(PLUGIN_CAT_PLUGINS));
+        }
+        if (chipCatMcp != null) {
+            chipCatMcp.setText("🔌 MCP");
+            chipCatMcp.setVisibility(View.VISIBLE);
+            chipCatMcp.setOnClickListener(v -> selectPluginCategory(PLUGIN_CAT_MCP));
+        }
+
+        // 调整视觉顺序：模型 ➔ 技能 ➔ 子代理 ➔ 插件 ➔ MCP
+        if (chipCatAll != null && chipCatAll.getParent() instanceof ViewGroup) {
+            ViewGroup chipContainer = (ViewGroup) chipCatAll.getParent();
+            chipContainer.removeView(chipCatAll);
+            chipContainer.removeView(chipCatSkills);
+            chipContainer.removeView(chipCatSubagents);
+            chipContainer.removeView(chipCatExtensions);
+            chipContainer.removeView(chipCatMcp);
+            if (chipCatStore != null) chipContainer.removeView(chipCatStore);
+
+            chipContainer.addView(chipCatAll);
+            chipContainer.addView(chipCatSkills);
+            chipContainer.addView(chipCatSubagents);
+            chipContainer.addView(chipCatExtensions);
+            chipContainer.addView(chipCatMcp);
         }
 
         if (btnRefreshPlugins != null) {
             btnRefreshPlugins.setOnClickListener(v -> {
-                Toast.makeText(this, "正在双向同步并扫描插件与扩展...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "正在从 Pi-Web 刷新列表...", Toast.LENGTH_SHORT).show();
                 refreshPluginsList(currentPluginCategory);
             });
-        }
-
-        View btnCheckUpdates = findViewById(R.id.btnCheckUpdates);
-        if (btnCheckUpdates != null) {
-            btnCheckUpdates.setOnClickListener(v -> {
-                Toast.makeText(this, "正在联网检查最新插件版本...", Toast.LENGTH_SHORT).show();
-                new Thread(() -> {
-                    List<PluginManager.PluginItem> all = PluginManager.getInstalledPlugins(this);
-                    PluginManager.checkUpdatesAsync(this, all, updateCount -> {
-                        mainHandler.post(() -> {
-                            cachedPluginItems = all;
-                            if (updateCount > 0) {
-                                Toast.makeText(this, "发现 " + updateCount + " 个插件有新版本发布！", Toast.LENGTH_SHORT).show();
-                            } else {
-                                Toast.makeText(this, "已检查：当前所有插件均为最新版本 ✔", Toast.LENGTH_SHORT).show();
-                            }
-                            updatePluginListView(all, currentPluginCategory);
-                        });
-                    });
-                }).start();
-            });
-        }
-
-        View btnUpdateAllPlugins = findViewById(R.id.btnUpdateAllPlugins);
-        if (btnUpdateAllPlugins != null) {
-            btnUpdateAllPlugins.setOnClickListener(v -> {
-                Toast.makeText(this, "正在更新容器内插件与依赖包...", Toast.LENGTH_LONG).show();
-                new Thread(() -> {
-                    boolean ok = PluginManager.updateAllPlugins(this);
-                    mainHandler.post(() -> {
-                        Toast.makeText(this, ok ? "✔ 插件更新流程完成！" : "插件更新结束", Toast.LENGTH_SHORT).show();
-                        refreshPluginsList(currentPluginCategory);
-                    });
-                }).start();
-            });
-        }
-
-        View btnAddPluginConfig = findViewById(R.id.btnAddPluginConfig);
-        if (btnAddPluginConfig != null) {
-            btnAddPluginConfig.setOnClickListener(v -> showAddPluginConfigDialog());
-        }
-
-        View btnPluginStore = findViewById(R.id.btnPluginStore);
-        if (btnPluginStore != null) {
-            btnPluginStore.setVisibility(View.GONE);
-        }
-
-        View chipCatStore = findViewById(R.id.chipCatStore);
-        if (chipCatStore != null) {
-            chipCatStore.setVisibility(View.GONE);
         }
 
         if (btnInstallCustomPlugin != null) {
             btnInstallCustomPlugin.setOnClickListener(v -> {
                 String input = inputCustomPlugin != null ? inputCustomPlugin.getText().toString().trim() : "";
                 if (input.isEmpty()) {
-                    Toast.makeText(this, "请输入包名、Git 链接、Skill 网址或安装命令", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "请输入包名、仓库地址、命令或配置", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                Toast.makeText(this, "正在智能分析输入类型并执行安装...", Toast.LENGTH_SHORT).show();
-                new Thread(() -> {
-                    PluginManager.SmartInstallResult res = PluginManager.smartInstall(this, input);
-                    mainHandler.post(() -> {
-                        if (res.success) {
-                            Toast.makeText(this, "【" + res.detectedType + "】" + res.message, Toast.LENGTH_LONG).show();
-                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
-                            refreshPluginsList(currentPluginCategory);
-                            promptReloadPi();
-                        } else {
-                            Toast.makeText(this, "安装失败: " + res.message, Toast.LENGTH_LONG).show();
-                            refreshPluginsList(currentPluginCategory);
-                        }
-                    });
-                }).start();
+                handleInstallPlugin(currentPluginCategory, input);
             });
         }
 
-        selectPluginCategory(0);
+        selectPluginCategory(PLUGIN_CAT_MODELS);
     }
 
     private void selectPluginCategory(int index) {
@@ -5144,12 +5134,13 @@ public class MainActivity extends AppCompatActivity {
         int activeText = palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF;
         int normalText = palette.textMuted;
 
-        updateCategoryChip(chipCatAll, index == 0, palette, activeText, normalText);
-        updateCategoryChip(chipCatExtensions, index == 1, palette, activeText, normalText);
-        updateCategoryChip(chipCatSkills, index == 2, palette, activeText, normalText);
-        updateCategoryChip(chipCatMcp, index == 3, palette, activeText, normalText);
-        updateCategoryChip(chipCatSubagents, index == 4, palette, activeText, normalText);
+        updateCategoryChip(chipCatAll, index == PLUGIN_CAT_MODELS, palette, activeText, normalText);
+        updateCategoryChip(chipCatSkills, index == PLUGIN_CAT_SKILLS, palette, activeText, normalText);
+        updateCategoryChip(chipCatSubagents, index == PLUGIN_CAT_SUBAGENTS, palette, activeText, normalText);
+        updateCategoryChip(chipCatExtensions, index == PLUGIN_CAT_PLUGINS, palette, activeText, normalText);
+        updateCategoryChip(chipCatMcp, index == PLUGIN_CAT_MCP, palette, activeText, normalText);
 
+        updatePluginInputHint(index);
         refreshPluginsList(index);
     }
 
@@ -5164,242 +5155,238 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private List<PluginManager.PluginItem> cachedPluginItems = new ArrayList<>();
+    private void updatePluginInputHint(int category) {
+        if (inputCustomPlugin == null || btnInstallCustomPlugin == null) return;
+        switch (category) {
+            case PLUGIN_CAT_MODELS:
+                inputCustomPlugin.setHint("模型在工作台自动发现，或输入 NPM/Git 安装模型插件");
+                if (btnInstallCustomPlugin instanceof TextView) {
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 智能识别类型并拉取安装");
+                }
+                break;
+            case PLUGIN_CAT_SKILLS:
+                inputCustomPlugin.setHint("输入技能包名或 GitHub 仓库 (如 @agent/skill-name)");
+                if (btnInstallCustomPlugin instanceof TextView) {
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 安装 Skill 专家技能");
+                }
+                break;
+            case PLUGIN_CAT_SUBAGENTS:
+                inputCustomPlugin.setHint("输入智能体配置或 NPM/Git 包名");
+                if (btnInstallCustomPlugin instanceof TextView) {
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 智能识别类型并拉取安装");
+                }
+                break;
+            case PLUGIN_CAT_PLUGINS:
+                inputCustomPlugin.setHint("输入 npm 插件包名或 Git 地址 (如 @pi-plugin/...)");
+                if (btnInstallCustomPlugin instanceof TextView) {
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 安装插件 (Plugin)");
+                }
+                break;
+            case PLUGIN_CAT_MCP:
+                inputCustomPlugin.setHint("输入 MCP 启动命令 (如 npx -y @modelcontextprotocol/server-xxx)");
+                if (btnInstallCustomPlugin instanceof TextView) {
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 新增 MCP 服务器");
+                }
+                break;
+        }
+    }
+
+    private void handleInstallPlugin(int category, String input) {
+        Toast.makeText(this, "正在处理安装请求...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                switch (category) {
+                    case PLUGIN_CAT_SKILLS: {
+                        JSONObject body = new JSONObject();
+                        body.put("package", input);
+                        body.put("scope", "global");
+                        body.put("cwd", getEffectiveCwd());
+                        PiWebApi.post(MainActivity.this, "/api/skills/install", body);
+                        mainHandler.post(() -> {
+                            Toast.makeText(MainActivity.this, "✔ Skill 技能已成功安装！", Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                            refreshPluginsList(currentPluginCategory);
+                        });
+                        break;
+                    }
+                    case PLUGIN_CAT_PLUGINS: {
+                        JSONObject body = new JSONObject();
+                        body.put("cwd", getEffectiveCwd());
+                        body.put("action", "install");
+                        body.put("source", input);
+                        body.put("scope", "global");
+                        PiWebApi.post(MainActivity.this, "/api/plugins", body);
+                        mainHandler.post(() -> {
+                            Toast.makeText(MainActivity.this, "✔ 插件已成功安装！", Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                            refreshPluginsList(currentPluginCategory);
+                            promptReloadPi();
+                        });
+                        break;
+                    }
+                    case PLUGIN_CAT_MCP: {
+                        JSONObject body = new JSONObject();
+                        body.put("cwd", getEffectiveCwd());
+                        body.put("action", "add");
+                        body.put("scope", "global");
+                        body.put("text", input);
+                        PiWebApi.post(MainActivity.this, "/api/mcp", body);
+                        mainHandler.post(() -> {
+                            Toast.makeText(MainActivity.this, "✔ MCP 外部服务已成功添加！", Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                            refreshPluginsList(currentPluginCategory);
+                        });
+                        break;
+                    }
+                    default: {
+                        PluginManager.SmartInstallResult res = PluginManager.smartInstall(MainActivity.this, input);
+                        mainHandler.post(() -> {
+                            if (res.success) {
+                                Toast.makeText(MainActivity.this, "【" + res.detectedType + "】" + res.message, Toast.LENGTH_LONG).show();
+                                if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                                refreshPluginsList(currentPluginCategory);
+                                if ("Plugin".equalsIgnoreCase(res.detectedType) || "Extension".equalsIgnoreCase(res.detectedType)) {
+                                    promptReloadPi();
+                                }
+                            } else {
+                                Toast.makeText(MainActivity.this, "安装失败: " + res.message, Toast.LENGTH_LONG).show();
+                                refreshPluginsList(currentPluginCategory);
+                            }
+                        });
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    String msg = e.getMessage();
+                    if (msg == null || msg.isEmpty()) msg = e.getClass().getSimpleName();
+                    Toast.makeText(MainActivity.this, "安装/新增失败: " + msg, Toast.LENGTH_LONG).show();
+                    refreshPluginsList(currentPluginCategory);
+                });
+            }
+        }).start();
+    }
 
     private void refreshPluginsList(int category) {
         currentPluginCategory = category;
         new Thread(() -> {
-            List<PluginManager.PluginItem> fresh = PluginManager.getInstalledPlugins(this);
-            if (cachedPluginItems != null && !cachedPluginItems.isEmpty()) {
-                for (PluginManager.PluginItem item : fresh) {
-                    for (PluginManager.PluginItem cached : cachedPluginItems) {
-                        if (item.name.equals(cached.name) && item.type == cached.type) {
-                            item.hasUpdate = cached.hasUpdate;
-                            item.latestVersion = cached.latestVersion;
-                            break;
-                        }
-                    }
+            try {
+                switch (category) {
+                    case PLUGIN_CAT_MODELS:
+                        loadModelsCategory();
+                        break;
+                    case PLUGIN_CAT_SKILLS:
+                        loadSkillsCategory();
+                        break;
+                    case PLUGIN_CAT_SUBAGENTS:
+                        loadSubagentsCategory();
+                        break;
+                    case PLUGIN_CAT_PLUGINS:
+                        loadPluginsCategory();
+                        break;
+                    case PLUGIN_CAT_MCP:
+                        loadMcpCategory();
+                        break;
+                    default:
+                        loadModelsCategory();
+                        break;
                 }
+            } catch (Exception e) {
+                Log.w("MainActivity", "refreshPluginsList failed: " + e.getMessage(), e);
+                mainHandler.post(() -> showPiNotRunningView(e.getMessage()));
             }
-            cachedPluginItems = fresh;
-            updatePluginListView(fresh, category);
         }).start();
     }
 
-    private void updatePluginListView(List<PluginManager.PluginItem> all, int category) {
-        List<PluginManager.PluginItem> filtered = new ArrayList<>();
-        for (PluginManager.PluginItem item : all) {
-            if (category == 0) {
-                filtered.add(item);
-            } else if (category == 1 && item.type == PluginManager.PluginItem.TYPE_EXTENSION) {
-                filtered.add(item);
-            } else if (category == 2 && item.type == PluginManager.PluginItem.TYPE_SKILL) {
-                filtered.add(item);
-            } else if (category == 3 && item.type == PluginManager.PluginItem.TYPE_MCP) {
-                filtered.add(item);
-            } else if (category == 4 && item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
-                filtered.add(item);
+    private String getEffectiveCwd() {
+        try {
+            com.xm486.pimet.pet.PetMemoryManager.MainSessionInfo info =
+                    com.xm486.pimet.pet.PetMemoryManager.getMainSessionInfo(this);
+            if (info != null && info.cwd != null && !info.cwd.trim().isEmpty()) {
+                return info.cwd.trim();
             }
-        }
-        mainHandler.post(() -> {
-            if (layoutPluginItems == null) return;
-            layoutPluginItems.removeAllViews();
-            if (filtered.isEmpty()) {
-                if (tvPluginEmpty != null) {
-                    tvPluginEmpty.setVisibility(View.VISIBLE);
-                    tvPluginEmpty.setText("容器内暂无已安装的插件或技能。\n请在上方输入框粘贴 npm 包名或 Git 地址安装，或直接在工作台 / 终端中通过 pi install 安装。");
-                }
-            } else {
-                if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
-                for (PluginManager.PluginItem item : filtered) {
-                    layoutPluginItems.addView(createPluginItemView(item));
-                }
-            }
-        });
+        } catch (Throwable ignored) {}
+        return "/root";
     }
 
-    private View createPluginItemView(PluginManager.PluginItem item) {
+    private void showPiNotRunningView(String errorMsg) {
+        if (layoutPluginItems == null) return;
+        layoutPluginItems.removeAllViews();
+        if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+
         ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(this);
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
         card.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
-        card.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+        card.setPadding(dpToPx(24), dpToPx(32), dpToPx(24), dpToPx(32));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dpToPx(8);
+        lp.topMargin = dpToPx(24);
         card.setLayoutParams(lp);
 
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView icon = new TextView(this);
+        icon.setText("⚠️");
+        icon.setTextSize(36f);
+        icon.setGravity(Gravity.CENTER);
+        card.addView(icon);
 
         TextView title = new TextView(this);
-        title.setText(item.name);
+        title.setText("Pi 未运行");
         title.setTextColor(palette.text);
-        title.setTextSize(14f);
+        title.setTextSize(16f);
         title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
-        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
-        title.setLayoutParams(tLp);
-        header.addView(title);
-
-        TextView badge = new TextView(this);
-        badge.setText(item.getTypeName());
-        badge.setTextColor(palette.accent);
-        badge.setTextSize(11f);
-        badge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        badge.setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2));
-        header.addView(badge);
-
-        TextView stateBadge = new TextView(this);
-        stateBadge.setText(item.enabled ? "已启用" : "已停用");
-        stateBadge.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
-        stateBadge.setTextSize(11f);
-        stateBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-        stateBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
-        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
+        title.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams tLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sbLp.leftMargin = dpToPx(8);
-        stateBadge.setLayoutParams(sbLp);
-        header.addView(stateBadge);
-
-        if (item.version != null && !item.version.isEmpty()) {
-            TextView vBadge = new TextView(this);
-            if (item.hasUpdate && item.latestVersion != null && !item.latestVersion.isEmpty()) {
-                vBadge.setText("v" + item.version + " ➔ v" + item.latestVersion);
-                vBadge.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
-            } else {
-                vBadge.setText("v" + item.version);
-                vBadge.setTextColor(palette.textMuted);
-            }
-            vBadge.setTextSize(11f);
-            vBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
-            vBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
-            LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            vbLp.leftMargin = dpToPx(8);
-            vBadge.setLayoutParams(vbLp);
-            header.addView(vBadge);
-        }
-
-        card.addView(header);
+        tLp.topMargin = dpToPx(8);
+        title.setLayoutParams(tLp);
+        card.addView(title);
 
         TextView desc = new TextView(this);
-        StringBuilder sbDesc = new StringBuilder();
-        if (item.chineseDesc != null && !item.chineseDesc.isEmpty()) {
-            sbDesc.append("📌 ").append(item.chineseDesc).append("\n");
-        }
-        if (item.description != null && !item.description.isEmpty() && !item.description.equals(item.chineseDesc)) {
-            sbDesc.append("ℹ️ ").append(item.description).append("\n");
-        }
-        sbDesc.append("📁 路径: ").append(item.path);
-        desc.setText(sbDesc.toString());
+        desc.setText("Pi-Web 服务暂未在 127.0.0.1:" + PiWebApi.getPort(this) + " 运行或请求无响应。
+请先启动 Pi 服务后再管理生态配置。");
         desc.setTextColor(palette.textMuted);
         desc.setTextSize(12f);
+        desc.setGravity(Gravity.CENTER);
         desc.setLineSpacing(dpToPx(2), 1f);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         dLp.topMargin = dpToPx(8);
         desc.setLayoutParams(dLp);
         card.addView(desc);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.END);
-        LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        aLp.topMargin = dpToPx(8);
-        actions.setLayoutParams(aLp);
+        // 启动 Pi 按钮
+        TextView btnStart = new TextView(this);
+        btnStart.setText("🚀 启动 Pi");
+        btnStart.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+        btnStart.setTextSize(14f);
+        btnStart.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        btnStart.setBackground(ThemeManager.createPrimaryButtonDrawable(this, palette, 8f));
+        btnStart.setGravity(Gravity.CENTER);
+        btnStart.setPadding(dpToPx(24), dpToPx(10), dpToPx(24), dpToPx(10));
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bLp.topMargin = dpToPx(16);
+        btnStart.setLayoutParams(bLp);
+        btnStart.setOnClickListener(v -> startPiWebService());
+        card.addView(btnStart);
 
-        // 0. 启停开关 (方便用户随时启用或停用插件)
-        TextView btnToggle = new TextView(this);
-        btnToggle.setText(item.enabled ? "🟢 启停: 开" : "⏸ 启停: 关");
-        btnToggle.setTextColor(item.enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E));
-        btnToggle.setTextSize(12f);
-        btnToggle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
-        btnToggle.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnToggle.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
-        btnToggle.setOnClickListener(v -> {
-            boolean nextState = !item.enabled;
-            boolean ok = PluginManager.setPluginEnabled(this, item, nextState);
-            if (ok) {
-                Toast.makeText(this, (nextState ? "✔ 已启用: " : "⏸ 已停用: ") + item.name, Toast.LENGTH_SHORT).show();
-                refreshPluginsList(currentPluginCategory);
-                promptReloadPi();
-            } else {
-                Toast.makeText(this, "切换状态失败", Toast.LENGTH_SHORT).show();
-            }
-        });
-        actions.addView(btnToggle);
+        // 重试连接按钮
+        TextView btnRetry = new TextView(this);
+        btnRetry.setText("🔄 重试连接");
+        btnRetry.setTextColor(palette.accent);
+        btnRetry.setTextSize(12f);
+        btnRetry.setGravity(Gravity.CENTER);
+        btnRetry.setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8));
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rLp.topMargin = dpToPx(8);
+        btnRetry.setLayoutParams(rLp);
+        btnRetry.setOnClickListener(v -> refreshPluginsList(currentPluginCategory));
+        card.addView(btnRetry);
 
-        View spacingToggle = new View(this);
-        actions.addView(spacingToggle, new LinearLayout.LayoutParams(dpToPx(6), 1));
-
-        // 1. ⚙️ 配置/查看按钮
-        TextView btnConfig = new TextView(this);
-        btnConfig.setText("⚙️ 配置/详情");
-        btnConfig.setTextColor(palette.text);
-        btnConfig.setTextSize(12f);
-        btnConfig.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnConfig.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
-        btnConfig.setOnClickListener(v -> showEditPluginConfigDialog(item));
-        actions.addView(btnConfig);
-
-        // 2. 🆙 更新按钮 (仅当有明确新版本时显示)
-        if (item.hasUpdate) {
-            View spacing1 = new View(this);
-            actions.addView(spacing1, new LinearLayout.LayoutParams(dpToPx(6), 1));
-
-            TextView btnUpdate = new TextView(this);
-            btnUpdate.setText(item.latestVersion.isEmpty() ? "🆙 更新插件" : ("🆙 升级至 v" + item.latestVersion));
-            btnUpdate.setTextColor(palette.isDark ? 0xFF3FB950 : 0xFF1A7F37);
-            btnUpdate.setTextSize(12f);
-            btnUpdate.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-            btnUpdate.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
-            btnUpdate.setOnClickListener(v -> {
-                Toast.makeText(this, "正在更新: " + item.name + " ...", Toast.LENGTH_SHORT).show();
-                new Thread(() -> {
-                    boolean ok = PluginManager.updatePlugin(this, item);
-                    mainHandler.post(() -> {
-                        Toast.makeText(this, ok ? "✔ 插件已更新: " + item.name : "更新失败，请在终端查看输出", Toast.LENGTH_SHORT).show();
-                        item.hasUpdate = false;
-                        refreshPluginsList(currentPluginCategory);
-                    });
-                }).start();
-            });
-            actions.addView(btnUpdate);
-        }
-
-        View spacing2 = new View(this);
-        actions.addView(spacing2, new LinearLayout.LayoutParams(dpToPx(6), 1));
-
-        // 3. 🗑️ 移除按钮
-        TextView btnDelete = new TextView(this);
-        btnDelete.setText("🗑️ 移除");
-        btnDelete.setTextColor(palette.isDark ? 0xFFF85149 : 0xFFCF222E);
-        btnDelete.setTextSize(12f);
-        btnDelete.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
-        btnDelete.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
-        btnDelete.setOnClickListener(v -> {
-            new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                    .setTitle("确认移除插件")
-                    .setMessage("确定要从容器中删除 " + item.name + " (" + item.getTypeName() + ") 吗？")
-                    .setPositiveButton("移除", (d, w) -> {
-                        boolean ok = PluginManager.deletePlugin(this, item);
-                        if (ok) {
-                            Toast.makeText(this, "已移除: " + item.name, Toast.LENGTH_SHORT).show();
-                            refreshPluginsList(currentPluginCategory);
-                            promptReloadPi();
-                        } else {
-                            Toast.makeText(this, "移除失败，请在终端中检查权限", Toast.LENGTH_SHORT).show();
-                        }
-                    })
-                    .setNegativeButton("取消", null)
-                    .show();
-        });
-        actions.addView(btnDelete);
-        card.addView(actions);
-
-        return card;
+        layoutPluginItems.addView(card);
     }
 
     private void promptReloadPi() {
@@ -5411,197 +5398,904 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void showAddPluginConfigDialog() {
-        String[] options = new String[]{
-                "📦 安装插件与扩展 (在上方输入框粘贴 npm 包名/Git 地址)",
-                "🌐 添加 MCP 外部服务 (mcp.json)",
-                "🧠 新建 Skill 专家技能 (SKILL.md)",
-                "🤖 新建 Subagent 子智能体 (.md)",
-                "📄 编辑 settings.json (全局配置)"
-        };
-        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                .setTitle("添加生态配置")
-                .setItems(options, (dialog, which) -> {
-                    switch (which) {
-                        case 0:
-                            Toast.makeText(this, "请在上方输入框粘贴 npm 包名或 Git 地址安装", Toast.LENGTH_LONG).show();
-                            if (inputCustomPlugin != null) {
-                                inputCustomPlugin.requestFocus();
-                            }
-                            break;
-                        case 1:
-                            showAddMcpDialog();
-                            break;
-                        case 2:
-                            showAddSkillDialog();
-                            break;
-                        case 3:
-                            showAddSubagentDialog();
-                            break;
-                        case 4:
-                            showEditGlobalSettingsDialog();
-                            break;
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
+    private LinearLayout createBaseCard(ThemeManager.ThemePalette palette) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(ThemeManager.createCardDrawable(this, palette, 14f));
+        card.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dpToPx(8);
+        card.setLayoutParams(lp);
+        return card;
     }
 
-    private void showAddMcpDialog() {
+    private TextView createBadge(String text, int textColor, ThemeManager.ThemePalette palette) {
+        TextView badge = new TextView(this);
+        badge.setText(text);
+        badge.setTextColor(textColor);
+        badge.setTextSize(11f);
+        badge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
+        badge.setPadding(dpToPx(8), dpToPx(2), dpToPx(8), dpToPx(2));
+        return badge;
+    }
+
+    private TextView createStateBadge(boolean enabled, ThemeManager.ThemePalette palette) {
+        TextView stateBadge = new TextView(this);
+        stateBadge.setText(enabled ? "已启用" : "已停用");
+        stateBadge.setTextColor(enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : palette.textMuted);
+        stateBadge.setTextSize(11f);
+        stateBadge.setBackground(ThemeManager.createBadgeDrawable(this, palette, 4f));
+        stateBadge.setPadding(dpToPx(4), dpToPx(2), dpToPx(4), dpToPx(2));
+        LinearLayout.LayoutParams sbLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sbLp.leftMargin = dpToPx(8);
+        stateBadge.setLayoutParams(sbLp);
+        return stateBadge;
+    }
+
+    private TextView createActionButton(String text, int textColor, ThemeManager.ThemePalette palette) {
+        TextView btn = new TextView(this);
+        btn.setText(text);
+        btn.setTextColor(textColor);
+        btn.setTextSize(12f);
+        btn.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        btn.setBackground(ThemeManager.createSecondaryButtonDrawable(this, palette, 6f));
+        btn.setPadding(dpToPx(12), dpToPx(4), dpToPx(12), dpToPx(4));
+        return btn;
+    }
+
+    private void showSkillContentDialog(String skillName, String content) {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
 
-        final EditText nameInput = createDialogInput("服务名称 (如 fetch 或 mt)", false);
-        final EditText cmdInput = createDialogInput("命令或 HTTP URL (如 npx, uvx, 或 http://127.0.0.1:8788/mcp)", false);
-        final EditText argsInput = createDialogInput("参数或描述 (如 mcp-server-fetch)", false);
-        final EditText envInput = createDialogInput("环境变量或 Headers JSON (可选, 如 {\"API_KEY\":\"...\"})", true);
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(content != null && !content.isEmpty() ? content : "(内容为空)");
+        tv.setTextColor(0xFFF0F6FC);
+        tv.setTextSize(12f);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setLineSpacing(dpToPx(2), 1f);
+        sv.addView(tv);
 
-        layout.addView(createDialogLabel("服务标识名:"));
-        layout.addView(nameInput);
-        layout.addView(createDialogLabel("执行命令或 HTTP 地址:"));
-        layout.addView(cmdInput);
-        layout.addView(createDialogLabel("运行参数 / 描述信息:"));
-        layout.addView(argsInput);
-        layout.addView(createDialogLabel("环境变量 / Headers (JSON 格式):"));
-        layout.addView(envInput);
+        LinearLayout.LayoutParams svLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(320));
+        layout.addView(sv, svLp);
 
         new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                .setTitle("添加 MCP 外部服务")
+                .setTitle("技能文档: " + skillName)
                 .setView(layout)
-                .setPositiveButton("保存并生效", (dialog, which) -> {
-                    String name = nameInput.getText().toString().trim();
-                    String cmd = cmdInput.getText().toString().trim();
-                    String args = argsInput.getText().toString().trim();
-                    String env = envInput.getText().toString().trim();
-                    if (name.isEmpty() || cmd.isEmpty()) {
-                        Toast.makeText(this, "服务名称与执行命令/URL 为必填项", Toast.LENGTH_SHORT).show();
-                        return;
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private void loadModelsCategory() throws Exception {
+        String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
+        JSONObject data = PiWebApi.get(this, "/api/models/enabled?cwd=" + encCwd);
+        final int enabledTotal = data.optInt("enabledTotal", 0);
+        final int availableTotal = data.optInt("availableTotal", 0);
+        final JSONArray providers = data.optJSONArray("providers");
+
+        mainHandler.post(() -> {
+            if (currentPluginCategory != PLUGIN_CAT_MODELS || layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+
+            // 顶部操作栏：启用全部模型按钮与统计信息
+            LinearLayout topBar = new LinearLayout(MainActivity.this);
+            topBar.setOrientation(LinearLayout.HORIZONTAL);
+            topBar.setGravity(Gravity.CENTER_VERTICAL);
+            topBar.setBackground(ThemeManager.createCardDrawable(MainActivity.this, palette, 10f));
+            topBar.setPadding(dpToPx(14), dpToPx(10), dpToPx(14), dpToPx(10));
+            LinearLayout.LayoutParams tbLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            tbLp.bottomMargin = dpToPx(8);
+            topBar.setLayoutParams(tbLp);
+
+            TextView tvStats = new TextView(MainActivity.this);
+            tvStats.setText("已启用 " + enabledTotal + " / " + availableTotal + " 个模型");
+            tvStats.setTextColor(palette.text);
+            tvStats.setTextSize(13f);
+            tvStats.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+            topBar.addView(tvStats, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+            TextView btnEnableAll = new TextView(MainActivity.this);
+            btnEnableAll.setText("✨ 启用全部模型");
+            btnEnableAll.setTextColor(palette.isDark ? 0xFF0D1117 : 0xFFFFFFFF);
+            btnEnableAll.setTextSize(12f);
+            btnEnableAll.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+            btnEnableAll.setBackground(ThemeManager.createPrimaryButtonDrawable(MainActivity.this, palette, 6f));
+            btnEnableAll.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+            btnEnableAll.setOnClickListener(v -> {
+                Toast.makeText(MainActivity.this, "正在启用全部模型...", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        body.put("op", "clear");
+                        PiWebApi.put(MainActivity.this, "/api/models/enabled", body);
+                        mainHandler.post(() -> {
+                            Toast.makeText(MainActivity.this, "✔ 已成功启用全部模型！", Toast.LENGTH_SHORT).show();
+                            refreshPluginsList(PLUGIN_CAT_MODELS);
+                        });
+                    } catch (Exception ex) {
+                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "操作失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                     }
-                    if (!env.isEmpty()) {
+                }).start();
+            });
+            topBar.addView(btnEnableAll);
+            layoutPluginItems.addView(topBar);
+
+            int modelCount = 0;
+            if (providers != null) {
+                for (int pIdx = 0; pIdx < providers.length(); pIdx++) {
+                    JSONObject provider = providers.optJSONObject(pIdx);
+                    if (provider == null) continue;
+                    String providerName = provider.optString("name", provider.optString("id", "未知供应商"));
+                    JSONArray models = provider.optJSONArray("models");
+                    if (models == null) continue;
+
+                    for (int mIdx = 0; mIdx < models.length(); mIdx++) {
+                        JSONObject model = models.optJSONObject(mIdx);
+                        if (model == null) continue;
+                        modelCount++;
+
+                        final String modelId = model.optString("id", "");
+                        final String modelName = model.optString("name", modelId);
+                        final String modelRef = model.optString("ref", modelId);
+                        final boolean enabled = model.optBoolean("enabled", false);
+
+                        LinearLayout card = createBaseCard(palette);
+
+                        // Header
+                        LinearLayout header = new LinearLayout(MainActivity.this);
+                        header.setOrientation(LinearLayout.HORIZONTAL);
+                        header.setGravity(Gravity.CENTER_VERTICAL);
+
+                        TextView title = new TextView(MainActivity.this);
+                        title.setText(modelName);
+                        title.setTextColor(palette.text);
+                        title.setTextSize(14f);
+                        title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                        header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                        TextView badge = createBadge(providerName, palette.accent, palette);
+                        header.addView(badge);
+
+                        TextView stateBadge = createStateBadge(enabled, palette);
+                        header.addView(stateBadge);
+                        card.addView(header);
+
+                        // Ref / Description
+                        TextView desc = new TextView(MainActivity.this);
+                        desc.setText("ID: " + modelRef);
+                        desc.setTextColor(palette.textMuted);
+                        desc.setTextSize(12f);
+                        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                        dLp.topMargin = dpToPx(6);
+                        desc.setLayoutParams(dLp);
+                        card.addView(desc);
+
+                        // Actions
+                        LinearLayout actions = new LinearLayout(MainActivity.this);
+                        actions.setOrientation(LinearLayout.HORIZONTAL);
+                        actions.setGravity(Gravity.END);
+                        LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                        aLp.topMargin = dpToPx(8);
+                        actions.setLayoutParams(aLp);
+
+                        TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
+                                enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+                        btnToggle.setOnClickListener(v -> {
+                            new Thread(() -> {
+                                try {
+                                    JSONObject body = new JSONObject();
+                                    body.put("op", "models");
+                                    JSONArray refs = new JSONArray();
+                                    refs.put(modelRef);
+                                    body.put("refs", refs);
+                                    body.put("enabled", !enabled);
+                                    PiWebApi.put(MainActivity.this, "/api/models/enabled", body);
+                                    mainHandler.post(() -> {
+                                        Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + modelName, Toast.LENGTH_SHORT).show();
+                                        refreshPluginsList(PLUGIN_CAT_MODELS);
+                                    });
+                                } catch (Exception ex) {
+                                    mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                }
+                            }).start();
+                        });
+                        actions.addView(btnToggle);
+                        card.addView(actions);
+
+                        layoutPluginItems.addView(card);
+                    }
+                }
+            }
+
+            if (modelCount == 0) {
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("暂无可用的模型。
+工作台将自动发现配置了 API Key 的 Provider 模型。");
+                }
+            } else {
+                if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+            }
+        });
+    }
+
+    private void loadSkillsCategory() throws Exception {
+        String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
+        JSONObject data = PiWebApi.get(this, "/api/skills?cwd=" + encCwd);
+        final JSONArray skills = data.optJSONArray("skills");
+
+        mainHandler.post(() -> {
+            if (currentPluginCategory != PLUGIN_CAT_SKILLS || layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+
+            if (skills == null || skills.length() == 0) {
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("暂无已安装的技能 (Skills)。
+可在上方输入框粘贴 npm 包名或 GitHub 仓库地址进行安装。");
+                }
+                return;
+            }
+
+            if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+
+            for (int i = 0; i < skills.length(); i++) {
+                JSONObject skill = skills.optJSONObject(i);
+                if (skill == null) continue;
+                final String name = skill.optString("name", "未命名技能");
+                final String descText = skill.optString("description", "");
+                final String filePath = skill.optString("filePath", "");
+                final boolean disabled = skill.optBoolean("disableModelInvocation", false);
+                final boolean enabled = !disabled;
+
+                LinearLayout card = createBaseCard(palette);
+
+                // Header
+                LinearLayout header = new LinearLayout(MainActivity.this);
+                header.setOrientation(LinearLayout.HORIZONTAL);
+                header.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView title = new TextView(MainActivity.this);
+                title.setText(name);
+                title.setTextColor(palette.text);
+                title.setTextSize(14f);
+                title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                TextView badge = createBadge("Skill", palette.accent, palette);
+                header.addView(badge);
+
+                TextView stateBadge = createStateBadge(enabled, palette);
+                header.addView(stateBadge);
+                card.addView(header);
+
+                // Description & path
+                TextView desc = new TextView(MainActivity.this);
+                StringBuilder sb = new StringBuilder();
+                if (!descText.isEmpty()) sb.append(descText).append("
+");
+                if (!filePath.isEmpty()) sb.append("📁 ").append(filePath);
+                desc.setText(sb.toString().trim());
+                desc.setTextColor(palette.textMuted);
+                desc.setTextSize(12f);
+                desc.setLineSpacing(dpToPx(2), 1f);
+                LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                dLp.topMargin = dpToPx(6);
+                desc.setLayoutParams(dLp);
+                card.addView(desc);
+
+                // Actions
+                LinearLayout actions = new LinearLayout(MainActivity.this);
+                actions.setOrientation(LinearLayout.HORIZONTAL);
+                actions.setGravity(Gravity.END);
+                LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                aLp.topMargin = dpToPx(8);
+                actions.setLayoutParams(aLp);
+
+                // 启停
+                TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
+                        enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+                btnToggle.setOnClickListener(v -> {
+                    new Thread(() -> {
                         try {
-                            new org.json.JSONObject(env);
-                        } catch (Throwable e) {
-                            Toast.makeText(this, "环境变量/Headers 必须为有效 JSON 格式: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                            return;
+                            JSONObject body = new JSONObject();
+                            body.put("filePath", filePath);
+                            body.put("disableModelInvocation", enabled);
+                            PiWebApi.patch(MainActivity.this, "/api/skills", body);
+                            mainHandler.post(() -> {
+                                Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + name, Toast.LENGTH_SHORT).show();
+                                refreshPluginsList(PLUGIN_CAT_SKILLS);
+                            });
+                        } catch (Exception ex) {
+                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                        }
+                    }).start();
+                });
+                actions.addView(btnToggle);
+
+                // 查看内容
+                if (!filePath.isEmpty()) {
+                    View space = new View(MainActivity.this);
+                    actions.addView(space, new LinearLayout.LayoutParams(dpToPx(6), 1));
+
+                    TextView btnContent = createActionButton("📄 查看内容", palette.text, palette);
+                    btnContent.setOnClickListener(v -> {
+                        Toast.makeText(MainActivity.this, "正在读取技能文档...", Toast.LENGTH_SHORT).show();
+                        new Thread(() -> {
+                            try {
+                                String encPath = URLEncoder.encode(filePath, "UTF-8");
+                                JSONObject contentObj = PiWebApi.get(MainActivity.this, "/api/skills/content?cwd=" + encCwd + "&filePath=" + encPath);
+                                String content = contentObj.optString("content", "");
+                                mainHandler.post(() -> showSkillContentDialog(name, content));
+                            } catch (Exception ex) {
+                                mainHandler.post(() -> Toast.makeText(MainActivity.this, "读取失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                            }
+                        }).start();
+                    });
+                    actions.addView(btnContent);
+                }
+
+                card.addView(actions);
+                layoutPluginItems.addView(card);
+            }
+        });
+    }
+
+    private void loadSubagentsCategory() throws Exception {
+        String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
+        JSONObject settingsObj = PiWebApi.get(this, "/api/subagents/settings");
+        final boolean globalEnabled = settingsObj.optBoolean("enabled", true);
+
+        JSONObject profilesObj = PiWebApi.get(this, "/api/subagents/profiles?cwd=" + encCwd);
+        final JSONArray profiles = profilesObj.optJSONArray("profiles");
+
+        mainHandler.post(() -> {
+            if (currentPluginCategory != PLUGIN_CAT_SUBAGENTS || layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+
+            // 顶部子代理总开关卡片
+            LinearLayout settingsCard = createBaseCard(palette);
+            LinearLayout sRow = new LinearLayout(MainActivity.this);
+            sRow.setOrientation(LinearLayout.HORIZONTAL);
+            sRow.setGravity(Gravity.CENTER_VERTICAL);
+
+            LinearLayout sTextCol = new LinearLayout(MainActivity.this);
+            sTextCol.setOrientation(LinearLayout.VERTICAL);
+            TextView sTitle = new TextView(MainActivity.this);
+            sTitle.setText("🤖 子代理功能总开关");
+            sTitle.setTextColor(palette.text);
+            sTitle.setTextSize(14f);
+            sTitle.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+            sTextCol.addView(sTitle);
+
+            TextView sSub = new TextView(MainActivity.this);
+            sSub.setText("控制全局是否允许拉起和调度子智能体实例");
+            sSub.setTextColor(palette.textMuted);
+            sSub.setTextSize(11f);
+            sTextCol.addView(sSub);
+            sRow.addView(sTextCol, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+            TextView btnGlobal = createActionButton(globalEnabled ? "🟢 全局: 开" : "⏸ 全局: 关",
+                    globalEnabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+            btnGlobal.setOnClickListener(v -> {
+                new Thread(() -> {
+                    try {
+                        JSONObject body = new JSONObject();
+                        body.put("enabled", !globalEnabled);
+                        PiWebApi.put(MainActivity.this, "/api/subagents/settings", body);
+                        mainHandler.post(() -> {
+                            Toast.makeText(MainActivity.this, (!globalEnabled ? "✔ 已开启子代理总开关" : "⏸ 已关闭子代理总开关"), Toast.LENGTH_SHORT).show();
+                            refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
+                        });
+                    } catch (Exception ex) {
+                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                    }
+                }).start();
+            });
+            sRow.addView(btnGlobal);
+            settingsCard.addView(sRow);
+            layoutPluginItems.addView(settingsCard);
+
+            // Profiles 列表
+            if (profiles == null || profiles.length() == 0) {
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("暂无子代理 Profile 配置。");
+                }
+                return;
+            }
+
+            if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+
+            for (int i = 0; i < profiles.length(); i++) {
+                JSONObject profile = profiles.optJSONObject(i);
+                if (profile == null) continue;
+                final String name = profile.optString("name", "");
+                final String displayName = profile.optString("displayName", name);
+                final String descText = profile.optString("description", "");
+                final String scope = profile.optString("scope", "global");
+                final boolean enabled = profile.optBoolean("enabled", true);
+                final boolean isBuiltin = "builtin".equalsIgnoreCase(scope);
+
+                LinearLayout card = createBaseCard(palette);
+
+                // Header
+                LinearLayout header = new LinearLayout(MainActivity.this);
+                header.setOrientation(LinearLayout.HORIZONTAL);
+                header.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView title = new TextView(MainActivity.this);
+                title.setText(displayName);
+                title.setTextColor(palette.text);
+                title.setTextSize(14f);
+                title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                String scopeLabel = isBuiltin ? "内置" : ("project".equalsIgnoreCase(scope) ? "项目" : "全局");
+                TextView badge = createBadge(scopeLabel, palette.accent, palette);
+                header.addView(badge);
+
+                TextView stateBadge = createStateBadge(enabled, palette);
+                header.addView(stateBadge);
+                card.addView(header);
+
+                // Description
+                if (!descText.isEmpty()) {
+                    TextView desc = new TextView(MainActivity.this);
+                    desc.setText(descText);
+                    desc.setTextColor(palette.textMuted);
+                    desc.setTextSize(12f);
+                    desc.setLineSpacing(dpToPx(2), 1f);
+                    LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    dLp.topMargin = dpToPx(6);
+                    desc.setLayoutParams(dLp);
+                    card.addView(desc);
+                }
+
+                // Actions
+                LinearLayout actions = new LinearLayout(MainActivity.this);
+                actions.setOrientation(LinearLayout.HORIZONTAL);
+                actions.setGravity(Gravity.END);
+                LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                aLp.topMargin = dpToPx(8);
+                actions.setLayoutParams(aLp);
+
+                // 启停
+                TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
+                        enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+                btnToggle.setOnClickListener(v -> {
+                    new Thread(() -> {
+                        try {
+                            JSONObject body = new JSONObject();
+                            body.put("cwd", getEffectiveCwd());
+                            body.put("scope", scope);
+                            body.put("name", name);
+                            body.put("enabled", !enabled);
+                            PiWebApi.patch(MainActivity.this, "/api/subagents/profiles", body);
+                            mainHandler.post(() -> {
+                                Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + displayName, Toast.LENGTH_SHORT).show();
+                                refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
+                            });
+                        } catch (Exception ex) {
+                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                        }
+                    }).start();
+                });
+                actions.addView(btnToggle);
+
+                // 删除 (内置不可删)
+                if (!isBuiltin) {
+                    View space = new View(MainActivity.this);
+                    actions.addView(space, new LinearLayout.LayoutParams(dpToPx(6), 1));
+
+                    TextView btnDelete = createActionButton("🗑️ 删除",
+                            palette.isDark ? 0xFFF85149 : 0xFFCF222E, palette);
+                    btnDelete.setOnClickListener(v -> {
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(MainActivity.this)
+                                .setTitle("确认删除子代理")
+                                .setMessage("确定要删除子代理配置 " + displayName + " 吗？")
+                                .setPositiveButton("删除", (d, w) -> {
+                                    new Thread(() -> {
+                                        try {
+                                            JSONObject body = new JSONObject();
+                                            body.put("cwd", getEffectiveCwd());
+                                            body.put("scope", scope);
+                                            body.put("name", name);
+                                            PiWebApi.delete(MainActivity.this, "/api/subagents/profiles", body);
+                                            mainHandler.post(() -> {
+                                                Toast.makeText(MainActivity.this, "✔ 已删除: " + displayName, Toast.LENGTH_SHORT).show();
+                                                refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
+                                            });
+                                        } catch (Exception ex) {
+                                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "删除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                        }
+                                    }).start();
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    });
+                    actions.addView(btnDelete);
+                }
+
+                card.addView(actions);
+                layoutPluginItems.addView(card);
+            }
+        });
+    }
+
+    private void loadPluginsCategory() throws Exception {
+        String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
+        JSONObject data = PiWebApi.get(this, "/api/plugins?cwd=" + encCwd);
+        final JSONArray packages = data.optJSONArray("packages");
+        final JSONArray standalone = data.optJSONArray("standaloneExtensions");
+
+        mainHandler.post(() -> {
+            if (currentPluginCategory != PLUGIN_CAT_PLUGINS || layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+
+            int totalCount = (packages != null ? packages.length() : 0) + (standalone != null ? standalone.length() : 0);
+            if (totalCount == 0) {
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("暂无已安装的插件或独立扩展。
+请在上方输入 npm 包名或 Git 地址安装。");
+                }
+                return;
+            }
+
+            if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+
+            // 1. 已安装的插件包
+            if (packages != null) {
+                for (int i = 0; i < packages.length(); i++) {
+                    JSONObject pkg = packages.optJSONObject(i);
+                    if (pkg == null) continue;
+
+                    final String source = pkg.optString("source", "");
+                    final String pkgName = pkg.optString("packageName", source);
+                    final String scope = pkg.optString("scope", "global");
+                    final String version = pkg.optString("version", "");
+                    final String descText = pkg.optString("description", "");
+                    final boolean disabled = pkg.optBoolean("disabled", false);
+                    final boolean enabled = !disabled;
+
+                    LinearLayout card = createBaseCard(palette);
+
+                    // Header
+                    LinearLayout header = new LinearLayout(MainActivity.this);
+                    header.setOrientation(LinearLayout.HORIZONTAL);
+                    header.setGravity(Gravity.CENTER_VERTICAL);
+
+                    TextView title = new TextView(MainActivity.this);
+                    title.setText(pkgName);
+                    title.setTextColor(palette.text);
+                    title.setTextSize(14f);
+                    title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                    header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                    TextView badge = createBadge("插件", palette.accent, palette);
+                    header.addView(badge);
+
+                    if (!version.isEmpty()) {
+                        TextView vBadge = createBadge("v" + version, palette.textMuted, palette);
+                        LinearLayout.LayoutParams vbLp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                        vbLp.leftMargin = dpToPx(6);
+                        vBadge.setLayoutParams(vbLp);
+                        header.addView(vBadge);
+                    }
+
+                    TextView stateBadge = createStateBadge(enabled, palette);
+                    header.addView(stateBadge);
+                    card.addView(header);
+
+                    // Description & Source
+                    TextView desc = new TextView(MainActivity.this);
+                    StringBuilder sb = new StringBuilder();
+                    if (!descText.isEmpty()) sb.append(descText).append("
+");
+                    sb.append("📦 来源: ").append(source);
+                    desc.setText(sb.toString());
+                    desc.setTextColor(palette.textMuted);
+                    desc.setTextSize(12f);
+                    desc.setLineSpacing(dpToPx(2), 1f);
+                    LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    dLp.topMargin = dpToPx(6);
+                    desc.setLayoutParams(dLp);
+                    card.addView(desc);
+
+                    // Actions
+                    LinearLayout actions = new LinearLayout(MainActivity.this);
+                    actions.setOrientation(LinearLayout.HORIZONTAL);
+                    actions.setGravity(Gravity.END);
+                    LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    aLp.topMargin = dpToPx(8);
+                    actions.setLayoutParams(aLp);
+
+                    // 启停
+                    TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
+                            enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+                    btnToggle.setOnClickListener(v -> {
+                        new Thread(() -> {
+                            try {
+                                JSONObject body = new JSONObject();
+                                body.put("cwd", getEffectiveCwd());
+                                body.put("action", enabled ? "disable" : "enable");
+                                body.put("source", source);
+                                body.put("scope", scope);
+                                PiWebApi.post(MainActivity.this, "/api/plugins", body);
+                                mainHandler.post(() -> {
+                                    Toast.makeText(MainActivity.this, (enabled ? "⏸ 已停用: " : "✔ 已启用: ") + pkgName, Toast.LENGTH_SHORT).show();
+                                    refreshPluginsList(PLUGIN_CAT_PLUGINS);
+                                    promptReloadPi(); // 只有插件类变更后才弹 promptReloadPi
+                                });
+                            } catch (Exception ex) {
+                                mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                            }
+                        }).start();
+                    });
+                    actions.addView(btnToggle);
+
+                    // 移除
+                    View space = new View(MainActivity.this);
+                    actions.addView(space, new LinearLayout.LayoutParams(dpToPx(6), 1));
+
+                    TextView btnDelete = createActionButton("🗑️ 移除",
+                            palette.isDark ? 0xFFF85149 : 0xFFCF222E, palette);
+                    btnDelete.setOnClickListener(v -> {
+                        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(MainActivity.this)
+                                .setTitle("确认移除插件")
+                                .setMessage("确定要从容器中卸载并移除 " + pkgName + " 吗？")
+                                .setPositiveButton("移除", (d, w) -> {
+                                    new Thread(() -> {
+                                        try {
+                                            JSONObject body = new JSONObject();
+                                            body.put("cwd", getEffectiveCwd());
+                                            body.put("action", "remove");
+                                            body.put("source", source);
+                                            body.put("scope", scope);
+                                            PiWebApi.post(MainActivity.this, "/api/plugins", body);
+                                            mainHandler.post(() -> {
+                                                Toast.makeText(MainActivity.this, "✔ 已成功移除插件: " + pkgName, Toast.LENGTH_SHORT).show();
+                                                refreshPluginsList(PLUGIN_CAT_PLUGINS);
+                                                promptReloadPi(); // 只有插件类变更后才弹 promptReloadPi
+                                            });
+                                        } catch (Exception ex) {
+                                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                        }
+                                    }).start();
+                                })
+                                .setNegativeButton("取消", null)
+                                .show();
+                    });
+                    actions.addView(btnDelete);
+
+                    card.addView(actions);
+                    layoutPluginItems.addView(card);
+                }
+            }
+
+            // 2. 独立扩展 (如内置的 pimet-bridge 等)
+            if (standalone != null) {
+                for (int i = 0; i < standalone.length(); i++) {
+                    JSONObject ext = standalone.optJSONObject(i);
+                    if (ext == null) continue;
+                    String name = ext.optString("name", "");
+                    boolean enabled = ext.optBoolean("enabled", true);
+                    String descText = ext.optString("description", "");
+
+                    LinearLayout card = createBaseCard(palette);
+
+                    LinearLayout header = new LinearLayout(MainActivity.this);
+                    header.setOrientation(LinearLayout.HORIZONTAL);
+                    header.setGravity(Gravity.CENTER_VERTICAL);
+
+                    TextView title = new TextView(MainActivity.this);
+                    title.setText(name);
+                    title.setTextColor(palette.text);
+                    title.setTextSize(14f);
+                    title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                    header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                    TextView badge = createBadge("独立扩展", palette.accent, palette);
+                    header.addView(badge);
+
+                    TextView stateBadge = createStateBadge(enabled, palette);
+                    header.addView(stateBadge);
+                    card.addView(header);
+
+                    if (!descText.isEmpty()) {
+                        TextView desc = new TextView(MainActivity.this);
+                        desc.setText(descText);
+                        desc.setTextColor(palette.textMuted);
+                        desc.setTextSize(12f);
+                        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                        dLp.topMargin = dpToPx(6);
+                        desc.setLayoutParams(dLp);
+                        card.addView(desc);
+                    }
+
+                    layoutPluginItems.addView(card);
+                }
+            }
+        });
+    }
+
+    private void loadMcpCategory() throws Exception {
+        String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
+        JSONObject data = PiWebApi.get(this, "/api/mcp?cwd=" + encCwd);
+        final JSONArray servers = data.optJSONArray("servers");
+
+        mainHandler.post(() -> {
+            if (currentPluginCategory != PLUGIN_CAT_MCP || layoutPluginItems == null) return;
+            layoutPluginItems.removeAllViews();
+            ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
+
+            if (servers == null || servers.length() == 0) {
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("暂无已配置的 MCP 服务器。
+可在上方输入启动命令 (如 npx -y @modelcontextprotocol/server-fetch) 新增。");
+                }
+                return;
+            }
+
+            if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
+
+            for (int i = 0; i < servers.length(); i++) {
+                JSONObject server = servers.optJSONObject(i);
+                if (server == null) continue;
+                final String name = server.optString("name", "未命名服务");
+                final String scope = server.optString("scope", "global");
+                final boolean enabled = server.optBoolean("enabled", true);
+                JSONObject transport = server.optJSONObject("transport");
+
+                LinearLayout card = createBaseCard(palette);
+
+                // Header
+                LinearLayout header = new LinearLayout(MainActivity.this);
+                header.setOrientation(LinearLayout.HORIZONTAL);
+                header.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView title = new TextView(MainActivity.this);
+                title.setText(name);
+                title.setTextColor(palette.text);
+                title.setTextSize(14f);
+                title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+                header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+                TextView badge = createBadge("MCP · " + scope, palette.accent, palette);
+                header.addView(badge);
+
+                TextView stateBadge = createStateBadge(enabled, palette);
+                header.addView(stateBadge);
+                card.addView(header);
+
+                // Transport details
+                StringBuilder sb = new StringBuilder();
+                if (transport != null) {
+                    String type = transport.optString("type", "");
+                    if (!type.isEmpty()) sb.append("协议: ").append(type);
+                    String cmd = transport.optString("command", "");
+                    if (!cmd.isEmpty()) {
+                        if (sb.length() > 0) sb.append(" | ");
+                        sb.append("命令: ").append(cmd);
+                    }
+                    String url = transport.optString("url", "");
+                    if (!url.isEmpty()) {
+                        if (sb.length() > 0) sb.append(" | ");
+                        sb.append("URL: ").append(url);
+                    }
+                    JSONArray args = transport.optJSONArray("args");
+                    if (args != null && args.length() > 0) {
+                        sb.append("
+参数: ");
+                        for (int a = 0; a < args.length(); a++) {
+                            if (a > 0) sb.append(" ");
+                            sb.append(args.optString(a));
                         }
                     }
-                    boolean ok = PluginManager.saveMcpServer(this, name, cmd, args, env);
-                    Toast.makeText(this, ok ? "✔ MCP 服务已添加并生效！" : "添加失败", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
+                }
+                if (sb.length() > 0) {
+                    TextView desc = new TextView(MainActivity.this);
+                    desc.setText(sb.toString());
+                    desc.setTextColor(palette.textMuted);
+                    desc.setTextSize(12f);
+                    desc.setLineSpacing(dpToPx(2), 1f);
+                    LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    dLp.topMargin = dpToPx(6);
+                    desc.setLayoutParams(dLp);
+                    card.addView(desc);
+                }
 
-    private void showAddSkillDialog() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
+                // Actions
+                LinearLayout actions = new LinearLayout(MainActivity.this);
+                actions.setOrientation(LinearLayout.HORIZONTAL);
+                actions.setGravity(Gravity.END);
+                LinearLayout.LayoutParams aLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                aLp.topMargin = dpToPx(8);
+                actions.setLayoutParams(aLp);
 
-        final EditText nameInput = createDialogInput("技能目录名 (如 code-review)", false);
-        final EditText contentInput = createDialogInput("# 技能描述与流程规范\n\n## When to use\n...", true);
-        contentInput.setMinLines(6);
+                // 启停
+                TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
+                        enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
+                btnToggle.setOnClickListener(v -> {
+                    new Thread(() -> {
+                        try {
+                            JSONObject body = new JSONObject();
+                            body.put("cwd", getEffectiveCwd());
+                            body.put("action", enabled ? "disable" : "enable");
+                            body.put("scope", scope);
+                            body.put("name", name);
+                            PiWebApi.post(MainActivity.this, "/api/mcp", body);
+                            mainHandler.post(() -> {
+                                Toast.makeText(MainActivity.this, (enabled ? "⏸ 已停用: " : "✔ 已启用: ") + name, Toast.LENGTH_SHORT).show();
+                                refreshPluginsList(PLUGIN_CAT_MCP);
+                            });
+                        } catch (Exception ex) {
+                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                        }
+                    }).start();
+                });
+                actions.addView(btnToggle);
 
-        layout.addView(createDialogLabel("技能名称:"));
-        layout.addView(nameInput);
-        layout.addView(createDialogLabel("SKILL.md Markdown 内容:"));
-        layout.addView(contentInput);
+                // 移除
+                View space = new View(MainActivity.this);
+                actions.addView(space, new LinearLayout.LayoutParams(dpToPx(6), 1));
 
-        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                .setTitle("新建 Skill 专家技能")
-                .setView(layout)
-                .setPositiveButton("保存", (dialog, which) -> {
-                    String name = nameInput.getText().toString().trim();
-                    String md = contentInput.getText().toString().trim();
-                    if (name.isEmpty() || md.isEmpty()) {
-                        Toast.makeText(this, "技能名称与内容不能为空", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    boolean ok = PluginManager.saveSkill(this, name, md);
-                    Toast.makeText(this, ok ? "✔ Skill 技能已创建！" : "创建失败", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
+                TextView btnDelete = createActionButton("🗑️ 移除",
+                        palette.isDark ? 0xFFF85149 : 0xFFCF222E, palette);
+                btnDelete.setOnClickListener(v -> {
+                    new com.xm486.pimet.ui.Icons.CompatDialogBuilder(MainActivity.this)
+                            .setTitle("确认移除 MCP 服务")
+                            .setMessage("确定要移除 MCP 服务器 " + name + " 吗？")
+                            .setPositiveButton("移除", (d, w) -> {
+                                new Thread(() -> {
+                                    try {
+                                        JSONObject body = new JSONObject();
+                                        body.put("cwd", getEffectiveCwd());
+                                        body.put("action", "remove");
+                                        body.put("scope", scope);
+                                        body.put("name", name);
+                                        PiWebApi.post(MainActivity.this, "/api/mcp", body);
+                                        mainHandler.post(() -> {
+                                            Toast.makeText(MainActivity.this, "✔ 已成功移除 MCP 服务: " + name, Toast.LENGTH_SHORT).show();
+                                            refreshPluginsList(PLUGIN_CAT_MCP);
+                                        });
+                                    } catch (Exception ex) {
+                                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                    }
+                                }).start();
+                            })
+                            .setNegativeButton("取消", null)
+                            .show();
+                });
+                actions.addView(btnDelete);
 
-    private void showAddSubagentDialog() {
-        new com.xm486.pimet.subagent.SubAgentDialog(this).show();
-    }
-
-    private void showEditGlobalSettingsDialog() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
-
-        String currentJson = PluginManager.getGlobalSettings(this);
-        final EditText contentInput = createDialogInput("", true);
-        contentInput.setText(currentJson);
-        contentInput.setMinLines(8);
-        contentInput.setTypeface(Typeface.MONOSPACE);
-
-        layout.addView(createDialogLabel("编辑 ~/.pi/agent/settings.json:"));
-        layout.addView(contentInput);
-
-        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                .setTitle("全局 settings.json 配置")
-                .setView(layout)
-                .setPositiveButton("保存", (dialog, which) -> {
-                    String json = contentInput.getText().toString().trim();
-                    boolean ok = PluginManager.saveGlobalSettings(this, json);
-                    Toast.makeText(this, ok ? "✔ settings.json 已更新" : "保存失败，请检查 JSON 格式", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void showEditPluginConfigDialog(PluginManager.PluginItem item) {
-        if (item.type == PluginManager.PluginItem.TYPE_SUBAGENT) {
-            new com.xm486.pimet.subagent.SubAgentDialog(this).show();
-            return;
-        }
-
-        String content = PluginManager.getPluginConfig(this, item);
-        if (content == null || content.isEmpty()) {
-            Toast.makeText(this, "该插件暂无文本配置文件，路径: " + item.path, Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12));
-
-        final EditText contentInput = createDialogInput("", true);
-        contentInput.setText(content);
-        contentInput.setMinLines(8);
-        contentInput.setTypeface(Typeface.MONOSPACE);
-
-        layout.addView(createDialogLabel("配置/内容 (" + item.getTypeName() + "):"));
-        layout.addView(contentInput);
-
-        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
-                .setTitle("配置: " + item.name)
-                .setView(layout)
-                .setNeutralButton("🔍 校验语法", (dialog, which) -> {
-                    String toCheck = contentInput.getText().toString().trim();
-                    PluginManager.ValidationResult vr = PluginManager.validatePluginConfig(item.type, item.name, toCheck);
-                    Toast.makeText(this, vr.message, Toast.LENGTH_LONG).show();
-                })
-                .setPositiveButton("保存修改", (dialog, which) -> {
-                    String newContent = contentInput.getText().toString().trim();
-                    PluginManager.ValidationResult vr = PluginManager.validatePluginConfig(item.type, item.name, newContent);
-                    if (!vr.valid) {
-                        Toast.makeText(this, "保存拦截: " + vr.message, Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    boolean ok = PluginManager.savePluginConfig(this, item, vr.formatted != null && !vr.formatted.isEmpty() ? vr.formatted : newContent);
-                    Toast.makeText(this, ok ? "✔ 配置校验通过并已保存生效！" : "保存失败", Toast.LENGTH_SHORT).show();
-                    refreshPluginsList(currentPluginCategory);
-                })
-                .setNegativeButton("关闭", null)
-                .show();
+                card.addView(actions);
+                layoutPluginItems.addView(card);
+            }
+        });
     }
 
     private TextView createDialogLabel(String text) {
