@@ -77,9 +77,6 @@ public final class BrowserAgent {
             }
             return ok().put("result", "已关闭浏览器窗口");
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(ctx)) {
-            return err("PiMet 没有悬浮窗权限，无法打开浏览器窗口。请让用户在系统设置里给 PiMet 开启「显示在其他应用上层」。");
-        }
         final FloatingApps win;
         synchronized (WINDOW_LOCK) {
             win = onMain(() -> FloatingApps.ensureForAgent(ctx), 8000);
@@ -109,7 +106,9 @@ public final class BrowserAgent {
                 String id = req.optString("tab", "");
                 Boolean done = onMain(() -> win.agentSwitch(id), 3000);
                 if (!Boolean.TRUE.equals(done)) return err("没有标签 " + id + "，用 tabs 查看");
-                return ok().put("tab", id).put("result", "已切换到标签 " + id + "（用户现在看到的是它）");
+                boolean bg = Boolean.TRUE.equals(onMain(() -> win.minimized, 2000));
+                return ok().put("tab", id).put("result", "已切换到标签 " + id
+                        + (bg ? "（浏览器窗口现在不在前台，用户打开浏览器时会看到它）" : "（用户现在看到的是它）"));
             }
             case "close_tab": {
                 String id = req.optString("tab", "pi");
@@ -122,11 +121,11 @@ public final class BrowserAgent {
             }
             case "show":
                 onMain(() -> { win.agentRestore(); return null; }, 3000);
-                return ok().put("result", "浏览器窗口已显示");
+                return ok().put("result", "浏览器窗口已切到前台（全屏，用户现在看到的是浏览器）");
             case "hide":
             case "minimize":
                 onMain(() -> { win.agentMinimize(); return null; }, 3000);
-                return ok().put("result", "浏览器窗口已最小化（仍可继续操作，但只能用 JS 点击，也不能截图）");
+                return ok().put("result", "浏览器窗口已退到后台（仍可继续操作，但只能用 JS 点击，也不能截图）");
             case "downloads":
                 return ok().put("result", FloatingApps.downloadsText(ctx));
             case "reload_ui":
@@ -271,7 +270,7 @@ public final class BrowserAgent {
             }
             case "screenshot": {
                 if (Boolean.TRUE.equals(onMain(() -> win.minimized, 2000))) {
-                    return err("浏览器窗口被用户收起（最小化）了，截不了图。不要擅自弹出窗口：能用 snapshot / eval 读页面就用它们；确实需要看画面时先问用户，或用 show 打开后再截图。");
+                    return err("浏览器窗口现在不在前台（用户在用别的界面），截不了图。不要擅自把浏览器切到前台：能用 snapshot / eval 读页面就用它们；确实需要看画面时先问用户，或用 show 打开后再截图。");
                 }
                 // 后台标签在操作期间是「可见但压在当前标签下面」，刚变可见时要等一帧画出来
                 SystemClock.sleep(onMain(() -> win.isActive(tab), 2000) ? 250 : 600);

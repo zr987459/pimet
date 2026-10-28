@@ -12,7 +12,7 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.ComponentActivity;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -23,7 +23,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 悬浮窗 AI 对话附件 / WebView 文件选取辅助透明 Activity
  */
-public class AttachmentPickerActivity extends AppCompatActivity {
+/*
+ * 注意：清单里用的是非 AppCompat 的透明主题（Theme.Translucent.NoTitleBar），
+ * AppCompatActivity 在 onPostCreate 会因此抛 IllegalStateException 直接崩溃，所以这里用 ComponentActivity。
+ */
+public class AttachmentPickerActivity extends ComponentActivity {
 
     public interface Callback {
         void onAttachmentPicked(String attachmentTag, Uri uri);

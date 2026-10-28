@@ -10,8 +10,8 @@ android {
         applicationId "com.xm486.pimet"
         minSdk 26
         targetSdk 28
-        versionCode 103
-        versionName "1.9.0-beta.11"
+        versionCode 109
+        versionName "1.9.0-beta.17"
 
         vectorDrawables {
             useSupportLibrary true
