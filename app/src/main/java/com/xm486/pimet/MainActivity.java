@@ -5044,8 +5044,14 @@ public class MainActivity extends AppCompatActivity {
         if (chipCatAll != null) chipCatAll.setOnClickListener(v -> selectPluginCategory(0));
         if (chipCatExtensions != null) chipCatExtensions.setOnClickListener(v -> selectPluginCategory(1));
         if (chipCatSkills != null) chipCatSkills.setOnClickListener(v -> selectPluginCategory(2));
-        if (chipCatMcp != null) chipCatMcp.setOnClickListener(v -> selectPluginCategory(3));
-        if (chipCatSubagents != null) chipCatSubagents.setOnClickListener(v -> selectPluginCategory(4));
+        if (chipCatMcp != null) {
+            chipCatMcp.setVisibility(View.GONE);
+            chipCatMcp.setOnClickListener(v -> selectPluginCategory(3));
+        }
+        if (chipCatSubagents != null) {
+            chipCatSubagents.setVisibility(View.GONE);
+            chipCatSubagents.setOnClickListener(v -> selectPluginCategory(4));
+        }
 
         if (btnRefreshPlugins != null) {
             btnRefreshPlugins.setOnClickListener(v -> {
@@ -5096,12 +5102,12 @@ public class MainActivity extends AppCompatActivity {
 
         View btnPluginStore = findViewById(R.id.btnPluginStore);
         if (btnPluginStore != null) {
-            btnPluginStore.setOnClickListener(v -> com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory)));
+            btnPluginStore.setVisibility(View.GONE);
         }
 
         View chipCatStore = findViewById(R.id.chipCatStore);
         if (chipCatStore != null) {
-            chipCatStore.setOnClickListener(v -> com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory)));
+            chipCatStore.setVisibility(View.GONE);
         }
 
         if (btnInstallCustomPlugin != null) {
@@ -5118,16 +5124,18 @@ public class MainActivity extends AppCompatActivity {
                         if (res.success) {
                             Toast.makeText(this, "【" + res.detectedType + "】" + res.message, Toast.LENGTH_LONG).show();
                             if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                            refreshPluginsList(currentPluginCategory);
+                            promptReloadPi();
                         } else {
                             Toast.makeText(this, "安装失败: " + res.message, Toast.LENGTH_LONG).show();
+                            refreshPluginsList(currentPluginCategory);
                         }
-                        refreshPluginsList(currentPluginCategory);
                     });
                 }).start();
             });
         }
 
-        refreshPluginsList(0);
+        selectPluginCategory(0);
     }
 
     private void selectPluginCategory(int index) {
@@ -5197,7 +5205,10 @@ public class MainActivity extends AppCompatActivity {
             if (layoutPluginItems == null) return;
             layoutPluginItems.removeAllViews();
             if (filtered.isEmpty()) {
-                if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.VISIBLE);
+                if (tvPluginEmpty != null) {
+                    tvPluginEmpty.setVisibility(View.VISIBLE);
+                    tvPluginEmpty.setText("容器内暂无已安装的插件或技能。\n请在上方输入框粘贴 npm 包名或 Git 地址安装，或直接在工作台 / 终端中通过 pi install 安装。");
+                }
             } else {
                 if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
                 for (PluginManager.PluginItem item : filtered) {
@@ -5313,6 +5324,7 @@ public class MainActivity extends AppCompatActivity {
             if (ok) {
                 Toast.makeText(this, (nextState ? "✔ 已启用: " : "⏸ 已停用: ") + item.name, Toast.LENGTH_SHORT).show();
                 refreshPluginsList(currentPluginCategory);
+                promptReloadPi();
             } else {
                 Toast.makeText(this, "切换状态失败", Toast.LENGTH_SHORT).show();
             }
@@ -5376,6 +5388,7 @@ public class MainActivity extends AppCompatActivity {
                         if (ok) {
                             Toast.makeText(this, "已移除: " + item.name, Toast.LENGTH_SHORT).show();
                             refreshPluginsList(currentPluginCategory);
+                            promptReloadPi();
                         } else {
                             Toast.makeText(this, "移除失败，请在终端中检查权限", Toast.LENGTH_SHORT).show();
                         }
@@ -5389,9 +5402,18 @@ public class MainActivity extends AppCompatActivity {
         return card;
     }
 
+    private void promptReloadPi() {
+        new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
+                .setTitle("提示")
+                .setMessage("已更改，重载 Pi 后生效")
+                .setPositiveButton("立即重载", (dialog, which) -> restartPiWebService())
+                .setNegativeButton("稍后", null)
+                .show();
+    }
+
     private void showAddPluginConfigDialog() {
         String[] options = new String[]{
-                "🏪 浏览插件与生态商店 (一键安装与生态网站)",
+                "📦 安装插件与扩展 (在上方输入框粘贴 npm 包名/Git 地址)",
                 "🌐 添加 MCP 外部服务 (mcp.json)",
                 "🧠 新建 Skill 专家技能 (SKILL.md)",
                 "🤖 新建 Subagent 子智能体 (.md)",
@@ -5402,7 +5424,10 @@ public class MainActivity extends AppCompatActivity {
                 .setItems(options, (dialog, which) -> {
                     switch (which) {
                         case 0:
-                            com.xm486.pimet.ui.PluginStoreDialog.show(this, () -> refreshPluginsList(currentPluginCategory));
+                            Toast.makeText(this, "请在上方输入框粘贴 npm 包名或 Git 地址安装", Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) {
+                                inputCustomPlugin.requestFocus();
+                            }
                             break;
                         case 1:
                             showAddMcpDialog();

@@ -1,7 +1,6 @@
 package com.xm486.pimet;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.util.Log;
 
 import com.xm486.pimet.proot.ProotManager;
@@ -18,7 +17,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -84,12 +82,13 @@ public final class PluginManager {
 
     /**
      * 深度扫描容器中真实已安装的各类插件、扩展包与技能
+     * 保留 ~/.pi/agent/extensions、skills、prompts、settings.json 中 packages 声明的包
      */
     public static List<PluginItem> getInstalledPlugins(Context context) {
         List<PluginItem> list = new ArrayList<>();
         Set<String> addedPaths = new HashSet<>();
 
-        // 优先触发双向同步：外部文件的安装/卸载与内部配置互相同步
+        // 优先触发双向同步与旧 .disabled 兼容迁移
         syncPlugins(context);
 
         try {
@@ -97,92 +96,7 @@ public final class PluginManager {
             File piAgentDir = new File(rootfs, "root/.pi/agent");
             if (!piAgentDir.exists()) return list;
 
-            // 1. 扫描 NPM 依赖包生态 (~/.pi/agent/npm/package.json & node_modules)
-            File npmDir = new File(piAgentDir, "npm");
-            File npmPkgJson = new File(npmDir, "package.json");
-            File npmNodeModules = new File(npmDir, "node_modules");
-
-            if (npmPkgJson.exists()) {
-                try {
-                    String pkgContent = readFile(npmPkgJson);
-                    if (pkgContent != null) {
-                        JSONObject rootPkg = new JSONObject(pkgContent);
-                        JSONObject deps = rootPkg.optJSONObject("dependencies");
-                        if (deps != null) {
-                            Iterator<String> depKeys = deps.keys();
-                            while (depKeys.hasNext()) {
-                                String pkgName = depKeys.next();
-                                File targetModDir = new File(npmNodeModules, pkgName);
-                                String version = "";
-                                String desc = "NPM 官方扩展包: " + pkgName;
-
-                                if (targetModDir.exists()) {
-                                    File subPkgJson = new File(targetModDir, "package.json");
-                                    if (subPkgJson.exists()) {
-                                        String subContent = readFile(subPkgJson);
-                                        if (subContent != null) {
-                                            JSONObject subObj = new JSONObject(subContent);
-                                            version = subObj.optString("version", "");
-                                            String d = subObj.optString("description", "");
-                                            if (!d.isEmpty()) desc = d;
-                                        }
-                                    }
-                                }
-
-                                String modPath = targetModDir.exists() ? targetModDir.getAbsolutePath() : npmPkgJson.getAbsolutePath();
-                                if (addedPaths.add(modPath)) {
-                                    PluginItem item = new PluginItem(PluginItem.TYPE_EXTENSION, pkgName, modPath, desc, pkgName);
-                                    item.version = version;
-                                    list.add(item);
-                                }
-
-                                // 扫描该 NPM 包内置的技能 (skills/*.md 或 skills/*)
-                                if (targetModDir.exists()) {
-                                    File pkgSkillsDir = new File(targetModDir, "skills");
-                                    if (pkgSkillsDir.exists() && pkgSkillsDir.isDirectory()) {
-                                        scanSkillsRecursive(pkgSkillsDir, list, addedPaths, pkgName);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (Throwable ignored) {}
-            }
-
-            // 2. 扫描 settings.json 中声明的 packages
-            File settingsFile = new File(piAgentDir, "settings.json");
-            if (settingsFile.exists()) {
-                try {
-                    String sContent = readFile(settingsFile);
-                    if (sContent != null) {
-                        JSONObject sObj = new JSONObject(sContent);
-                        JSONArray pkgsArr = sObj.optJSONArray("packages");
-                        if (pkgsArr != null) {
-                            for (int i = 0; i < pkgsArr.length(); i++) {
-                                String pName = pkgsArr.optString(i, "");
-                                String cleanPkg = pName.startsWith("npm:") ? pName.substring(4) : pName;
-                                if (!cleanPkg.isEmpty()) {
-                                    File modDir = new File(npmNodeModules, cleanPkg);
-                                    if (!addedPaths.contains(modDir.getAbsolutePath())) {
-                                        addedPaths.add(modDir.getAbsolutePath());
-                                        PluginItem item = new PluginItem(PluginItem.TYPE_EXTENSION, cleanPkg, modDir.getAbsolutePath(), "配置项声明包: " + pName, cleanPkg);
-                                        File subPkgJson = new File(modDir, "package.json");
-                                        if (subPkgJson.exists()) {
-                                            try {
-                                                String c = readFile(subPkgJson);
-                                                if (c != null) item.version = new JSONObject(c).optString("version", "");
-                                            } catch (Throwable ignored) {}
-                                        }
-                                        list.add(item);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (Throwable ignored) {}
-            }
-
-            // 3. 扫描本地手动编写的 Extensions (~/.pi/agent/extensions)
+            // 1. 扫描本地手动编写的 Extensions (~/.pi/agent/extensions)
             File extDir = new File(piAgentDir, "extensions");
             if (extDir.exists() && extDir.isDirectory()) {
                 File[] files = extDir.listFiles();
@@ -190,46 +104,37 @@ public final class PluginManager {
                     for (File f : files) {
                         if (f.getName().startsWith(".")) continue;
                         if (addedPaths.add(f.getAbsolutePath())) {
-                            list.add(new PluginItem(PluginItem.TYPE_EXTENSION, f.getName(), f.getAbsolutePath(), "本地脚本扩展: " + f.getName(), f.getName()));
+                            String desc = "本地扩展: " + f.getName();
+                            String version = "";
+                            if (f.isDirectory()) {
+                                File pkgJson = new File(f, "package.json");
+                                if (pkgJson.exists()) {
+                                    try {
+                                        String c = readFile(pkgJson);
+                                        if (c != null) {
+                                            JSONObject o = new JSONObject(c);
+                                            version = o.optString("version", "");
+                                            String d = o.optString("description", "");
+                                            if (!d.isEmpty()) desc = d;
+                                        }
+                                    } catch (Throwable ignored) {}
+                                }
+                            }
+                            PluginItem item = new PluginItem(PluginItem.TYPE_EXTENSION, f.getName(), f.getAbsolutePath(), desc, f.getName());
+                            item.version = version;
+                            list.add(item);
                         }
                     }
                 }
             }
 
-            // 4. 扫描独立技能目录 (~/.pi/agent/skills)
+            // 2. 扫描独立技能目录 (~/.pi/agent/skills)
             File skillsDir = new File(piAgentDir, "skills");
             if (skillsDir.exists() && skillsDir.isDirectory()) {
                 scanSkillsRecursive(skillsDir, list, addedPaths, null);
             }
 
-            // 5. 扫描 Subagents 标准目录 (~/.pi/agent/agents) 与兼容目录 (~/.pi/agent/subagents)
-            File agentsDir = new File(piAgentDir, "agents");
-            if (agentsDir.exists() && agentsDir.isDirectory()) {
-                File[] files = agentsDir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        if (f.getName().startsWith(".") || !f.getName().endsWith(".md")) continue;
-                        if (addedPaths.add(f.getAbsolutePath())) {
-                            list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "Pi 标准子代理: " + f.getName()));
-                        }
-                    }
-                }
-            }
-
-            File subagentsDir = new File(piAgentDir, "subagents");
-            if (subagentsDir.exists() && subagentsDir.isDirectory()) {
-                File[] files = subagentsDir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        if (f.getName().startsWith(".") || !f.getName().endsWith(".md")) continue;
-                        if (addedPaths.add(f.getAbsolutePath())) {
-                            list.add(new PluginItem(PluginItem.TYPE_SUBAGENT, f.getName(), f.getAbsolutePath(), "子代理模板: " + f.getName()));
-                        }
-                    }
-                }
-            }
-
-            // 6. 扫描 Prompts (~/.pi/agent/prompts)
+            // 3. 扫描 Prompts (~/.pi/agent/prompts)
             File promptsDir = new File(piAgentDir, "prompts");
             if (promptsDir.exists() && promptsDir.isDirectory()) {
                 File[] files = promptsDir.listFiles();
@@ -243,75 +148,172 @@ public final class PluginManager {
                 }
             }
 
-            // 7. 扫描 MCP 服务 (~/.pi/agent/mcp.json)
-            File mcpFile = new File(piAgentDir, "mcp.json");
-            if (mcpFile.exists() && mcpFile.isFile()) {
+            // 4. 扫描 settings.json 中声明的 packages
+            File settingsFile = new File(piAgentDir, "settings.json");
+            if (settingsFile.exists()) {
                 try {
-                    String jsonStr = readFile(mcpFile);
-                    if (jsonStr != null) {
-                        JSONObject root = new JSONObject(jsonStr);
-                        JSONObject servers = root.optJSONObject("mcpServers");
-                        if (servers != null) {
-                            Iterator<String> keys = servers.keys();
-                            while (keys.hasNext()) {
-                                String sName = keys.next();
-                                list.add(new PluginItem(PluginItem.TYPE_MCP, sName, mcpFile.getAbsolutePath(), "MCP 外部协议服务"));
+                    String sContent = readFile(settingsFile);
+                    if (sContent != null) {
+                        JSONObject sObj = new JSONObject(sContent);
+                        JSONArray pkgsArr = sObj.optJSONArray("packages");
+                        if (pkgsArr != null) {
+                            for (int i = 0; i < pkgsArr.length(); i++) {
+                                String rawPkg = "";
+                                Object elem = pkgsArr.opt(i);
+                                if (elem instanceof String) {
+                                    rawPkg = (String) elem;
+                                } else if (elem instanceof JSONObject) {
+                                    rawPkg = ((JSONObject) elem).optString("source", "");
+                                }
+                                rawPkg = rawPkg.trim();
+                                if (rawPkg.isEmpty()) continue;
+
+                                boolean disabled = rawPkg.startsWith("-");
+                                String cleanPkg = disabled ? rawPkg.substring(1).trim() : rawPkg;
+                                String pkgName = cleanPkg;
+                                if (pkgName.startsWith("npm:")) {
+                                    pkgName = pkgName.substring(4);
+                                }
+                                String version = "";
+                                int atIdx = pkgName.lastIndexOf('@');
+                                if (atIdx > 0) {
+                                    version = pkgName.substring(atIdx + 1);
+                                    pkgName = pkgName.substring(0, atIdx);
+                                }
+
+                                File modDir = new File(rootfs, "usr/local/lib/node_modules/" + pkgName);
+                                if (!modDir.exists()) {
+                                    File piNm = new File(piAgentDir, "node_modules/" + pkgName);
+                                    if (piNm.exists()) {
+                                        modDir = piNm;
+                                    } else {
+                                        File npmNm = new File(piAgentDir, "npm/node_modules/" + pkgName);
+                                        if (npmNm.exists()) {
+                                            modDir = npmNm;
+                                        }
+                                    }
+                                }
+
+                                String modPath = modDir.exists() ? modDir.getAbsolutePath() : settingsFile.getAbsolutePath();
+                                if (addedPaths.add(modPath)) {
+                                    String desc = "配置项声明包: " + cleanPkg;
+                                    if (modDir.exists()) {
+                                        File subPkgJson = new File(modDir, "package.json");
+                                        if (subPkgJson.exists()) {
+                                            try {
+                                                String c = readFile(subPkgJson);
+                                                if (c != null) {
+                                                    JSONObject subObj = new JSONObject(c);
+                                                    if (version.isEmpty()) version = subObj.optString("version", "");
+                                                    String d = subObj.optString("description", "");
+                                                    if (!d.isEmpty()) desc = d;
+                                                }
+                                            } catch (Throwable ignored) {}
+                                        }
+                                    }
+                                    PluginItem item = new PluginItem(PluginItem.TYPE_EXTENSION, pkgName, modPath, desc, cleanPkg);
+                                    item.version = version;
+                                    item.enabled = !disabled;
+                                    list.add(item);
+                                }
+
+                                // 扫描该 NPM 包内置的技能 (skills/*.md 或 skills/*)
+                                if (modDir.exists()) {
+                                    File pkgSkillsDir = new File(modDir, "skills");
+                                    if (pkgSkillsDir.exists() && pkgSkillsDir.isDirectory()) {
+                                        scanSkillsRecursive(pkgSkillsDir, list, addedPaths, pkgName);
+                                    }
+                                }
                             }
                         }
                     }
                 } catch (Throwable ignored) {}
             }
 
-            // 8. 扫描全局 node_modules (/usr/local/lib/node_modules)
-            File globalNm = new File(rootfs, "usr/local/lib/node_modules");
-            if (globalNm.exists() && globalNm.isDirectory()) {
-                File[] gFiles = globalNm.listFiles();
-                if (gFiles != null) {
-                    for (File gf : gFiles) {
-                        String gName = gf.getName();
-                        if (gName.startsWith(".") || gName.equals("npm")) continue;
-                        if (addedPaths.add(gf.getAbsolutePath())) {
-                            PluginItem item = new PluginItem(PluginItem.TYPE_EXTENSION, gName, gf.getAbsolutePath(), "全局 NPM 工具包: " + gName, gName);
-                            File gPkg = new File(gf, "package.json");
-                            if (gPkg.exists()) {
-                                try {
-                                    String c = readFile(gPkg);
-                                    if (c != null) item.version = new JSONObject(c).optString("version", "");
-                                } catch (Throwable ignored) {}
-                            }
-                            list.add(item);
-                        }
-                    }
-                }
-            }
-
         } catch (Throwable t) {
             Log.e(TAG, "Failed to get installed plugins", t);
         }
 
-        // 自动注入中文注释与描述
+        // 统一注入启停状态与描述
         for (PluginItem item : list) {
             item.enabled = isPluginEnabled(context, item);
             if (item.chineseDesc == null || item.chineseDesc.isEmpty()) {
-                item.chineseDesc = getChineseAnnotation(item.name, item.description, item.type);
+                item.chineseDesc = item.description;
             }
         }
 
         return list;
     }
 
+    private static boolean matchesExtensionOrPackage(String clean, PluginItem item) {
+        if (clean == null || item == null) return false;
+        if (clean.equals(item.name)) return true;
+        if (clean.equals("extensions/" + item.name)) return true;
+        if (clean.endsWith("/" + item.name)) return true;
+        if (item.name.equals(clean.replaceFirst("^extensions/", ""))) return true;
+        if (item.rawPkgName != null) {
+            if (clean.equals(item.rawPkgName)) return true;
+            if (clean.equals("npm:" + item.rawPkgName)) return true;
+            String cleanWithoutNpm = clean.replaceFirst("^npm:", "");
+            String rawWithoutNpm = item.rawPkgName.replaceFirst("^npm:", "");
+            if (cleanWithoutNpm.equals(rawWithoutNpm)) return true;
+            if (cleanWithoutNpm.split("@")[0].equals(rawWithoutNpm.split("@")[0])) return true;
+            if (cleanWithoutNpm.split("@")[0].equals(item.name)) return true;
+        }
+        if (item.path != null && (clean.equals(item.path) || item.path.endsWith("/" + clean))) return true;
+        return false;
+    }
+
     /**
-     * 判断插件当前是否处于启用状态
+     * 判断插件当前是否处于启用状态（仅读取 settings.json 中的 extensions/packages 数组）
      */
     public static boolean isPluginEnabled(Context context, PluginItem item) {
         if (item == null) return false;
-        if (item.path != null && (item.path.endsWith(".disabled") || item.path.endsWith(".off"))) {
-            return false;
-        }
-        if (item.type == PluginItem.TYPE_MCP) {
-            try {
-                File rootfs = ProotManager.getRootfsDir(context);
-                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+        try {
+            File rootfs = ProotManager.getRootfsDir(context);
+            File piAgentDir = new File(rootfs, "root/.pi/agent");
+            File settingsFile = new File(piAgentDir, "settings.json");
+            if (settingsFile.exists()) {
+                String jsonStr = readFile(settingsFile);
+                if (jsonStr != null && !jsonStr.trim().isEmpty()) {
+                    JSONObject settings = new JSONObject(jsonStr);
+
+                    // 1. 检查 extensions 数组
+                    JSONArray exts = settings.optJSONArray("extensions");
+                    if (exts != null) {
+                        for (int i = 0; i < exts.length(); i++) {
+                            String entry = exts.optString(i, "").trim();
+                            if (entry.startsWith("-")) {
+                                String clean = entry.substring(1).trim();
+                                if (matchesExtensionOrPackage(clean, item)) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 检查 packages 数组
+                    JSONArray pkgs = settings.optJSONArray("packages");
+                    if (pkgs != null) {
+                        for (int i = 0; i < pkgs.length(); i++) {
+                            String entry = "";
+                            Object elem = pkgs.opt(i);
+                            if (elem instanceof String) entry = (String) elem;
+                            else if (elem instanceof JSONObject) entry = ((JSONObject) elem).optString("source", "");
+                            entry = entry.trim();
+                            if (entry.startsWith("-")) {
+                                String clean = entry.substring(1).trim();
+                                if (matchesExtensionOrPackage(clean, item)) {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (item.type == PluginItem.TYPE_MCP) {
+                File mcpFile = new File(piAgentDir, "mcp.json");
                 if (mcpFile.exists()) {
                     String jsonStr = readFile(mcpFile);
                     if (jsonStr != null) {
@@ -325,39 +327,97 @@ public final class PluginManager {
                         }
                     }
                 }
-            } catch (Throwable ignored) {}
-        }
-        try {
-            SharedPreferences sp = context.getSharedPreferences("pimet_plugins_state", Context.MODE_PRIVATE);
-            Set<String> disabledSet = sp.getStringSet("disabled_plugins", Collections.emptySet());
-            if (disabledSet != null && (disabledSet.contains(item.name) || (item.rawPkgName != null && disabledSet.contains(item.rawPkgName)))) {
-                return false;
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            Log.w(TAG, "isPluginEnabled error", t);
+        }
         return true;
     }
 
     /**
-     * 启停插件（无损热切换，无需删除用户数据与文件）
+     * 启停插件：统一只修改 ~/.pi/agent/settings.json 中的 extensions/packages 数组
+     * 停用 = 加 "-" 前缀；启用 = 去掉 "-" 前缀
      */
     public static boolean setPluginEnabled(Context context, PluginItem item, boolean enable) {
         if (item == null) return false;
         try {
-            SharedPreferences sp = context.getSharedPreferences("pimet_plugins_state", Context.MODE_PRIVATE);
-            Set<String> disabledSet = new HashSet<>(sp.getStringSet("disabled_plugins", Collections.emptySet()));
-            if (enable) {
-                disabledSet.remove(item.name);
-                if (item.rawPkgName != null) disabledSet.remove(item.rawPkgName);
-            } else {
-                disabledSet.add(item.name);
-                if (item.rawPkgName != null) disabledSet.add(item.rawPkgName);
-            }
-            sp.edit().putStringSet("disabled_plugins", disabledSet).apply();
+            File rootfs = ProotManager.getRootfsDir(context);
+            File piAgentDir = new File(rootfs, "root/.pi/agent");
+            if (!piAgentDir.exists()) piAgentDir.mkdirs();
 
-            // 1. 如果是 MCP 服务，仅更新 mcp.json 中的 disabled 标识，绝不能更名 mcp.json 文件
+            File settingsFile = new File(piAgentDir, "settings.json");
+            JSONObject settingsObj = new JSONObject();
+            if (settingsFile.exists()) {
+                String c = readFile(settingsFile);
+                if (c != null && !c.trim().isEmpty()) {
+                    try { settingsObj = new JSONObject(c); } catch (Throwable ignored) {}
+                }
+            }
+
+            boolean modified = false;
+
+            // 1. 查找 packages 数组
+            JSONArray pkgs = settingsObj.optJSONArray("packages");
+            boolean foundInPackages = false;
+            if (pkgs != null) {
+                for (int i = 0; i < pkgs.length(); i++) {
+                    Object elem = pkgs.opt(i);
+                    if (elem instanceof String) {
+                        String entry = (String) elem;
+                        boolean startsWithDash = entry.startsWith("-");
+                        String clean = startsWithDash ? entry.substring(1).trim() : entry.trim();
+                        if (matchesExtensionOrPackage(clean, item)) {
+                            foundInPackages = true;
+                            if (!enable && !startsWithDash) {
+                                pkgs.put(i, "-" + clean);
+                                modified = true;
+                            } else if (enable && startsWithDash) {
+                                pkgs.put(i, clean);
+                                modified = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. 查找 extensions 数组
+            JSONArray exts = settingsObj.optJSONArray("extensions");
+            boolean foundInExtensions = false;
+            if (exts != null) {
+                for (int i = 0; i < exts.length(); i++) {
+                    String entry = exts.optString(i, "").trim();
+                    boolean startsWithDash = entry.startsWith("-");
+                    String clean = startsWithDash ? entry.substring(1).trim() : entry;
+                    if (matchesExtensionOrPackage(clean, item)) {
+                        foundInExtensions = true;
+                        if (!enable && !startsWithDash) {
+                            exts.put(i, "-" + clean);
+                            modified = true;
+                        } else if (enable && startsWithDash) {
+                            exts.put(i, clean);
+                            modified = true;
+                        }
+                    }
+                }
+            }
+
+            // 3. 如果 settings.json 中尚无对应条目，停用时需追加带 "-" 前缀的条目
+            if (!enable && !foundInPackages && !foundInExtensions) {
+                if (exts == null) {
+                    exts = new JSONArray();
+                    settingsObj.put("extensions", exts);
+                }
+                String entryToAdd = "-extensions/" + item.name;
+                exts.put(entryToAdd);
+                modified = true;
+            }
+
+            if (modified) {
+                writeFile(settingsFile, settingsObj.toString(2));
+            }
+
             if (item.type == PluginItem.TYPE_MCP) {
-                File rootfs = ProotManager.getRootfsDir(context);
-                File mcpFile = new File(rootfs, "root/.pi/agent/mcp.json");
+                File mcpFile = new File(piAgentDir, "mcp.json");
                 if (mcpFile.exists()) {
                     String jsonStr = readFile(mcpFile);
                     if (jsonStr != null) {
@@ -372,49 +432,6 @@ public final class PluginManager {
                         }
                     }
                 }
-            } else if (item.path != null) {
-                // 2. 如果是单文件扩展/脚本/子代理，支持动态更名 .disabled (排除 mcp.json)
-                File f = new File(item.path);
-                if (f.exists() && !f.getName().equals("mcp.json")) {
-                    if (!enable && !f.getName().endsWith(".disabled")) {
-                        File disabledFile = new File(f.getParentFile(), f.getName() + ".disabled");
-                        f.renameTo(disabledFile);
-                    } else if (enable && f.getName().endsWith(".disabled")) {
-                        String normalName = f.getName().substring(0, f.getName().length() - ".disabled".length());
-                        File normalFile = new File(f.getParentFile(), normalName);
-                        f.renameTo(normalFile);
-                    }
-                }
-            }
-
-            // 3. 如果在 settings.json 的 extensions 中有声明
-            File rootfs = ProotManager.getRootfsDir(context);
-            File settingsFile = new File(rootfs, "root/.pi/agent/settings.json");
-            if (settingsFile.exists()) {
-                String sContent = readFile(settingsFile);
-                if (sContent != null) {
-                    JSONObject sObj = new JSONObject(sContent);
-                    JSONArray extArr = sObj.optJSONArray("extensions");
-                    if (extArr != null) {
-                        boolean modified = false;
-                        for (int i = 0; i < extArr.length(); i++) {
-                            String entry = extArr.optString(i, "");
-                            String cleanEntry = entry.startsWith("-") ? entry.substring(1) : entry;
-                            if (cleanEntry.equals(item.name) || cleanEntry.endsWith("/" + item.name)) {
-                                if (!enable && !entry.startsWith("-")) {
-                                    extArr.put(i, "-" + cleanEntry);
-                                    modified = true;
-                                } else if (enable && entry.startsWith("-")) {
-                                    extArr.put(i, cleanEntry);
-                                    modified = true;
-                                }
-                            }
-                        }
-                        if (modified) {
-                            writeFile(settingsFile, sObj.toString(2));
-                        }
-                    }
-                }
             }
 
             item.enabled = enable;
@@ -422,6 +439,69 @@ public final class PluginManager {
         } catch (Throwable t) {
             Log.e(TAG, "setPluginEnabled error: " + item.name, t);
             return false;
+        }
+    }
+
+    /**
+     * 兼容旧 .disabled 迁移：扫描到 foo.disabled 时自动改回 foo 并在 settings 里写成 "-extensions/foo"
+     */
+    private static void migrateLegacyDisabledExtensions(File piAgentDir) {
+        try {
+            File extDir = new File(piAgentDir, "extensions");
+            if (!extDir.exists() || !extDir.isDirectory()) return;
+            File[] files = extDir.listFiles();
+            if (files == null) return;
+            File settingsFile = new File(piAgentDir, "settings.json");
+            for (File f : files) {
+                String name = f.getName();
+                if (name.endsWith(".disabled")) {
+                    String normalName = name.substring(0, name.length() - ".disabled".length());
+                    File normalFile = new File(f.getParentFile(), normalName);
+                    if (f.renameTo(normalFile)) {
+                        addDisabledExtensionToSettings(settingsFile, "extensions/" + normalName);
+                        Log.i(TAG, "Migrated legacy disabled extension: " + name + " -> -extensions/" + normalName);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "migrateLegacyDisabledExtensions error", t);
+        }
+    }
+
+    private static void addDisabledExtensionToSettings(File settingsFile, String targetEntry) {
+        try {
+            JSONObject settings = new JSONObject();
+            if (settingsFile.exists()) {
+                String c = readFile(settingsFile);
+                if (c != null && !c.trim().isEmpty()) {
+                    try { settings = new JSONObject(c); } catch (Throwable ignored) {}
+                }
+            }
+            JSONArray exts = settings.optJSONArray("extensions");
+            if (exts == null) {
+                exts = new JSONArray();
+                settings.put("extensions", exts);
+            }
+            String dashEntry = targetEntry.startsWith("-") ? targetEntry : ("-" + targetEntry);
+            String cleanEntry = dashEntry.substring(1);
+            boolean exists = false;
+            for (int i = 0; i < exts.length(); i++) {
+                String e = exts.optString(i, "").trim();
+                if (e.equals(dashEntry)) {
+                    exists = true;
+                    break;
+                } else if (e.equals(cleanEntry)) {
+                    exts.put(i, dashEntry);
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                exts.put(dashEntry);
+            }
+            writeFile(settingsFile, settings.toString(2));
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to add disabled extension to settings: " + targetEntry, t);
         }
     }
 
@@ -986,27 +1066,53 @@ public final class PluginManager {
             String c = readFile(settingsJson);
             if (c == null || c.trim().isEmpty()) return;
             JSONObject obj = new JSONObject(c);
+            boolean modified = false;
+
             JSONArray exts = obj.optJSONArray("extensions");
-            if (exts == null) return;
-            JSONArray newExts = new JSONArray();
-            for (int i = 0; i < exts.length(); i++) {
-                String e = exts.optString(i, "");
-                boolean match = e.equals(name) || (rawPkgName != null && e.equals(rawPkgName))
-                        || (path != null && (e.equals(path) || path.endsWith(e)));
-                if (!match) {
-                    newExts.put(e);
+            if (exts != null) {
+                JSONArray newExts = new JSONArray();
+                for (int i = 0; i < exts.length(); i++) {
+                    String e = exts.optString(i, "").trim();
+                    String cleanE = e.startsWith("-") ? e.substring(1).trim() : e;
+                    boolean match = cleanE.equals(name) || (rawPkgName != null && cleanE.equals(rawPkgName))
+                            || (path != null && (cleanE.equals(path) || path.endsWith(cleanE)));
+                    if (!match) {
+                        newExts.put(e);
+                    } else {
+                        modified = true;
+                    }
                 }
+                if (modified) obj.put("extensions", newExts);
             }
-            obj.put("extensions", newExts);
-            writeFile(settingsJson, obj.toString(2));
+
+            JSONArray pkgs = obj.optJSONArray("packages");
+            if (pkgs != null) {
+                JSONArray newPkgs = new JSONArray();
+                for (int i = 0; i < pkgs.length(); i++) {
+                    String p = pkgs.optString(i, "").trim();
+                    String cleanP = p.startsWith("-") ? p.substring(1).trim() : p;
+                    String cleanName = cleanP.replaceFirst("^npm:", "").split("@")[0];
+                    String targetName = (rawPkgName != null ? rawPkgName : name).replaceFirst("^npm:", "").split("@")[0];
+                    boolean match = cleanName.equals(targetName);
+                    if (!match) {
+                        newPkgs.put(p);
+                    } else {
+                        modified = true;
+                    }
+                }
+                if (modified) obj.put("packages", newPkgs);
+            }
+
+            if (modified) {
+                writeFile(settingsJson, obj.toString(2));
+            }
         } catch (Throwable ignored) {}
     }
 
     /**
      * 自动双向同步插件列表：
-     * 1. 扫描磁盘上安装的扩展，将外面装好的自动同步写入 settings.json
-     * 2. 清理 settings.json 中已被外部删除/卸载的不存在扩展
-     * 3. 确保 mcp.json 结构合法与状态一致
+     * 1. 扫描磁盘上安装的扩展
+     * 2. 清理 settings.json 中已被外部删除/卸载的不存在扩展（不删除 "-" 前缀条目）
      */
     public static void syncPlugins(Context context) {
         try {
@@ -1014,6 +1120,9 @@ public final class PluginManager {
             if (!rootfs.exists()) return;
             File piAgentDir = new File(rootfs, "root/.pi/agent");
             if (!piAgentDir.exists()) piAgentDir.mkdirs();
+
+            // 兼容旧 .disabled 迁移：自动改回 foo 并在 settings 里写成 "-extensions/foo"
+            migrateLegacyDisabledExtensions(piAgentDir);
 
             File settingsJson = new File(piAgentDir, "settings.json");
             JSONObject settingsObj = new JSONObject();
@@ -1030,13 +1139,6 @@ public final class PluginManager {
                 settingsObj.put("extensions", currentExts);
             }
 
-            // 收集现有配置中的扩展
-            Set<String> configuredExts = new HashSet<>();
-            for (int i = 0; i < currentExts.length(); i++) {
-                String item = currentExts.optString(i, "").trim();
-                if (!item.isEmpty()) configuredExts.add(item);
-            }
-
             // 扫描磁盘上实际存在的扩展
             Set<String> actualDiskExts = new HashSet<>();
             File extDir = new File(piAgentDir, "extensions");
@@ -1045,13 +1147,9 @@ public final class PluginManager {
                 if (extFiles != null) {
                     for (File ef : extFiles) {
                         String name = ef.getName();
-                        if (ef.isFile() && (name.endsWith(".ts") || name.endsWith(".js"))) {
-                            actualDiskExts.add("extensions/" + name);
-                            actualDiskExts.add(ef.getAbsolutePath());
-                        } else if (ef.isDirectory()) {
-                            actualDiskExts.add("extensions/" + name);
-                            actualDiskExts.add(ef.getAbsolutePath());
-                        }
+                        actualDiskExts.add("extensions/" + name);
+                        actualDiskExts.add(name);
+                        actualDiskExts.add(ef.getAbsolutePath());
                     }
                 }
             }
@@ -1093,50 +1191,41 @@ public final class PluginManager {
                 }
             }
 
-            // 1. 同步外面的卸载到里面：移除 settings.json 中磁盘上已不存在的插件
+            // 同步外面的卸载到里面：移除 settings.json 中磁盘上已不存在的插件
+            // 注意：不要把 "-" 前缀的条目当成不存在而删除；使用去除 "-" 前缀后的路径判断存在性
             JSONArray newExts = new JSONArray();
             boolean changed = false;
             for (int i = 0; i < currentExts.length(); i++) {
                 String ext = currentExts.optString(i, "").trim();
                 if (ext.isEmpty()) continue;
+                String cleanExt = ext.startsWith("-") ? ext.substring(1).trim() : ext;
                 boolean exists = false;
-                if (actualDiskExts.contains(ext)) {
+                if (actualDiskExts.contains(cleanExt)) {
                     exists = true;
-                } else if (ext.startsWith("/") && new File(ext).exists()) {
+                } else if (cleanExt.startsWith("/") && new File(cleanExt).exists()) {
                     exists = true;
-                } else if (new File(piAgentDir, ext).exists()) {
+                } else if (new File(piAgentDir, cleanExt).exists()) {
                     exists = true;
-                } else if (new File(npmNodeModules, ext).exists()) {
+                } else if (new File(npmNodeModules, cleanExt).exists()) {
                     exists = true;
-                } else if (new File(extDir, ext).exists()) {
+                } else if (new File(extDir, cleanExt).exists()) {
+                    exists = true;
+                } else if (cleanExt.startsWith("extensions/") && new File(piAgentDir, cleanExt).exists()) {
+                    exists = true;
+                } else if (new File(rootfs, "usr/local/lib/node_modules/" + cleanExt).exists()) {
                     exists = true;
                 }
+
                 if (exists) {
-                    newExts.put(ext);
+                    newExts.put(ext); // 保留原有条目（含 "-" 前缀）
                 } else {
                     changed = true;
                     Log.i(TAG, "Sync: removed uninstalled extension from settings.json: " + ext);
                 }
             }
 
-            // 2. 同步外面的安装到里面：若本地 extensions 目录或 npm package.json 中有新插件，自动加入 settings.json
-            for (String diskExt : actualDiskExts) {
-                if (diskExt.startsWith("extensions/") || diskExt.equals("oh-my-pi") || diskExt.startsWith("@bacnh85/")) {
-                    boolean alreadyIn = false;
-                    for (int i = 0; i < newExts.length(); i++) {
-                        String e = newExts.optString(i, "");
-                        if (e.equals(diskExt) || (diskExt.startsWith("extensions/") && e.endsWith(diskExt))) {
-                            alreadyIn = true;
-                            break;
-                        }
-                    }
-                    if (!alreadyIn) {
-                        newExts.put(diskExt);
-                        changed = true;
-                        Log.i(TAG, "Sync: added newly installed extension to settings.json: " + diskExt);
-                    }
-                }
-            }
+            // extensions/ 目录下的文件 Pi 会自动发现，sync 不要再把 extensions/*.ts 显式追加到 settings（已存在的条目保持不动）。
+            // 删除原先硬编码的 "oh-my-pi" 与 "@bacnh85/" 判断。
 
             if (changed) {
                 settingsObj.put("extensions", newExts);
@@ -1347,133 +1436,6 @@ public final class PluginManager {
     }
 
     /**
-     * 自动为插件、工具、技能或 MCP 服务生成中文注释与说明
-     */
-    public static String getChineseAnnotation(String name, String originalDesc, int type) {
-        String lowerName = (name != null ? name : "").toLowerCase().trim();
-        String lowerDesc = (originalDesc != null ? originalDesc : "").toLowerCase().trim();
-
-        // 1. 精确匹配已知官方及社区核心扩展/工具/技能
-        if (lowerName.contains("pet-companion") || lowerName.contains("desktop-pet") || lowerName.contains("pet-agent")) {
-            return "动态桌宠专属智能体 · 具备独立长久记忆、系统进度感知汇报与动作互动能力";
-        }
-        if (lowerName.equals("oh-my-pi") || lowerName.contains("oh-my-pi")) {
-            return "全能 AI 编排与多智能体系统（内置代码审查、自动化重构、浏览器测试与架构专家）";
-        }
-        if (lowerName.contains("pi-ux") || lowerName.contains("ux-design")) {
-            return "防 AI 劣质设计的 UI/UX 设计规范与自动化审查工具";
-        }
-        if (lowerName.contains("android-bridge") || lowerName.contains("pimet-android-bridge") || lowerName.contains("pimet-bridge")) {
-            return "Android 宿主原生控制扩展（支持动态操控桌宠、切换界面、配置端口）";
-        }
-        if (lowerName.equals("code-review")) {
-            return "代码审查专家 · 全面评估正确性、性能、安全性与代码风格";
-        }
-        if (lowerName.equals("debugging")) {
-            return "系统化调试专家 · 假设驱动定位、根因分析与最小化修复";
-        }
-        if (lowerName.equals("frontend")) {
-            return "前端 UI/UX 开发专家 · 页面设计、组件构建与响应式布局";
-        }
-        if (lowerName.equals("git-master")) {
-            return "Git 版本控制专家 · 原子提交、变基整理与历史检索";
-        }
-        if (lowerName.equals("playwright")) {
-            return "浏览器自动化与 E2E 测试 · 网页操控、截图录屏与状态抓取";
-        }
-        if (lowerName.equals("refactor")) {
-            return "智能重构专家 · 模块解耦、代码提炼与结构现代性优化";
-        }
-        if (lowerName.equals("remove-ai-slops")) {
-            return "消除 AI 生成代码异味 · 移除冗余复杂度与性能提速";
-        }
-        if (lowerName.equals("review-work")) {
-            return "实施后全面复盘审查 · 自动化 QA、代码质量与安全性检查";
-        }
-        if (lowerName.equals("security-review")) {
-            return "安全审计专家 · 漏洞评估、威胁建模与 OWASP 检查";
-        }
-        if (lowerName.equals("oracle")) {
-            return "架构设计、跨系统权衡与疑难排查专家顾问";
-        }
-        if (lowerName.equals("metis")) {
-            return "需求意图分析、潜在歧义与前置任务规划顾问";
-        }
-        if (lowerName.equals("momus")) {
-            return "工作计划与执行方案严苛审查顾问";
-        }
-        if (lowerName.equals("librarian")) {
-            return "多仓库研究、开源文档检索与 API 范例调研专家";
-        }
-        if (lowerName.equals("explore")) {
-            return "上下文快速检索与项目代码库导航专家";
-        }
-        if (lowerName.equals("sisyphus-junior")) {
-            return "专注单任务高效执行代理";
-        }
-        if (lowerName.equals("multimodal-looker")) {
-            return "多模态媒体与图像分析智能体";
-        }
-        if (lowerName.contains("fetch") || lowerName.contains("server-fetch")) {
-            return "网页内容抓取与文档提取服务";
-        }
-        if (lowerName.contains("filesystem") || lowerName.contains("server-filesystem")) {
-            return "PRoot 容器本地文件系统安全操作服务";
-        }
-        if (lowerName.contains("github") || lowerName.contains("server-github")) {
-            return "GitHub 远程仓库、Issue 与 Pull Request 交互服务";
-        }
-        if (lowerName.contains("puppeteer") || lowerName.contains("server-puppeteer")) {
-            return "Puppeteer 无头浏览器渲染与页面控制服务";
-        }
-        if (lowerName.contains("sqlite") || lowerName.contains("server-sqlite")) {
-            return "SQLite 数据库查询与结构管理服务";
-        }
-        if (lowerName.contains("memory") || lowerName.contains("server-memory") || lowerName.contains("pi-hermes-memory")) {
-            return "持久化跨会话知识、经验与记忆库管理服务";
-        }
-        if (lowerName.contains("brave-search") || lowerName.contains("server-brave-search")) {
-            return "Brave 互联网实时搜索引擎";
-        }
-        if (lowerName.contains("docker")) {
-            return "Docker 容器编排与镜像管理服务";
-        }
-
-        // 2. 根据语义和类型生成智能中文标签
-        if (type == PluginItem.TYPE_MCP) {
-            return "MCP 协议外部能力服务 (" + name + ")";
-        }
-        if (type == PluginItem.TYPE_SKILL) {
-            if (lowerDesc.contains("test") || lowerDesc.contains("browser")) return "自动化测试与浏览器交互技能";
-            if (lowerDesc.contains("git") || lowerDesc.contains("commit")) return "Git 仓库协同与代码提交技能";
-            if (lowerDesc.contains("refactor") || lowerDesc.contains("clean")) return "代码结构优化与重构技能";
-            if (lowerDesc.contains("review") || lowerDesc.contains("audit")) return "代码质量审查与规范检查技能";
-            return "Pi Agent 专业领域技能: " + name;
-        }
-        if (type == PluginItem.TYPE_SUBAGENT) {
-            return "智能体角色与专属提示词: " + name;
-        }
-
-        if (lowerDesc.contains("ui") || lowerDesc.contains("frontend") || lowerDesc.contains("css")) {
-            return "前端与用户界面交互扩展";
-        }
-        if (lowerDesc.contains("test") || lowerDesc.contains("testing")) {
-            return "自动化测试与质量保障工具包";
-        }
-        if (lowerDesc.contains("tool") || lowerDesc.contains("utility")) {
-            return "通用开发工具与效率扩展";
-        }
-        if (lowerDesc.contains("model") || lowerDesc.contains("ai") || lowerDesc.contains("agent")) {
-            return "AI 智能体与模型能力增强扩展";
-        }
-
-        if (originalDesc != null && !originalDesc.isEmpty() && !originalDesc.startsWith("来自") && !originalDesc.startsWith("NPM 官方")) {
-            return originalDesc;
-        }
-        return "Pi Agent 生态功能扩展包: " + name;
-    }
-
-    /**
      * 自动注入宿主 Android 界面与桌宠控制插件到 PRoot 容器环境
      * 赋予 AI Agent 原生修改 Android 外部桌宠、界面、参数与端口的能力
      */
@@ -1487,175 +1449,7 @@ public final class PluginManager {
                 extDir.mkdirs();
             }
 
-            File bridgeFile = new File(extDir, "pimet-android-bridge.ts");
-            String code = "/**\n" +
-                    " * PiMet Host Android & Desktop Pet Bridge Extension\n" +
-                    " * 允许 AI 控制 Android 宿主的桌宠、界面，并通过无障碍服务操作手机（phone_control）\n" +
-                    " * 本文件由 PiMet 自动生成，每次启动会覆盖。\n" +
-                    " */\n" +
-                    "import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";\n" +
-                    "import { Type } from \"typebox\";\n" +
-                    "import * as http from \"http\";\n" +
-                    "import * as fs from \"fs\";\n" +
-                    "import * as path from \"path\";\n" +
-                    "import * as os from \"os\";\n" +
-                    "\n" +
-                    "const BRIDGE_DIR = path.join(os.homedir(), \".pi\", \"agent\");\n" +
-                    "\n" +
-                    "function readToken(): string {\n" +
-                    "  try {\n" +
-                    "    return fs.readFileSync(path.join(BRIDGE_DIR, \".pimet_bridge_token\"), \"utf-8\").trim();\n" +
-                    "  } catch (e) {\n" +
-                    "    return \"\";\n" +
-                    "  }\n" +
-                    "}\n" +
-                    "\n" +
-                    "function postBridge(actionData: Record<string, any>, timeoutMs: number): Promise<{ ok: boolean; body: string }> {\n" +
-                    "  return new Promise((resolve) => {\n" +
-                    "    const postData = JSON.stringify(actionData);\n" +
-                    "    const req = http.request(\n" +
-                    "      {\n" +
-                    "        hostname: \"127.0.0.1\",\n" +
-                    "        port: 30143,\n" +
-                    "        path: \"/api/app-control\",\n" +
-                    "        method: \"POST\",\n" +
-                    "        headers: {\n" +
-                    "          \"Content-Type\": \"application/json; charset=utf-8\",\n" +
-                    "          \"Content-Length\": Buffer.byteLength(postData),\n" +
-                    "          \"X-PiMet-Token\": readToken(),\n" +
-                    "        },\n" +
-                    "        timeout: timeoutMs,\n" +
-                    "      },\n" +
-                    "      (res) => {\n" +
-                    "        const chunks: Buffer[] = [];\n" +
-                    "        res.on(\"data\", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));\n" +
-                    "        res.on(\"end\", () => resolve({ ok: true, body: Buffer.concat(chunks).toString(\"utf-8\") }));\n" +
-                    "      }\n" +
-                    "    );\n" +
-                    "    req.on(\"timeout\", () => req.destroy(new Error(`timeout after ${timeoutMs}ms`)));\n" +
-                    "    req.on(\"error\", (err) => resolve({ ok: false, body: err.message }));\n" +
-                    "    req.write(postData);\n" +
-                    "    req.end();\n" +
-                    "  });\n" +
-                    "}\n" +
-                    "\n" +
-                    "/** 桌宠/界面控制：HTTP 不通时写入 IPC 文件兜底（宿主轮询执行）。 */\n" +
-                    "async function sendBridgeAction(actionData: Record<string, any>): Promise<string> {\n" +
-                    "  const r = await postBridge(actionData, 4000);\n" +
-                    "  if (r.ok) return `Android 宿主执行成功: ${r.body}`;\n" +
-                    "  try {\n" +
-                    "    if (!fs.existsSync(BRIDGE_DIR)) fs.mkdirSync(BRIDGE_DIR, { recursive: true });\n" +
-                    "    fs.writeFileSync(path.join(BRIDGE_DIR, \"app_control.json\"), JSON.stringify(actionData), \"utf-8\");\n" +
-                    "  } catch (e) {}\n" +
-                    "  return `指令已写入 IPC 文件缓存 (HTTP: ${r.body})`;\n" +
-                    "}\n" +
-                    "\n" +
-                    "export default function (pi: ExtensionAPI) {\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"control_desktop_pet\",\n" +
-                    "    label: \"Control Desktop Pet\",\n" +
-                    "    description: \"控制 Android 宿主界面的动态桌宠：修改角色/皮肤、尺寸大小(dp)、动作(跳跃/跳舞/挥手)、对话气泡、反弹摩擦力或开关全局桌宠\",\n" +
-                    "    parameters: Type.Object({\n" +
-                    "      character: Type.Optional(Type.String({ description: \"角色目录名，如 cat_maid(猫娘), eva(小初), gup(少女), paimon(派蒙), custom\" })),\n" +
-                    "      size: Type.Optional(Type.Number({ description: \"桌宠大小 (dp，范围 32~160)\" })),\n" +
-                    "      bubble_text: Type.Optional(Type.String({ description: \"让桌宠说出的气泡文字\" })),\n" +
-                    "      action: Type.Optional(Type.String({ description: \"桌宠动作: jumping (跳跃/跟斗), dancing (跳舞), waving (招手), idle (静止)\" })),\n" +
-                    "      bounce: Type.Optional(Type.Number({ description: \"物理反弹系数 0~100\" })),\n" +
-                    "      friction: Type.Optional(Type.Number({ description: \"空气摩擦力 0~100\" })),\n" +
-                    "      global_pet_enabled: Type.Optional(Type.Boolean({ description: \"是否开启全局系统悬浮桌宠\" })),\n" +
-                    "    }),\n" +
-                    "    async execute(_toolCallId, params) {\n" +
-                    "      const result = await sendBridgeAction({ action: \"control_desktop_pet\", ...params });\n" +
-                    "      return {\n" +
-                    "        content: [{ type: \"text\", text: `桌宠控制指令已下发：${result}` }],\n" +
-                    "        details: params,\n" +
-                    "      };\n" +
-                    "    },\n" +
-                    "  });\n" +
-                    "\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"control_app_ui\",\n" +
-                    "    label: \"Control App UI\",\n" +
-                    "    description: \"控制 Android 宿主应用的界面与端口：切换选项卡(工作台/终端/设置/操控台)、配置各服务端口\",\n" +
-                    "    parameters: Type.Object({\n" +
-                    "      switch_tab: Type.Optional(Type.String({ description: \"切换界面: launch(主页), web(Pi-Web工作台), terminal(终端), settings(设置)\" })),\n" +
-                    "      ports: Type.Optional(\n" +
-                    "        Type.Object({\n" +
-                    "          piweb: Type.Optional(Type.Number()),\n" +
-                    "          operit: Type.Optional(Type.Number()),\n" +
-                    "          clawbench: Type.Optional(Type.Number()),\n" +
-                    "          rikka: Type.Optional(Type.Number()),\n" +
-                    "        })\n" +
-                    "      ),\n" +
-                    "    }),\n" +
-                    "    async execute(_toolCallId, params) {\n" +
-                    "      const result = await sendBridgeAction({ action: \"control_app_ui\", ...params });\n" +
-                    "      return {\n" +
-                    "        content: [{ type: \"text\", text: `Android 宿主界面指令已下发：${result}` }],\n" +
-                    "        details: params,\n" +
-                    "      };\n" +
-                    "    },\n" +
-                    "  });\n" +
-                    "\n" +
-                    "  pi.registerTool({\n" +
-                    "    name: \"phone_control\",\n" +
-                    "    label: \"Phone Control\",\n" +
-                    "    description:\n" +
-                    "      \"通过 PiMet 无障碍服务操作这台 Android 手机。坐标均为屏幕像素（与 inspect 返回的 bounds/centerX/centerY 相同）。\" +\n" +
-                    "      \"action 可选：status(服务状态) | inspect(读屏，返回可见节点 text/desc/id/bounds/clickable) | find(按文字/ID 查找) | \" +\n" +
-                    "      \"tap / long_press(按 target 文字、id、desc 或 x,y) | swipe(direction=up/down/left/right 或 from_x,from_y,to_x,to_y) | \" +\n" +
-                    "      \"scroll(direction=down 看下方内容/up，可用 target 指定列表) | input(text，可选 target 输入框、append、submit) | \" +\n" +
-                    "      \"key(key=back/home/recents/notifications/quick_settings/lock/enter) | launch(package 或 app 应用名) | \" +\n" +
-                    "      \"screenshot(Android 11+，返回容器内图片路径，可用 read 查看) | wait_for(target/id 出现，gone=true 等消失，timeout 毫秒) | wait_idle。\" +\n" +
-                    "      \"close_ad(关闭广告/跳过开屏：自动识别 ×、关闭、跳过、Skip 倒计时等按钮并点击；timeout 毫秒内轮询，strict=true 只点有明确文字/ID 的按钮)。\" +\n" +
-                    "      \"tap/long_press/swipe/scroll/input/key/launch/close_ad 成功后会自动等待界面稳定，并在 screen_after 里返回操作后的读屏结果，无需再单独 inspect（传 observe=false 关闭）。\" +\n" +
-                    "      \"读屏节点带 ad_close=true、或结果里出现 ad_close_candidates 时说明有广告弹窗，先 close_ad 再继续。\" +\n" +
-                    "      \"建议流程：inspect → tap/input（看 screen_after 判断结果）→ 下一步；需要等加载时用 wait_for。\",\n" +
-                    "    parameters: Type.Object({\n" +
-                    "      action: Type.String({ description: \"操作：status | inspect | find | close_ad | tap | long_press | swipe | scroll | input | key | launch | screenshot | wait_for | wait_idle\" }),\n" +
-                    "      target: Type.Optional(Type.String({ description: \"目标文字（匹配 text/desc/hint，先精确后包含）；input 时为目标输入框；launch 时可为应用名\" })),\n" +
-                    "      id: Type.Optional(Type.String({ description: \"目标 View ID，如 com.tencent.mm:id/xxx 或仅 xxx\" })),\n" +
-                    "      desc: Type.Optional(Type.String({ description: \"按 content-description 匹配\" })),\n" +
-                    "      text: Type.Optional(Type.String({ description: \"input 要输入的文字（tap/find 时也可作为目标文字）\" })),\n" +
-                    "      x: Type.Optional(Type.Number({ description: \"屏幕像素 X\" })),\n" +
-                    "      y: Type.Optional(Type.Number({ description: \"屏幕像素 Y\" })),\n" +
-                    "      from_x: Type.Optional(Type.Number()),\n" +
-                    "      from_y: Type.Optional(Type.Number()),\n" +
-                    "      to_x: Type.Optional(Type.Number()),\n" +
-                    "      to_y: Type.Optional(Type.Number()),\n" +
-                    "      direction: Type.Optional(Type.String({ description: \"swipe/scroll 方向：up | down | left | right\" })),\n" +
-                    "      duration: Type.Optional(Type.Number({ description: \"手势时长毫秒（swipe 默认 300，long_press 默认 800）\" })),\n" +
-                    "      key: Type.Optional(Type.String({ description: \"按键：back | home | recents | notifications | quick_settings | lock | power | screenshot | enter\" })),\n" +
-                    "      package: Type.Optional(Type.String({ description: \"launch 的包名，如 com.android.settings\" })),\n" +
-                    "      app: Type.Optional(Type.String({ description: \"launch 的应用名，如 设置、微信\" })),\n" +
-                    "      index: Type.Optional(Type.Number({ description: \"多个匹配时选第几个（0 起）\" })),\n" +
-                    "      exact: Type.Optional(Type.Boolean({ description: \"只接受精确文字匹配\" })),\n" +
-                    "      append: Type.Optional(Type.Boolean({ description: \"input 时追加而不是替换\" })),\n" +
-                    "      submit: Type.Optional(Type.Boolean({ description: \"input 后执行回车/搜索（Android 11+）\" })),\n" +
-                    "      gone: Type.Optional(Type.Boolean({ description: \"wait_for 等待目标消失\" })),\n" +
-                    "      timeout: Type.Optional(Type.Number({ description: \"wait_for / wait_idle 超时毫秒，默认 5000，最大 30000\" })),\n" +
-                    "      max_nodes: Type.Optional(Type.Number({ description: \"inspect 返回节点上限，默认 300\" })),\n" +                    "      observe: Type.Optional(Type.Boolean({ description: \"操作后是否自动附带 screen_after 读屏，默认 true\" })),\n" +
-                    "      strict: Type.Optional(Type.Boolean({ description: \"close_ad 只点击有明确文字/ID 的关闭按钮\" })),\n" +
-                    "    }),\n" +
-                    "    async execute(_toolCallId, params) {\n" +
-                    "      const { action, ...rest } = params as Record<string, any>;\n" +
-                    "      const waitMs = Math.min(Number(rest.timeout) || 5000, 30000);\n" +
-                    "      const r = await postBridge({ ...rest, action: \"phone_control\", phone_action: action }, waitMs + 20000);\n" +
-                    "      let text: string;\n" +
-                    "      if (!r.ok) {\n" +
-                    "        text = `无法连接 PiMet 宿主（127.0.0.1:30143）：${r.body}。请确认 PiMet 应用在运行。`;\n" +
-                    "      } else {\n" +
-                    "        text = r.body;\n" +
-                    "      }\n" +
-                    "      return { content: [{ type: \"text\", text }], details: { action, ...rest } };\n" +
-                    "    },\n" +
-                    "  });\n" +
-                    "}\n";
-
-            if (!code.equals(readFileRaw(bridgeFile))) {
-                writeFile(bridgeFile, code);
-                Log.i("PiMet.PluginMgr", "pimet-android-bridge.ts updated in container");
-            }
+            ensureAssetExtension(context, extDir, "pimet-android-bridge.ts");
             ensureTerminalExtension(context, extDir);
             ensureAssetExtension(context, extDir, "pimet-browser.ts");
         } catch (Throwable t) {
