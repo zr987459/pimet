@@ -5344,8 +5344,7 @@ public class MainActivity extends AppCompatActivity {
         card.addView(title);
 
         TextView desc = new TextView(this);
-        desc.setText("Pi-Web 服务暂未在 127.0.0.1:" + PiWebApi.getPort(this) + " 运行或请求无响应。
-请先启动 Pi 服务后再管理生态配置。");
+        desc.setText("Pi-Web 服务暂未在 127.0.0.1:" + PiWebApi.getPort(this) + " 运行或请求无响应。\n请先启动 Pi 服务后再管理生态配置。");
         desc.setTextColor(palette.textMuted);
         desc.setTextSize(12f);
         desc.setGravity(Gravity.CENTER);
@@ -5618,8 +5617,7 @@ public class MainActivity extends AppCompatActivity {
             if (modelCount == 0) {
                 if (tvPluginEmpty != null) {
                     tvPluginEmpty.setVisibility(View.VISIBLE);
-                    tvPluginEmpty.setText("暂无可用的模型。
-工作台将自动发现配置了 API Key 的 Provider 模型。");
+                    tvPluginEmpty.setText("暂无可用的模型。\n工作台将自动发现配置了 API Key 的 Provider 模型。");
                 }
             } else {
                 if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
@@ -5640,8 +5638,7 @@ public class MainActivity extends AppCompatActivity {
             if (skills == null || skills.length() == 0) {
                 if (tvPluginEmpty != null) {
                     tvPluginEmpty.setVisibility(View.VISIBLE);
-                    tvPluginEmpty.setText("暂无已安装的技能 (Skills)。
-可在上方输入框粘贴 npm 包名或 GitHub 仓库地址进行安装。");
+                    tvPluginEmpty.setText("暂无已安装的技能 (Skills)。\n可在上方输入框粘贴 npm 包名或 GitHub 仓库地址进行安装。");
                 }
                 return;
             }
@@ -5681,8 +5678,7 @@ public class MainActivity extends AppCompatActivity {
                 // Description & path
                 TextView desc = new TextView(MainActivity.this);
                 StringBuilder sb = new StringBuilder();
-                if (!descText.isEmpty()) sb.append(descText).append("
-");
+                if (!descText.isEmpty()) sb.append(descText).append("\n");
                 if (!filePath.isEmpty()) sb.append("📁 ").append(filePath);
                 desc.setText(sb.toString().trim());
                 desc.setTextColor(palette.textMuted);
@@ -5952,8 +5948,7 @@ public class MainActivity extends AppCompatActivity {
             if (totalCount == 0) {
                 if (tvPluginEmpty != null) {
                     tvPluginEmpty.setVisibility(View.VISIBLE);
-                    tvPluginEmpty.setText("暂无已安装的插件或独立扩展。
-请在上方输入 npm 包名或 Git 地址安装。");
+                    tvPluginEmpty.setText("暂无已安装的插件或独立扩展。\n请在上方输入 npm 包名或 Git 地址安装。");
                 }
                 return;
             }
@@ -6007,8 +6002,7 @@ public class MainActivity extends AppCompatActivity {
                     // Description & Source
                     TextView desc = new TextView(MainActivity.this);
                     StringBuilder sb = new StringBuilder();
-                    if (!descText.isEmpty()) sb.append(descText).append("
-");
+                    if (!descText.isEmpty()) sb.append(descText).append("\n");
                     sb.append("📦 来源: ").append(source);
                     desc.setText(sb.toString());
                     desc.setTextColor(palette.textMuted);
@@ -6152,8 +6146,7 @@ public class MainActivity extends AppCompatActivity {
             if (servers == null || servers.length() == 0) {
                 if (tvPluginEmpty != null) {
                     tvPluginEmpty.setVisibility(View.VISIBLE);
-                    tvPluginEmpty.setText("暂无已配置的 MCP 服务器。
-可在上方输入启动命令 (如 npx -y @modelcontextprotocol/server-fetch) 新增。");
+                    tvPluginEmpty.setText("暂无已配置的 MCP 服务器。\n可在上方输入启动命令 (如 npx -y @modelcontextprotocol/server-fetch) 新增。");
                 }
                 return;
             }
@@ -6206,8 +6199,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     JSONArray args = transport.optJSONArray("args");
                     if (args != null && args.length() > 0) {
-                        sb.append("
-参数: ");
+                        sb.append("\n参数: ");
                         for (int a = 0; a < args.length(); a++) {
                             if (a > 0) sb.append(" ");
                             sb.append(args.optString(a));
