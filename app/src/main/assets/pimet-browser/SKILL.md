@@ -25,47 +25,81 @@ description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定
 
 ### run：代码模式
 
-`browser` action=`run`，`code` 是一段 async 函数体（可以 `await`），有两个变量：`b`（浏览器）和 `ctx`（`ctx.signal` 中止信号、`ctx.tab`）。用 `return` 返回结果（对象会转成 JSON），`b.log()` 的输出也会返回给你；总长度截断到 4 万字符。默认超时 120 秒，`timeout` 参数（秒）最大 600。
+`browser` action=`run`，`code` 是一段 async 函数体（可以 `await`），有两个变量：`b`（浏览器）和 `ctx`（`ctx.signal` 中止信号、`ctx.tab`）。用 `return` 返回结果（对象会转成 JSON），`b.log()` 的输出也会返回给你。默认超时 120 秒，`timeout` 参数（秒）最大 600。
+
+输出总长约 4 万字符，按优先级分配：出错信息、当前网址、最后 5 步轨迹一定保留；日志只留**最后 8000 字符**；返回值太长时改用紧凑 JSON，再长就截断并注明。所以：**只 return 需要的字段**，大列表先 `slice`。
 
 | 方法 | 说明 |
 |---|---|
-| `b.open(url)` | 打开网址（或搜索词），等加载完，返回 `{url, title}` |
+| `b.open(url)` | 打开网址（或搜索词），等加载完，返回 `{url, title}`（新宿主还会带 `loaded`、`http_status`、`load_error`） |
 | `b.snapshot({mode})` | 返回快照文本（`mode: "interactive"` 只要元素列表） |
-| `b.click(ref 或 文字)` | `"e12"` 按编号点，其它按包含的文字点；`{js:true}` 强制 JS 点击 |
+| `b.click(ref 或 文字, {js})` | `"e12"` 按编号点，其它按包含的文字点；`{js:true}` 强制 JS 点击 |
 | `b.fill(ref, text, {submit, clear})` | 输入文字（别名 `b.type`）；`submit:true` 输入后提交 |
 | `b.select(ref, value)` / `b.press(key)` | 下拉框选择 / 按键（Enter Tab Escape ArrowDown…） |
 | `b.scroll("down" 或 ref, 屏数)` | 滚动页面，或滚到某个元素 |
 | `b.back()` `b.forward()` `b.reload()` | 导航 |
 | `b.wait(毫秒)` / `b.wait("文字", 超时)` | 等待；等文字时返回是否出现（true/false） |
-| `b.js(script)` | 在页面里执行 JS（可 `await`、`return`），返回解析后的值。**提取数据首选** |
+| `b.waitFor(选择器 或 函数, 超时=15000)` | 等 CSS 选择器出现**且可见**，或等页面里的函数返回真值；返回该真值，超时返回 `false`（不抛错）。页面跳转中也会继续等 |
+| `b.js(fn, ...args)` | **推荐**：`fn` 在页面里执行（可 async），`args` 经 JSON 传进去，返回值原样带回。**提取数据首选** |
+| `b.js("脚本", {timeout})` | 兼容写法：表达式（`"document.title"`）或带 `return` 的语句体 |
 | `b.url()` | 当前网址 |
 | `b.screenshot()` | 截图并附在结果里（最多 3 张） |
 | `b.sleep(ms)` / `b.log(...)` | 等待 / 记录输出 |
 | `b.tool("站点/工具名", args)` | 调用站点工具 |
 | `b.tab("user")` / `await b.newTab(url)` | 换一个标签操作（见「标签页」） |
 
-ref（`e12`）来自最近一次快照，页面变了要重新 `b.snapshot()`。在 run 里更稳的做法是：**用 `b.js()` 按 CSS 选择器直接操作和提取**，用 `b.fill`/`b.click` 处理需要真实输入的地方。每个方法出错都会抛异常；没有捕获时 run 结束并返回错误信息和当前网址。
+ref（`e12`）来自快照，页面变了要重新 `b.snapshot()`。在 run 里更稳的做法是：**用 `b.js(fn)` 按 CSS 选择器直接提取**，用 `b.fill`/`b.click` 处理需要真实输入的地方，用 `b.waitFor` 代替固定的 `b.sleep`。每个方法出错都会抛异常；没有捕获时 run 结束并返回出错位置、当前网址和轨迹。
 
-例子：打开网站 → 搜索 → 提取前 5 条结果
+例子：搜索 → 等结果 → 提取前 5 条
 
 ```js
-await b.open("https://m.jd.com");
-const snap = await b.snapshot({ mode: "interactive" });
-const box = snap.match(/\[(e\d+)\] textbox[^\n]*/);      // 找到搜索框
-if (!box) return snap.slice(0, 2000);                      // 没找到就把快照交回来分析
-await b.fill(box[1], "机械键盘", { submit: true });
-await b.wait("¥", 15000);
-const items = await b.js(`
-  return [...document.querySelectorAll('[class*=product], [class*=item]')]
-    .map(e => ({ name: e.querySelector('[class*=name], [class*=title]')?.innerText.trim(),
-                 price: e.querySelector('[class*=price]')?.innerText.replace(/\\s+/g, '') }))
-    .filter(x => x.name && x.price).slice(0, 5);
-`);
-b.log("当前网址", await b.url());
+// 能直接拼出结果页网址时直接打开，比找搜索框、点按钮稳得多
+await b.open("https://so.m.jd.com/ware/search.action?keyword=" + encodeURIComponent("机械键盘"));
+if (!(await b.waitFor("[class*=price]", 15000))) return await b.snapshot({ mode: "interactive" }); // 没等到就把页面交回来分析
+const items = await b.js((n) => {
+  return [...document.querySelectorAll("[class*=product], [class*=item]")]
+    .map((e) => ({
+      name: e.querySelector("[class*=name], [class*=title]")?.innerText.trim(),
+      price: e.querySelector("[class*=price]")?.innerText.replace(/\s+/g, ""),
+    }))
+    .filter((x) => x.name && x.price)
+    .slice(0, n);
+}, 5);
 return items;
 ```
 
-（选择器只是示意，真实页面要先探索；能直接拼出搜索结果网址时，直接 `b.open` 那个网址更稳。）
+（选择器只是示意，真实页面要先探索。拼不出网址时：`snapshot` 找到搜索框 ref → `b.fill(ref, 词, {submit:true})` → `b.waitFor(...)`。）
+
+### 常见坑
+
+- **`b.js` 的函数在网页里运行，看不到 run 里的变量**。`const q = "键盘"; b.js(() => q)` 会报 `q is not defined`。要用的值作为参数传：`b.js((q) => …, q)`。参数和返回值都要能转 JSON：返回 DOM 元素、函数、循环引用都不行，先取出文字或属性。
+- **字符串脚本**：写成表达式（`"document.title"`），或者带 `return` 的语句体（`"const a = 1; return a"`）。写成 `"const a = 1; a"` 拿到的是 `undefined`。语法错误在发出前就会报出。
+- **在 `b.js` 里触发跳转会丢掉结果**（页面换了，脚本跟着没了）。要点链接跳转，用 `b.click`，或者 `b.js` 只取出 `href` 再 `b.open`。
+- **返回值不再被猜类型**：页面返回字符串 `"123"`，你拿到的就是字符串 `"123"`。
+- **ref 会失效**：页面变化后旧 ref 可能报「ref eN 已失效」，重新 `snapshot` 拿新的就行，不要反复重试旧 ref。
+- **超时**：单步默认 20 秒（`timeout` 毫秒，最大 120000）；`b.waitFor` 默认 15 秒；整段 run 默认 120 秒（最大 600 秒）。超时或中止时，工具会通知宿主取消还在进行的操作。
+- **「标签正忙」**：上一个操作还没结束（比如上次 run 超时了）。稍等再试，不要连发。
+- **用户叫停、令牌无效、连不上宿主属于致命错误**：之后所有 `b.*` 立即抛同一个错误，`try/catch` 也拦不住，run 会马上结束，结果首行是「⛔ 已叫停/已终止，做到第 N 步」。这时停下，告诉用户进展，不要重试。
+- 单步操作（click/type/scroll…）默认只回 interactive 快照（约 2500 字），要看页面文字时再 `snapshot`（默认 full）。
+
+### 出错时怎么读轨迹
+
+run 出错时返回类似：
+
+```
+出错: 页面已变化，ref e12 已失效，请重新 snapshot
+出错位置: run 代码第 4 行
+当前网址: https://example.com/list
+最后 3 步（共 3 步）:
+#1 open https://example.com · 1830ms · ✓（run 代码第 1 行）
+#2 type e5 文字4字 +提交 · 920ms · ✓（run 代码第 2 行）
+#3 click e12 · 40ms · ✗（run 代码第 4 行） 页面已变化，ref e12 已失效…
+```
+
+- `出错位置` 是你代码的行号（从 code 第 1 行算起；出错在站点工具里时显示 `站点/工具.mjs 第 N 行`）。
+- 每步是 `#序号 动作 参数摘要 · 耗时 · 成败（行号）`；输入内容只记字数，不记原文。
+- 怎么判断：最后一步 ✗ 就是失败点；某步耗时异常长（接近超时），通常是在等加载或等元素；全部 ✓ 但仍出错，是你自己的代码（如取空值的属性）出了问题，看「出错位置」。
+- 修正后只重跑失败点之后的部分。页面停在「当前网址」，可以直接从那里继续。
 
 ### 站点工具与经验：/root/pimet-browser/sites/
 
@@ -81,14 +115,15 @@ return items;
 - 工具文件**必须用 `.mjs`**（`.js` 会被 Node 当成 CommonJS，`export` 会报错）。
 - **第一行**写 `// 一句话说明`（`tools` 列表里显示的就是它），说明里写清参数。
 - 导出 `default`（或导出的第一个函数），签名 `async (b, args)`，`b` 与 run 里的完全一样；返回结果。改完立即生效（按修改时间重新加载）。
+- 工具里提取数据同样用 `b.js((参数) => {...}, 参数)`，等元素用 `b.waitFor`。
 - 工具里可以调用别的工具：`await b.tool("jd/login-check")`。
 
 ```js
 // 京东搜索：args {q: 关键词, n: 条数=5}，返回 [{name, price, url}]
 export default async function (b, { q, n = 5 }) {
   await b.open("https://so.m.jd.com/ware/search.action?keyword=" + encodeURIComponent(q));
-  await b.wait("¥", 15000);
-  return await b.js(`return [...document.querySelectorAll('...')].slice(0, ${n}).map(e => ({ ... }))`);
+  await b.waitFor("[class*=price]", 15000);
+  return await b.js((n) => [...document.querySelectorAll("...")].slice(0, n).map((e) => ({ /* ... */ })), n);
 }
 ```
 
