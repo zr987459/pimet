@@ -212,7 +212,7 @@ class BrowserError extends Error {}
 class FatalError extends BrowserError {}
 
 function hostError(msg: string): BrowserError {
-  return /叫停|令牌/.test(msg) ? new FatalError(msg) : new BrowserError(msg);
+  return /叫停|令牌|用户正在操作/.test(msg) ? new FatalError(msg) : new BrowserError(msg);
 }
 
 async function call(action: string, params: Record<string, any>, signal?: AbortSignal, clientMs?: number): Promise<any> {
@@ -637,7 +637,7 @@ async function runCode(code: string, timeoutSec: number, tab: string | undefined
     const failed = st.trace.length ? st.trace[st.trace.length - 1] : null;
     const where = codeLocation(error?.stack) || (failed && !failed.ok ? failed.at : "");
     if (st.fatal) {
-      const kind = /叫停/.test(msg) ? "已叫停" : "已终止";
+      const kind = /叫停/.test(msg) ? "已叫停" : /用户正在操作/.test(msg) ? "用户接手了浏览器，已暂停" : "已终止";
       head.push(`⛔ ${kind}，做到第 ${st.trace.length} 步：${msg}`);
     } else {
       head.push(`出错: ${msg}`);
@@ -699,7 +699,7 @@ export default function (pi: ExtensionAPI) {
       "【网站任务先 action=tools】看 sites/ 下的现成工具和 notes.md；成功后沉淀工具和经验。\n" +
       "【单步探索】open | snapshot(mode=interactive 省 token) | click(ref/text) | type(ref,text) | select | press | scroll | back | forward | reload | wait | eval | screenshot | status | tabs | new_tab | switch_tab | close_tab | downloads | show | hide | home | close | reload_ui。ref 如 e3，来自快照。\n" +
       "默认在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show 打断用户。" +
-      "返回「用户已叫停」时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
+      "返回「用户已叫停」或「用户正在操作标签」（user_takeover）时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
     parameters: Type.Object({
       action: Type.String({
         description:

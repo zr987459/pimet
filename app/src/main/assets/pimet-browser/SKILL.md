@@ -71,6 +71,7 @@ return items;
 （选择器只是示意，真实页面要先探索。拼不出网址时：`snapshot` 找到搜索框 ref → `b.fill(ref, 词, {submit:true})` → `b.waitFor(...)`。）
 
 ### 常见坑
+- 返回「用户正在操作标签 tX」（user_takeover）：用户正在亲手操作这个页面。立即停下，告诉用户你做到哪一步，等用户说继续再接着做；不要重试、不要换标签绕过。
 
 - **`b.js` 的函数在网页里运行，看不到 run 里的变量**。`const q = "键盘"; b.js(() => q)` 会报 `q is not defined`。要用的值作为参数传：`b.js((q) => …, q)`。参数和返回值都要能转 JSON：返回 DOM 元素、函数、循环引用都不行，先取出文字或属性。
 - **字符串脚本**：写成表达式（`"document.title"`），或者带 `return` 的语句体（`"const a = 1; return a"`）。写成 `"const a = 1; a"` 拿到的是 `undefined`。语法错误在发出前就会报出。
