@@ -29,7 +29,8 @@
 - back/forward 不能后退/前进时直接报错。
 - settle：用 agent.js 的 `A.waitStable(quietMs, maxMs)`（见下）轮询，上限 3000ms，替换固定 sleep。
 - 截图：窗口可见时优先 PixelCopy（API 26+），失败回退 draw；ARGB_8888 → JPEG 70。
-- 读取 Tab 新字段：`navSeq / finishedSeq / errorCode / errorDesc / httpStatus`（主控已加到 FloatingApps.Tab）。
+- 读取 Tab 新字段：`navSeq / finishedSeq / errorCode / errorDesc / httpStatus / userInputAt`（主控已加到 FloatingApps.Tab）。
+- 用户接手检测：请求开始时记 `t0 = SystemClock.uptimeMillis()`；每个原子步骤（locate、tap、type、key、select）前若 `tab.userInputAt > t0`，返回错误 `"用户正在操作标签 tX，Pi 已暂停本次操作。请等用户操作完或询问用户后再继续"`（带 url），错误对象加 `user_takeover:true`。TS/SKILL 遇到该错误要停下问用户，不要重试。
 
 ### 页面脚本（agent.js，C）
 - 版本号写成 `var V = '__PIMET_AGENT_V__';`，宿主注入前替换为源码哈希。
