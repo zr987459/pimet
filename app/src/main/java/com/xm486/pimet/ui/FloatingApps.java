@@ -562,6 +562,28 @@ public final class FloatingApps {
         return t;
     }
 
+    private void recoverTab(Tab t, WebView dead, boolean crashed) {
+        if (t == null || t.closed || t.web != dead) return;
+        if (sPendingFileWebView == dead) cancelPendingFileChooser();
+        int idx = webFrame.indexOfChild(dead);
+        try { webFrame.removeView(dead); } catch (Throwable ignored) {}
+        try { dead.destroy(); } catch (Throwable ignored) {}
+        t.loading = false;
+        t.translated = false;
+        t.web = createWebView(t);
+        webFrame.addView(t.web, Math.max(0, idx), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (active == t) web = t.web;
+        applyVisibility();
+        String u = t.url;
+        if (u != null && !u.isEmpty() && !u.startsWith("about:")) t.web.loadUrl(u);
+        else goHome(t, false);
+        if (active == t) {
+            updateProgress();
+            refreshBall();
+        }
+        Toast.makeText(ctx, crashed ? "网页崩溃了（可能内存不足），已重新加载" : "网页被系统回收，已重新加载", Toast.LENGTH_LONG).show();
+    }
+
     private void switchTo(Tab t) {
         if (t == null || t.closed) return;
         if (active != null && active != t) snapThumb(active);
@@ -1464,6 +1486,15 @@ public final class FloatingApps {
                 if (WebPinchZoom.isLocal(url)) PiWebCompat.apply(view, url);
             }
 
+            /** 网页渲染进程崩溃/被系统回收（常见于 AI 网站压缩大图时内存不足）：不让整个 App 跟着退出，重建这个标签 */
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                boolean crashed = detail != null && detail.didCrash();
+                Log.w(TAG, "render process gone, crashed=" + crashed + " url=" + t.url);
+                MAIN.post(() -> recoverTab(t, view, crashed));
+                return true;
+            }
+
             @Override
             public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
                 t.url = url != null ? url : "";
@@ -1564,7 +1595,14 @@ public final class FloatingApps {
                 };
 
                 try {
-                    ctx.startActivity(intent);
+                    Activity h = host;
+                    if (h != null && !h.isFinishing()) {
+                        // 在浏览器自己的任务里打开，选完图片回到浏览器（而不是跳回工作台）
+                        intent.setFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+                        h.startActivity(intent);
+                    } else {
+                        ctx.startActivity(intent);
+                    }
                     return true;
                 } catch (Throwable ex) {
                     Log.w(TAG, "start file chooser activity failed", ex);
