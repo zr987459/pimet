@@ -544,6 +544,7 @@ public final class FloatingApps {
         boolean desktop;         // 桌面版网站
         Bitmap thumb;            // 标签页网格里的缩略图
         volatile boolean translated; // 网页翻译已开启（悬浮球显示「原」）
+        String autoAuthKey;      // 已自动用保存的账号密码登录过的 host|realm（失败时改为弹窗，避免死循环）
         long lastUsed = System.currentTimeMillis();
 
         Tab(String id, boolean pi) {
@@ -560,6 +561,55 @@ public final class FloatingApps {
         tabs.add(t);
         if (host == null) layoutOffscreen();
         return t;
+    }
+
+    private void showHttpAuthDialog(Tab t, android.webkit.HttpAuthHandler handler, String hostName, String realm, boolean failed) {
+        Activity h = host;
+        if (h == null || h.isFinishing()) {
+            handler.cancel();
+            Toast.makeText(ctx, hostName + " 需要登录，打开浏览器后刷新", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout box = new LinearLayout(h);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView tip = new TextView(h);
+        tip.setText((failed ? "保存的账号密码不对，请重新输入。\n" : "") + hostName
+                + (realm != null && !realm.isEmpty() ? "（" + realm + "）" : "") + " 要求登录");
+        tip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        box.addView(tip);
+        EditText user = new EditText(h);
+        user.setHint("用户名");
+        user.setSingleLine(true);
+        box.addView(user);
+        EditText pass = new EditText(h);
+        pass.setHint("密码");
+        pass.setSingleLine(true);
+        pass.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        box.addView(pass);
+        android.widget.CheckBox remember = new android.widget.CheckBox(h);
+        remember.setText("记住账号密码");
+        remember.setChecked(true);
+        box.addView(remember);
+        try {
+            String[] saved = android.webkit.WebViewDatabase.getInstance(ctx).getHttpAuthUsernamePassword(hostName, realm);
+            if (saved != null && saved.length >= 1 && saved[0] != null) user.setText(saved[0]);
+        } catch (Throwable ignored) {}
+        final boolean[] done = {false};
+        AlertDialog d = new AlertDialog.Builder(h).setTitle("登录").setView(box)
+                .setPositiveButton("登录", (di, w) -> {
+                    done[0] = true;
+                    String u = user.getText().toString(), p = pass.getText().toString();
+                    if (remember.isChecked()) {
+                        try { android.webkit.WebViewDatabase.getInstance(ctx).setHttpAuthUsernamePassword(hostName, realm, u, p); } catch (Throwable ignored) {}
+                    }
+                    t.autoAuthKey = hostName + "|" + realm; // 这次的账号若再被拒，下次直接弹窗
+                    handler.proceed(u, p);
+                })
+                .setNegativeButton("取消", (di, w) -> { done[0] = true; handler.cancel(); })
+                .create();
+        d.setOnDismissListener(di -> { if (!done[0]) handler.cancel(); });
+        d.show();
     }
 
     private void recoverTab(Tab t, WebView dead, boolean crashed) {
@@ -1460,6 +1510,7 @@ public final class FloatingApps {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                t.autoAuthKey = null;
                 t.loading = false;
                 if (t == active) updateProgress();
                 applyZoom(t);
@@ -1484,6 +1535,23 @@ public final class FloatingApps {
             public void onPageCommitVisible(WebView view, String url) {
                 applyZoom(t);
                 if (WebPinchZoom.isLocal(url)) PiWebCompat.apply(view, url);
+            }
+
+            /** HTTP 基本认证（如 ttyd、路由器后台、Nginx auth_basic）：WebView 默认直接取消 → 白屏，这里弹登录框 */
+            @Override
+            public void onReceivedHttpAuthRequest(WebView view, android.webkit.HttpAuthHandler handler, String hostName, String realm) {
+                String key = hostName + "|" + realm;
+                if (handler.useHttpAuthUsernamePassword() && !key.equals(t.autoAuthKey)) {
+                    try {
+                        String[] saved = android.webkit.WebViewDatabase.getInstance(ctx).getHttpAuthUsernamePassword(hostName, realm);
+                        if (saved != null && saved.length >= 2 && saved[0] != null && saved[1] != null) {
+                            t.autoAuthKey = key;
+                            handler.proceed(saved[0], saved[1]);
+                            return;
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                showHttpAuthDialog(t, handler, hostName, realm, key.equals(t.autoAuthKey));
             }
 
             /** 网页渲染进程崩溃/被系统回收（常见于 AI 网站压缩大图时内存不足）：不让整个 App 跟着退出，重建这个标签 */
