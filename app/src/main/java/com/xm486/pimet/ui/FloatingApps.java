@@ -537,6 +537,14 @@ public final class FloatingApps {
         volatile boolean loading = false;
         volatile int progress = 100;
         volatile boolean closed = false;
+        /** 导航代数：onPageStarted / SPA 路由变化时 +1；主框架加载完成时 finishedSeq = navSeq。供 BrowserAgent 判断「新页面真的加载完了」 */
+        volatile int navSeq = 0;
+        volatile int finishedSeq = 0;
+        /** 当前主框架最近一次加载错误（新导航开始时清空）；errorCode 0 = 无错误 */
+        volatile int errorCode = 0;
+        volatile String errorDesc = "";
+        /** 主框架 HTTP 状态码（仅 >=400 时记录，0 = 未知/正常） */
+        volatile int httpStatus = 0;
         /** 同一标签上的 Pi 操作串行；不同标签可以并行 */
         final Object lock = new Object();
         int busy = 0;            // 只在主线程读写
@@ -1501,6 +1509,10 @@ public final class FloatingApps {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                t.navSeq++;
+                t.errorCode = 0;
+                t.errorDesc = "";
+                t.httpStatus = 0;
                 t.loading = true;
                 t.translated = false;
                 if (t == active) { updateProgress(); refreshBall(); }
@@ -1512,6 +1524,7 @@ public final class FloatingApps {
             public void onPageFinished(WebView view, String url) {
                 t.autoAuthKey = null;
                 t.loading = false;
+                t.finishedSeq = t.navSeq;
                 if (t == active) updateProgress();
                 applyZoom(t);
                 if (WebPinchZoom.isLocal(url)) {
@@ -1565,8 +1578,24 @@ public final class FloatingApps {
 
             @Override
             public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                // SPA 路由（pushState / hash）不触发 onPageStarted：算一次已完成的导航
+                if (!t.loading) { t.navSeq++; t.finishedSeq = t.navSeq; }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceError error) {
+                if (request == null || !request.isForMainFrame() || error == null) return;
+                t.errorCode = error.getErrorCode() == 0 ? -1 : error.getErrorCode();
+                CharSequence d = error.getDescription();
+                t.errorDesc = d != null ? d.toString() : "";
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceResponse resp) {
+                if (request == null || !request.isForMainFrame() || resp == null) return;
+                t.httpStatus = resp.getStatusCode();
             }
         });
         w.setWebChromeClient(new WebChromeClient() {
