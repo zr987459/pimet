@@ -159,16 +159,23 @@ public class AppBridgeManager {
     private static final Object PHONE_LOCK = new Object();
 
     private static final int MAX_BODY = 1024 * 1024;
+    /** 响应体上限：超过就截断最长的字符串字段并标记 truncated */
+    private static final int MAX_RESPONSE = 2 * 1024 * 1024;
+    /** 读请求头 / 请求体的超时；处理期间不读 socket，不受它影响 */
+    private static final int READ_TIMEOUT_MS = 5000;
+    /** 超大请求时最多丢弃这么多字节再回 413，避免客户端还在写就被 RST 而看不到错误 */
+    private static final long MAX_DRAIN = 16L * 1024 * 1024;
 
     private void handleHttpClient(Socket socket) {
         clientPool.execute(() -> {
             try (Socket s = socket) {
-                s.setSoTimeout(5000);
+                s.setSoTimeout(READ_TIMEOUT_MS);
                 java.io.InputStream in = new java.io.BufferedInputStream(s.getInputStream());
                 // 头部按字节读取到空行；Content-Length 是字节数（中文 UTF-8 一字 3 字节），正文必须按字节读
                 String requestLine = readLineBytes(in);
                 if (requestLine == null) return;
-                int contentLength = 0;
+                long contentLength = 0;
+                boolean badLength = false;
                 String token = null;
                 String hl;
                 while ((hl = readLineBytes(in)) != null && !hl.isEmpty()) {
@@ -177,72 +184,187 @@ public class AppBridgeManager {
                     String name = hl.substring(0, c).trim().toLowerCase(java.util.Locale.ROOT);
                     String val = hl.substring(c + 1).trim();
                     if ("content-length".equals(name)) {
-                        try { contentLength = Integer.parseInt(val); } catch (Exception ignored) {}
+                        try { contentLength = Long.parseLong(val); } catch (Exception e) { badLength = true; }
                     } else if ("x-pimet-token".equals(name)) {
                         token = val;
                     }
                 }
-                if (contentLength < 0 || contentLength > MAX_BODY) contentLength = 0;
-                byte[] bodyBytes = new byte[contentLength];
-                int got = 0;
-                while (got < contentLength) {
-                    int r = in.read(bodyBytes, got, contentLength - got);
-                    if (r == -1) break;
-                    got += r;
-                }
-                String body = new String(bodyBytes, 0, got, StandardCharsets.UTF_8);
-
-                JSONObject resp;
                 String[] parts = requestLine.split(" ");
                 String method = parts.length > 0 ? parts[0] : "";
                 String path = parts.length > 1 ? parts[1] : "/";
+
+                // GET /api/phone-status：不看正文，行为不变
                 if ("GET".equalsIgnoreCase(method) && path.startsWith("/api/phone-status")) {
-                    resp = PiMetAccessibilityService.statusJson(appContext);
-                } else if (TextUtils.isEmpty(body)) {
-                    resp = new JSONObject().put("success", true).put("result", "OK");
-                } else {
-                    JSONObject json;
-                    try {
-                        json = new JSONObject(body);
-                    } catch (Throwable t) {
-                        json = null;
-                        resp = new JSONObject().put("success", false).put("error", "JSON 解析失败: " + t.getMessage());
-                        writeJson(s, resp);
-                        return;
-                    }
-                    if (isBrowser(json)) {
-                        if (token == null) token = json.optString("token", null);
-                        if (!getBridgeToken().equals(token)) {
-                            resp = new JSONObject().put("success", false)
-                                    .put("error", "浏览器请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
-                        } else {
-                            resp = com.xm486.pimet.ui.BrowserAgent.handle(appContext, json);
-                        }
-                    } else if (isTerminal(json)) {
-                        if (token == null) token = json.optString("token", null);
-                        if (!getBridgeToken().equals(token)) {
-                            resp = new JSONObject().put("success", false)
-                                    .put("error", "终端请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
-                        } else {
-                            resp = com.xm486.pimet.terminal.TerminalHub.handle(appContext, json);
-                        }
-                    } else if (isPhoneControl(json)) {
-                        if (token == null) token = json.optString("token", null);
-                        if (!getBridgeToken().equals(token)) {
-                            resp = new JSONObject().put("success", false)
-                                    .put("error", "手机自动化请求缺少有效令牌（X-PiMet-Token，见容器内 ~/.pi/agent/.pimet_bridge_token），请重启 PiMet 后重试");
-                        } else {
-                            resp = executePhoneControl(json);
-                        }
-                    } else {
-                        resp = new JSONObject().put("success", true).put("result", executeCommand(json));
-                    }
+                    safeWrite(s, 200, PiMetAccessibilityService.statusJson(appContext));
+                    return;
                 }
-                writeJson(s, resp);
+                if (badLength || contentLength < 0) {
+                    safeWrite(s, 400, err("Content-Length 无效"));
+                    return;
+                }
+                if (contentLength > MAX_BODY) {
+                    // 尽量读掉正文再回错误，客户端才能收到 413 而不是连接被重置
+                    try {
+                        long left = Math.min(contentLength, MAX_DRAIN);
+                        while (left > 0) {
+                            long n = in.skip(left);
+                            if (n <= 0) {
+                                if (in.read() == -1) break;
+                                n = 1;
+                            }
+                            left -= n;
+                        }
+                    } catch (Throwable ignored) {}
+                    safeWrite(s, 413, err("请求过大（" + contentLength + " 字节，上限 " + MAX_BODY + "）。请缩短脚本 / 文本，或分段、改用文件传递")
+                            .put("too_large", true));
+                    return;
+                }
+                int len = (int) contentLength;
+                byte[] bodyBytes = new byte[len];
+                int got = 0;
+                try {
+                    while (got < len) {
+                        int r = in.read(bodyBytes, got, len - got);
+                        if (r == -1) break;
+                        got += r;
+                    }
+                } catch (java.net.SocketTimeoutException te) {
+                    // 下面按「读不满」处理
+                }
+                if (got < len) {
+                    safeWrite(s, 400, err("请求体不完整：声明 " + len + " 字节，只收到 " + got + " 字节"));
+                    return;
+                }
+                String body = new String(bodyBytes, 0, got, StandardCharsets.UTF_8);
+                if (body.trim().isEmpty()) {
+                    safeWrite(s, 400, err("请求体为空：POST /api/app-control 需要 JSON 正文"));
+                    return;
+                }
+
+                JSONObject json;
+                try {
+                    json = new JSONObject(body);
+                } catch (Throwable t) {
+                    safeWrite(s, 400, err("JSON 解析失败: " + t.getMessage()));
+                    return;
+                }
+
+                JSONObject resp;
+                if (isBrowser(json)) {
+                    if (token == null) token = json.optString("token", null);
+                    if (!tokenOk(token)) {
+                        resp = err("浏览器请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
+                    } else if ("cancel".equalsIgnoreCase(json.optString("browser_action", "").trim())) {
+                        // 快速路径：不拿任何锁，立即返回
+                        String rid = emptyToNull(json.optString("req_id", ""));
+                        String tab = emptyToNull(json.optString("tab", ""));
+                        boolean called = invokeBrowserCancel(rid, tab);
+                        resp = new JSONObject().put("success", true).put("result", "已取消");
+                        if (!called) resp.put("note", "宿主暂不支持取消，已忽略");
+                    } else {
+                        resp = handleBrowserWatched(s, in, json);
+                    }
+                } else if (isTerminal(json)) {
+                    if (token == null) token = json.optString("token", null);
+                    if (!tokenOk(token)) {
+                        resp = err("终端请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
+                    } else {
+                        resp = com.xm486.pimet.terminal.TerminalHub.handle(appContext, json);
+                    }
+                } else if (isPhoneControl(json)) {
+                    if (token == null) token = json.optString("token", null);
+                    if (!tokenOk(token)) {
+                        resp = err("手机自动化请求缺少有效令牌（X-PiMet-Token，见容器内 ~/.pi/agent/.pimet_bridge_token），请重启 PiMet 后重试");
+                    } else {
+                        resp = executePhoneControl(json);
+                    }
+                } else {
+                    resp = new JSONObject().put("success", true).put("result", executeCommand(json));
+                }
+                safeWrite(s, 200, resp);
             } catch (Throwable t) {
                 Log.w(TAG, "bridge client error: " + t);
             }
         });
+    }
+
+    private boolean tokenOk(String token) {
+        if (token == null) return false;
+        return java.security.MessageDigest.isEqual(
+                getBridgeToken().getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * 处理浏览器请求，同时用另一个线程盯着 socket：客户端断开（EOF / 连接重置）就取消这个 req_id，
+     * 让 BrowserAgent 尽快放锁，不再执行过期的点击/输入。处理线程本身不读 socket，所以不受 soTimeout 影响。
+     */
+    private JSONObject handleBrowserWatched(Socket s, java.io.InputStream in, JSONObject json) {
+        final String reqId = emptyToNull(json.optString("req_id", ""));
+        final String tab = emptyToNull(json.optString("tab", ""));
+        final AtomicBoolean done = new AtomicBoolean(false);
+        Thread watcher = null;
+        if (reqId != null) {
+            watcher = new Thread(() -> {
+                try {
+                    s.setSoTimeout(500);
+                    while (!done.get()) {
+                        int b;
+                        try {
+                            b = in.read();
+                        } catch (java.net.SocketTimeoutException te) {
+                            continue; // 还连着
+                        }
+                        if (b == -1) break; // 客户端关闭
+                        // 多余字节（不应出现）忽略，继续盯
+                    }
+                } catch (Throwable ignored) {
+                    // 连接重置等：视为断开
+                }
+                if (!done.get()) {
+                    Log.i(TAG, "browser client disconnected, cancel req " + reqId);
+                    invokeBrowserCancel(reqId, tab);
+                }
+            }, "PiMet-AppBridge-Watch");
+            watcher.setDaemon(true);
+            watcher.start();
+        }
+        try {
+            return com.xm486.pimet.ui.BrowserAgent.handle(appContext, json);
+        } finally {
+            done.set(true);
+            if (watcher != null) watcher.interrupt();
+        }
+    }
+
+    private static volatile java.lang.reflect.Method sCancelMethod;
+    private static volatile boolean sCancelLooked = false;
+
+    /** 反射调用 BrowserAgent.cancel(String reqId, String tab)；方法不存在就跳过，返回是否调用成功 */
+    private static boolean invokeBrowserCancel(String reqId, String tab) {
+        if (reqId == null && tab == null) return false;
+        java.lang.reflect.Method m = sCancelMethod;
+        if (m == null && !sCancelLooked) {
+            synchronized (AppBridgeManager.class) {
+                if (!sCancelLooked) {
+                    try {
+                        sCancelMethod = Class.forName("com.xm486.pimet.ui.BrowserAgent")
+                                .getMethod("cancel", String.class, String.class);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "BrowserAgent.cancel not available: " + t);
+                    }
+                    sCancelLooked = true;
+                }
+                m = sCancelMethod;
+            }
+        }
+        if (m == null) return false;
+        try {
+            m.invoke(null, reqId, tab);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "BrowserAgent.cancel failed: " + t);
+            return false;
+        }
     }
 
     private static boolean isBrowser(JSONObject json) {
@@ -257,15 +379,71 @@ public class AppBridgeManager {
         return "phone_control".equals(json.optString("action")) || json.has("phone_action");
     }
 
-    private static void writeJson(Socket s, JSONObject resp) throws java.io.IOException {
-        byte[] respBytes = resp.toString().getBytes(StandardCharsets.UTF_8);
+    /** 写回响应；失败（客户端已走）只记日志 */
+    private static void safeWrite(Socket s, int status, JSONObject resp) {
+        try {
+            writeJson(s, status, resp);
+        } catch (Throwable t) {
+            Log.w(TAG, "write response failed: " + t);
+        }
+    }
+
+    private static void writeJson(Socket s, int status, JSONObject resp) throws java.io.IOException {
+        byte[] respBytes = limitResponse(resp);
+        String reason;
+        switch (status) {
+            case 400: reason = "Bad Request"; break;
+            case 413: reason = "Payload Too Large"; break;
+            default: status = 200; reason = "OK"; break;
+        }
         OutputStream out = s.getOutputStream();
-        out.write(("HTTP/1.1 200 OK\r\n" +
+        out.write(("HTTP/1.1 " + status + " " + reason + "\r\n" +
                 "Content-Type: application/json; charset=utf-8\r\n" +
                 "Content-Length: " + respBytes.length + "\r\n" +
                 "Connection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
         out.write(respBytes);
         out.flush();
+    }
+
+    /** 响应超过 MAX_RESPONSE：去掉截图，反复截短最长的顶层字符串字段，并标记 truncated */
+    private static byte[] limitResponse(JSONObject resp) {
+        byte[] b = resp.toString().getBytes(StandardCharsets.UTF_8);
+        if (b.length <= MAX_RESPONSE) return b;
+        try {
+            JSONObject o = new JSONObject(resp.toString());
+            o.put("truncated", true);
+            if (o.has("image")) {
+                o.remove("image");
+                o.put("image_dropped", true);
+            }
+            for (int i = 0; i < 12; i++) {
+                b = o.toString().getBytes(StandardCharsets.UTF_8);
+                if (b.length <= MAX_RESPONSE) return b;
+                String longestKey = null;
+                int longestLen = 0;
+                java.util.Iterator<String> it = o.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    Object v = o.opt(k);
+                    if (v instanceof String && ((String) v).length() > longestLen) {
+                        longestLen = ((String) v).length();
+                        longestKey = k;
+                    }
+                }
+                if (longestKey == null || longestLen < 64) break;
+                int excess = b.length - MAX_RESPONSE + 256;
+                // 每个字符至少 1 字节：去掉 excess 个字符一定能省下至少 excess 字节
+                int keep = Math.max(0, Math.min(longestLen / 2 + longestLen / 4, longestLen - excess));
+                String v = o.getString(longestKey);
+                o.put(longestKey, v.substring(0, keep) + "\n…（响应过大，已截断，原 " + longestLen + " 字符）");
+            }
+            b = o.toString().getBytes(StandardCharsets.UTF_8);
+            if (b.length <= MAX_RESPONSE) return b;
+        } catch (Throwable t) {
+            Log.w(TAG, "limitResponse failed: " + t);
+        }
+        return err("响应过大（超过 " + MAX_RESPONSE + " 字节），已丢弃。请减小 max_chars 或分段读取")
+                .toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /** 按字节读一行（去掉 \r\n），流结束返回 null；头部行限长 8KB。 */
