@@ -91,7 +91,9 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.ConnectException;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -101,6 +103,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -5159,9 +5162,9 @@ public class MainActivity extends AppCompatActivity {
         if (inputCustomPlugin == null || btnInstallCustomPlugin == null) return;
         switch (category) {
             case PLUGIN_CAT_MODELS:
-                inputCustomPlugin.setHint("模型在工作台自动发现，或输入 NPM/Git 安装模型插件");
+                inputCustomPlugin.setHint("模型由 Pi 自动发现；如需新的模型供应商，请到「插件」分类安装");
                 if (btnInstallCustomPlugin instanceof TextView) {
-                    ((TextView) btnInstallCustomPlugin).setText("⚡ 智能识别类型并拉取安装");
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 模型无需安装");
                 }
                 break;
             case PLUGIN_CAT_SKILLS:
@@ -5171,9 +5174,9 @@ public class MainActivity extends AppCompatActivity {
                 }
                 break;
             case PLUGIN_CAT_SUBAGENTS:
-                inputCustomPlugin.setHint("输入智能体配置或 NPM/Git 包名");
+                inputCustomPlugin.setHint("粘贴子代理 profile JSON，如 {\"name\":\"reviewer\", ...}");
                 if (btnInstallCustomPlugin instanceof TextView) {
-                    ((TextView) btnInstallCustomPlugin).setText("⚡ 智能识别类型并拉取安装");
+                    ((TextView) btnInstallCustomPlugin).setText("⚡ 新增 / 更新子代理");
                 }
                 break;
             case PLUGIN_CAT_PLUGINS:
@@ -5192,7 +5195,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleInstallPlugin(int category, String input) {
-        Toast.makeText(this, "正在处理安装请求...", Toast.LENGTH_SHORT).show();
+        if (category == PLUGIN_CAT_MODELS) {
+            Toast.makeText(this, "模型由 Pi 自动发现，无需安装；新的模型供应商请到「插件」分类安装", Toast.LENGTH_LONG).show();
+            return;
+        }
+        JSONObject subagentProfile = null;
+        if (category == PLUGIN_CAT_SUBAGENTS) {
+            try {
+                subagentProfile = new JSONObject(input);
+            } catch (Exception ignored) {}
+            if (subagentProfile == null || subagentProfile.optString("name", "").trim().isEmpty()) {
+                Toast.makeText(this, "请粘贴包含 name 字段的子代理 profile JSON", Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        final JSONObject profileFinal = subagentProfile;
+        if (btnInstallCustomPlugin != null) btnInstallCustomPlugin.setEnabled(false);
+        Toast.makeText(this, "正在处理安装请求，npm 安装可能需要几分钟...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
                 switch (category) {
@@ -5201,11 +5220,12 @@ public class MainActivity extends AppCompatActivity {
                         body.put("package", input);
                         body.put("scope", "global");
                         body.put("cwd", getEffectiveCwd());
-                        PiWebApi.post(MainActivity.this, "/api/skills/install", body);
-                        mainHandler.post(() -> {
+                        PiWebApi.post(MainActivity.this, "/api/skills/install", body, PiWebApi.LONG_TIMEOUT_MS);
+                        postPluginUi(() -> {
                             Toast.makeText(MainActivity.this, "✔ Skill 技能已成功安装！", Toast.LENGTH_LONG).show();
                             if (inputCustomPlugin != null) inputCustomPlugin.setText("");
                             refreshPluginsList(currentPluginCategory);
+                            promptReloadPi();
                         });
                         break;
                     }
@@ -5213,10 +5233,10 @@ public class MainActivity extends AppCompatActivity {
                         JSONObject body = new JSONObject();
                         body.put("cwd", getEffectiveCwd());
                         body.put("action", "install");
-                        body.put("source", input);
+                        body.put("source", normalizePluginSource(input));
                         body.put("scope", "global");
-                        PiWebApi.post(MainActivity.this, "/api/plugins", body);
-                        mainHandler.post(() -> {
+                        PiWebApi.post(MainActivity.this, "/api/plugins", body, PiWebApi.LONG_TIMEOUT_MS);
+                        postPluginUi(() -> {
                             Toast.makeText(MainActivity.this, "✔ 插件已成功安装！", Toast.LENGTH_LONG).show();
                             if (inputCustomPlugin != null) inputCustomPlugin.setText("");
                             refreshPluginsList(currentPluginCategory);
@@ -5231,71 +5251,131 @@ public class MainActivity extends AppCompatActivity {
                         body.put("scope", "global");
                         body.put("text", input);
                         PiWebApi.post(MainActivity.this, "/api/mcp", body);
-                        mainHandler.post(() -> {
+                        postPluginUi(() -> {
                             Toast.makeText(MainActivity.this, "✔ MCP 外部服务已成功添加！", Toast.LENGTH_LONG).show();
+                            if (inputCustomPlugin != null) inputCustomPlugin.setText("");
+                            refreshPluginsList(currentPluginCategory);
+                            promptReloadPi();
+                        });
+                        break;
+                    }
+                    case PLUGIN_CAT_SUBAGENTS: {
+                        JSONObject body = new JSONObject();
+                        body.put("cwd", getEffectiveCwd());
+                        body.put("scope", "global");
+                        body.put("profile", profileFinal);
+                        PiWebApi.put(MainActivity.this, "/api/subagents/profiles", body);
+                        postPluginUi(() -> {
+                            Toast.makeText(MainActivity.this, "✔ 子代理已保存: " + profileFinal.optString("name"), Toast.LENGTH_LONG).show();
                             if (inputCustomPlugin != null) inputCustomPlugin.setText("");
                             refreshPluginsList(currentPluginCategory);
                         });
                         break;
                     }
-                    default: {
-                        PluginManager.SmartInstallResult res = PluginManager.smartInstall(MainActivity.this, input);
-                        mainHandler.post(() -> {
-                            if (res.success) {
-                                Toast.makeText(MainActivity.this, "【" + res.detectedType + "】" + res.message, Toast.LENGTH_LONG).show();
-                                if (inputCustomPlugin != null) inputCustomPlugin.setText("");
-                                refreshPluginsList(currentPluginCategory);
-                                if ("Plugin".equalsIgnoreCase(res.detectedType) || "Extension".equalsIgnoreCase(res.detectedType)) {
-                                    promptReloadPi();
-                                }
-                            } else {
-                                Toast.makeText(MainActivity.this, "安装失败: " + res.message, Toast.LENGTH_LONG).show();
-                                refreshPluginsList(currentPluginCategory);
-                            }
-                        });
+                    default:
                         break;
-                    }
                 }
             } catch (Exception e) {
-                mainHandler.post(() -> {
-                    String msg = e.getMessage();
-                    if (msg == null || msg.isEmpty()) msg = e.getClass().getSimpleName();
+                postPluginUi(() -> {
+                    String msg;
+                    if (e instanceof SocketTimeoutException) {
+                        msg = "等待超时，安装可能仍在后台进行，请稍后刷新查看";
+                    } else {
+                        msg = e.getMessage();
+                        if (msg == null || msg.isEmpty()) msg = e.getClass().getSimpleName();
+                    }
                     Toast.makeText(MainActivity.this, "安装/新增失败: " + msg, Toast.LENGTH_LONG).show();
                     refreshPluginsList(currentPluginCategory);
+                });
+            } finally {
+                postPluginUi(() -> {
+                    if (btnInstallCustomPlugin != null) btnInstallCustomPlugin.setEnabled(true);
                 });
             }
         }).start();
     }
 
+    /** 插件源补全：裸 npm 包名补上 npm: 前缀，Git/URL/本地路径保持原样 */
+    private static String normalizePluginSource(String input) {
+        String s = input == null ? "" : input.trim();
+        if (s.startsWith("npm install ")) s = s.substring("npm install ".length()).trim();
+        else if (s.startsWith("npm i ")) s = s.substring("npm i ".length()).trim();
+        if (s.isEmpty()) return s;
+        if (s.startsWith("npm:") || s.startsWith("git:") || s.startsWith("git@")
+                || s.startsWith("http://") || s.startsWith("https://")
+                || s.startsWith("/") || s.startsWith("./") || s.startsWith("../") || s.startsWith("~")) {
+            return s;
+        }
+        return "npm:" + s;
+    }
+
+    private boolean isPluginUiAlive() {
+        return !isFinishing() && !isDestroyed();
+    }
+
+    /** 后台线程回到主线程更新插件页：Activity 已结束时直接丢弃，避免 BadTokenException */
+    private void postPluginUi(Runnable r) {
+        mainHandler.post(() -> {
+            if (isPluginUiAlive()) r.run();
+        });
+    }
+
+    private final AtomicInteger pluginReqSeq = new AtomicInteger();
+
+    /** 仅当该响应仍是最新一次刷新、且分类未切换时才允许渲染，防止旧响应覆盖新列表 */
+    private boolean isLatestPluginRequest(int seq, int category) {
+        return seq == pluginReqSeq.get() && currentPluginCategory == category && layoutPluginItems != null;
+    }
+
     private void refreshPluginsList(int category) {
         currentPluginCategory = category;
+        final int seq = pluginReqSeq.incrementAndGet();
         new Thread(() -> {
             try {
                 switch (category) {
-                    case PLUGIN_CAT_MODELS:
-                        loadModelsCategory();
-                        break;
                     case PLUGIN_CAT_SKILLS:
-                        loadSkillsCategory();
+                        loadSkillsCategory(seq);
                         break;
                     case PLUGIN_CAT_SUBAGENTS:
-                        loadSubagentsCategory();
+                        loadSubagentsCategory(seq);
                         break;
                     case PLUGIN_CAT_PLUGINS:
-                        loadPluginsCategory();
+                        loadPluginsCategory(seq);
                         break;
                     case PLUGIN_CAT_MCP:
-                        loadMcpCategory();
+                        loadMcpCategory(seq);
                         break;
+                    case PLUGIN_CAT_MODELS:
                     default:
-                        loadModelsCategory();
+                        loadModelsCategory(seq);
                         break;
                 }
             } catch (Exception e) {
                 Log.w("MainActivity", "refreshPluginsList failed: " + e.getMessage(), e);
-                mainHandler.post(() -> showPiNotRunningView(e.getMessage()));
+                postPluginUi(() -> {
+                    if (seq != pluginReqSeq.get() || currentPluginCategory != category) return;
+                    showPluginErrorView(e);
+                });
             }
         }).start();
+    }
+
+    private void showPluginErrorView(Exception e) {
+        if (e instanceof PiWebApi.ApiException) {
+            PiWebApi.ApiException ae = (PiWebApi.ApiException) e;
+            if (ae.statusCode == 401) {
+                showPiNotRunningView("需要登录 Pi-Web", "Pi-Web 已设置访问密码 (PI_WEB_PASSWORD)。请先在工作台页面登录，然后重试。");
+            } else {
+                String m = ae.getMessage() != null ? ae.getMessage() : "";
+                showPiNotRunningView("Pi-Web 返回错误", "HTTP " + ae.statusCode + ": " + m);
+            }
+        } else if (e instanceof ConnectException || e instanceof SocketTimeoutException) {
+            showPiNotRunningView("Pi 未运行", "Pi-Web 服务暂未在 127.0.0.1:" + PiWebApi.getPort(this) + " 运行或请求无响应。\n请先启动 Pi 服务后再管理生态配置。");
+        } else {
+            String m = e.getMessage();
+            if (m == null || m.isEmpty()) m = e.getClass().getSimpleName();
+            showPiNotRunningView("加载失败", "读取 Pi-Web 数据出错: " + m);
+        }
     }
 
     private String getEffectiveCwd() {
@@ -5309,7 +5389,7 @@ public class MainActivity extends AppCompatActivity {
         return "/root";
     }
 
-    private void showPiNotRunningView(String errorMsg) {
+    private void showPiNotRunningView(String titleText, String descText) {
         if (layoutPluginItems == null) return;
         layoutPluginItems.removeAllViews();
         if (tvPluginEmpty != null) tvPluginEmpty.setVisibility(View.GONE);
@@ -5332,7 +5412,7 @@ public class MainActivity extends AppCompatActivity {
         card.addView(icon);
 
         TextView title = new TextView(this);
-        title.setText("Pi 未运行");
+        title.setText(titleText);
         title.setTextColor(palette.text);
         title.setTextSize(16f);
         title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
@@ -5344,7 +5424,7 @@ public class MainActivity extends AppCompatActivity {
         card.addView(title);
 
         TextView desc = new TextView(this);
-        desc.setText("Pi-Web 服务暂未在 127.0.0.1:" + PiWebApi.getPort(this) + " 运行或请求无响应。\n请先启动 Pi 服务后再管理生态配置。");
+        desc.setText(descText);
         desc.setTextColor(palette.textMuted);
         desc.setTextSize(12f);
         desc.setGravity(Gravity.CENTER);
@@ -5389,6 +5469,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void promptReloadPi() {
+        if (!isPluginUiAlive()) return;
         new com.xm486.pimet.ui.Icons.CompatDialogBuilder(this)
                 .setTitle("提示")
                 .setMessage("已更改，重载 Pi 后生效")
@@ -5469,15 +5550,15 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void loadModelsCategory() throws Exception {
+    private void loadModelsCategory(final int seq) throws Exception {
         String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
         JSONObject data = PiWebApi.get(this, "/api/models/enabled?cwd=" + encCwd);
         final int enabledTotal = data.optInt("enabledTotal", 0);
         final int availableTotal = data.optInt("availableTotal", 0);
         final JSONArray providers = data.optJSONArray("providers");
 
-        mainHandler.post(() -> {
-            if (currentPluginCategory != PLUGIN_CAT_MODELS || layoutPluginItems == null) return;
+        postPluginUi(() -> {
+            if (!isLatestPluginRequest(seq, PLUGIN_CAT_MODELS)) return;
             layoutPluginItems.removeAllViews();
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
 
@@ -5513,12 +5594,12 @@ public class MainActivity extends AppCompatActivity {
                         JSONObject body = new JSONObject();
                         body.put("op", "clear");
                         PiWebApi.put(MainActivity.this, "/api/models/enabled", body);
-                        mainHandler.post(() -> {
+                        postPluginUi(() -> {
                             Toast.makeText(MainActivity.this, "✔ 已成功启用全部模型！", Toast.LENGTH_SHORT).show();
                             refreshPluginsList(PLUGIN_CAT_MODELS);
                         });
                     } catch (Exception ex) {
-                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "操作失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                        postPluginUi(() -> Toast.makeText(MainActivity.this, "操作失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                     }
                 }).start();
             });
@@ -5588,6 +5669,7 @@ public class MainActivity extends AppCompatActivity {
                         TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
                                 enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
                         btnToggle.setOnClickListener(v -> {
+                            v.setEnabled(false);
                             new Thread(() -> {
                                 try {
                                     JSONObject body = new JSONObject();
@@ -5597,12 +5679,15 @@ public class MainActivity extends AppCompatActivity {
                                     body.put("refs", refs);
                                     body.put("enabled", !enabled);
                                     PiWebApi.put(MainActivity.this, "/api/models/enabled", body);
-                                    mainHandler.post(() -> {
+                                    postPluginUi(() -> {
                                         Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + modelName, Toast.LENGTH_SHORT).show();
                                         refreshPluginsList(PLUGIN_CAT_MODELS);
                                     });
                                 } catch (Exception ex) {
-                                    mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                    postPluginUi(() -> {
+                                        v.setEnabled(true);
+                                        Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                                    });
                                 }
                             }).start();
                         });
@@ -5625,13 +5710,13 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void loadSkillsCategory() throws Exception {
+    private void loadSkillsCategory(final int seq) throws Exception {
         String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
         JSONObject data = PiWebApi.get(this, "/api/skills?cwd=" + encCwd);
         final JSONArray skills = data.optJSONArray("skills");
 
-        mainHandler.post(() -> {
-            if (currentPluginCategory != PLUGIN_CAT_SKILLS || layoutPluginItems == null) return;
+        postPluginUi(() -> {
+            if (!isLatestPluginRequest(seq, PLUGIN_CAT_SKILLS)) return;
             layoutPluginItems.removeAllViews();
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
 
@@ -5703,18 +5788,22 @@ public class MainActivity extends AppCompatActivity {
                 TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
                         enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
                 btnToggle.setOnClickListener(v -> {
+                    v.setEnabled(false);
                     new Thread(() -> {
                         try {
                             JSONObject body = new JSONObject();
                             body.put("filePath", filePath);
                             body.put("disableModelInvocation", enabled);
                             PiWebApi.patch(MainActivity.this, "/api/skills", body);
-                            mainHandler.post(() -> {
+                            postPluginUi(() -> {
                                 Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + name, Toast.LENGTH_SHORT).show();
                                 refreshPluginsList(PLUGIN_CAT_SKILLS);
                             });
                         } catch (Exception ex) {
-                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                            postPluginUi(() -> {
+                                v.setEnabled(true);
+                                Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                            });
                         }
                     }).start();
                 });
@@ -5733,9 +5822,9 @@ public class MainActivity extends AppCompatActivity {
                                 String encPath = URLEncoder.encode(filePath, "UTF-8");
                                 JSONObject contentObj = PiWebApi.get(MainActivity.this, "/api/skills/content?cwd=" + encCwd + "&filePath=" + encPath);
                                 String content = contentObj.optString("content", "");
-                                mainHandler.post(() -> showSkillContentDialog(name, content));
+                                postPluginUi(() -> showSkillContentDialog(name, content));
                             } catch (Exception ex) {
-                                mainHandler.post(() -> Toast.makeText(MainActivity.this, "读取失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                postPluginUi(() -> Toast.makeText(MainActivity.this, "读取失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                             }
                         }).start();
                     });
@@ -5748,7 +5837,7 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void loadSubagentsCategory() throws Exception {
+    private void loadSubagentsCategory(final int seq) throws Exception {
         String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
         JSONObject settingsObj = PiWebApi.get(this, "/api/subagents/settings");
         final boolean globalEnabled = settingsObj.optBoolean("enabled", true);
@@ -5756,8 +5845,8 @@ public class MainActivity extends AppCompatActivity {
         JSONObject profilesObj = PiWebApi.get(this, "/api/subagents/profiles?cwd=" + encCwd);
         final JSONArray profiles = profilesObj.optJSONArray("profiles");
 
-        mainHandler.post(() -> {
-            if (currentPluginCategory != PLUGIN_CAT_SUBAGENTS || layoutPluginItems == null) return;
+        postPluginUi(() -> {
+            if (!isLatestPluginRequest(seq, PLUGIN_CAT_SUBAGENTS)) return;
             layoutPluginItems.removeAllViews();
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
 
@@ -5786,17 +5875,21 @@ public class MainActivity extends AppCompatActivity {
             TextView btnGlobal = createActionButton(globalEnabled ? "🟢 全局: 开" : "⏸ 全局: 关",
                     globalEnabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
             btnGlobal.setOnClickListener(v -> {
+                v.setEnabled(false);
                 new Thread(() -> {
                     try {
                         JSONObject body = new JSONObject();
                         body.put("enabled", !globalEnabled);
                         PiWebApi.put(MainActivity.this, "/api/subagents/settings", body);
-                        mainHandler.post(() -> {
+                        postPluginUi(() -> {
                             Toast.makeText(MainActivity.this, (!globalEnabled ? "✔ 已开启子代理总开关" : "⏸ 已关闭子代理总开关"), Toast.LENGTH_SHORT).show();
                             refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
                         });
                     } catch (Exception ex) {
-                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                        postPluginUi(() -> {
+                            v.setEnabled(true);
+                            Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                        });
                     }
                 }).start();
             });
@@ -5874,6 +5967,7 @@ public class MainActivity extends AppCompatActivity {
                 TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
                         enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
                 btnToggle.setOnClickListener(v -> {
+                    v.setEnabled(false);
                     new Thread(() -> {
                         try {
                             JSONObject body = new JSONObject();
@@ -5882,12 +5976,15 @@ public class MainActivity extends AppCompatActivity {
                             body.put("name", name);
                             body.put("enabled", !enabled);
                             PiWebApi.patch(MainActivity.this, "/api/subagents/profiles", body);
-                            mainHandler.post(() -> {
+                            postPluginUi(() -> {
                                 Toast.makeText(MainActivity.this, (!enabled ? "✔ 已启用: " : "⏸ 已停用: ") + displayName, Toast.LENGTH_SHORT).show();
                                 refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
                             });
                         } catch (Exception ex) {
-                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                            postPluginUi(() -> {
+                                v.setEnabled(true);
+                                Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                            });
                         }
                     }).start();
                 });
@@ -5912,12 +6009,12 @@ public class MainActivity extends AppCompatActivity {
                                             body.put("scope", scope);
                                             body.put("name", name);
                                             PiWebApi.delete(MainActivity.this, "/api/subagents/profiles", body);
-                                            mainHandler.post(() -> {
+                                            postPluginUi(() -> {
                                                 Toast.makeText(MainActivity.this, "✔ 已删除: " + displayName, Toast.LENGTH_SHORT).show();
                                                 refreshPluginsList(PLUGIN_CAT_SUBAGENTS);
                                             });
                                         } catch (Exception ex) {
-                                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "删除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                            postPluginUi(() -> Toast.makeText(MainActivity.this, "删除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                                         }
                                     }).start();
                                 })
@@ -5933,14 +6030,14 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void loadPluginsCategory() throws Exception {
+    private void loadPluginsCategory(final int seq) throws Exception {
         String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
         JSONObject data = PiWebApi.get(this, "/api/plugins?cwd=" + encCwd);
         final JSONArray packages = data.optJSONArray("packages");
         final JSONArray standalone = data.optJSONArray("standaloneExtensions");
 
-        mainHandler.post(() -> {
-            if (currentPluginCategory != PLUGIN_CAT_PLUGINS || layoutPluginItems == null) return;
+        postPluginUi(() -> {
+            if (!isLatestPluginRequest(seq, PLUGIN_CAT_PLUGINS)) return;
             layoutPluginItems.removeAllViews();
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
 
@@ -6027,6 +6124,7 @@ public class MainActivity extends AppCompatActivity {
                     TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
                             enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
                     btnToggle.setOnClickListener(v -> {
+                        v.setEnabled(false);
                         new Thread(() -> {
                             try {
                                 JSONObject body = new JSONObject();
@@ -6035,13 +6133,16 @@ public class MainActivity extends AppCompatActivity {
                                 body.put("source", source);
                                 body.put("scope", scope);
                                 PiWebApi.post(MainActivity.this, "/api/plugins", body);
-                                mainHandler.post(() -> {
+                                postPluginUi(() -> {
                                     Toast.makeText(MainActivity.this, (enabled ? "⏸ 已停用: " : "✔ 已启用: ") + pkgName, Toast.LENGTH_SHORT).show();
                                     refreshPluginsList(PLUGIN_CAT_PLUGINS);
                                     promptReloadPi(); // 只有插件类变更后才弹 promptReloadPi
                                 });
                             } catch (Exception ex) {
-                                mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                postPluginUi(() -> {
+                                    v.setEnabled(true);
+                                    Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                                });
                             }
                         }).start();
                     });
@@ -6065,14 +6166,14 @@ public class MainActivity extends AppCompatActivity {
                                             body.put("action", "remove");
                                             body.put("source", source);
                                             body.put("scope", scope);
-                                            PiWebApi.post(MainActivity.this, "/api/plugins", body);
-                                            mainHandler.post(() -> {
+                                            PiWebApi.post(MainActivity.this, "/api/plugins", body, PiWebApi.LONG_TIMEOUT_MS);
+                                            postPluginUi(() -> {
                                                 Toast.makeText(MainActivity.this, "✔ 已成功移除插件: " + pkgName, Toast.LENGTH_SHORT).show();
                                                 refreshPluginsList(PLUGIN_CAT_PLUGINS);
                                                 promptReloadPi(); // 只有插件类变更后才弹 promptReloadPi
                                             });
                                         } catch (Exception ex) {
-                                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                            postPluginUi(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                                         }
                                     }).start();
                                 })
@@ -6108,7 +6209,7 @@ public class MainActivity extends AppCompatActivity {
                     title.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
                     header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
 
-                    TextView badge = createBadge("独立扩展", palette.accent, palette);
+                    TextView badge = createBadge("独立扩展 · 只读", palette.accent, palette);
                     header.addView(badge);
 
                     TextView stateBadge = createStateBadge(enabled, palette);
@@ -6133,13 +6234,13 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void loadMcpCategory() throws Exception {
+    private void loadMcpCategory(final int seq) throws Exception {
         String encCwd = URLEncoder.encode(getEffectiveCwd(), "UTF-8");
         JSONObject data = PiWebApi.get(this, "/api/mcp?cwd=" + encCwd);
         final JSONArray servers = data.optJSONArray("servers");
 
-        mainHandler.post(() -> {
-            if (currentPluginCategory != PLUGIN_CAT_MCP || layoutPluginItems == null) return;
+        postPluginUi(() -> {
+            if (!isLatestPluginRequest(seq, PLUGIN_CAT_MCP)) return;
             layoutPluginItems.removeAllViews();
             ThemeManager.ThemePalette palette = ThemeManager.getEffectivePalette(MainActivity.this);
 
@@ -6232,6 +6333,7 @@ public class MainActivity extends AppCompatActivity {
                 TextView btnToggle = createActionButton(enabled ? "🟢 启停: 开" : "⏸ 启停: 关",
                         enabled ? (palette.isDark ? 0xFF3FB950 : 0xFF1A7F37) : (palette.isDark ? 0xFFF85149 : 0xFFCF222E), palette);
                 btnToggle.setOnClickListener(v -> {
+                    v.setEnabled(false);
                     new Thread(() -> {
                         try {
                             JSONObject body = new JSONObject();
@@ -6240,12 +6342,16 @@ public class MainActivity extends AppCompatActivity {
                             body.put("scope", scope);
                             body.put("name", name);
                             PiWebApi.post(MainActivity.this, "/api/mcp", body);
-                            mainHandler.post(() -> {
+                            postPluginUi(() -> {
                                 Toast.makeText(MainActivity.this, (enabled ? "⏸ 已停用: " : "✔ 已启用: ") + name, Toast.LENGTH_SHORT).show();
                                 refreshPluginsList(PLUGIN_CAT_MCP);
+                                promptReloadPi();
                             });
                         } catch (Exception ex) {
-                            mainHandler.post(() -> Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                            postPluginUi(() -> {
+                                v.setEnabled(true);
+                                Toast.makeText(MainActivity.this, "切换失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                            });
                         }
                     }).start();
                 });
@@ -6270,12 +6376,13 @@ public class MainActivity extends AppCompatActivity {
                                         body.put("scope", scope);
                                         body.put("name", name);
                                         PiWebApi.post(MainActivity.this, "/api/mcp", body);
-                                        mainHandler.post(() -> {
+                                        postPluginUi(() -> {
                                             Toast.makeText(MainActivity.this, "✔ 已成功移除 MCP 服务: " + name, Toast.LENGTH_SHORT).show();
                                             refreshPluginsList(PLUGIN_CAT_MCP);
+                                            promptReloadPi();
                                         });
                                     } catch (Exception ex) {
-                                        mainHandler.post(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
+                                        postPluginUi(() -> Toast.makeText(MainActivity.this, "移除失败: " + ex.getMessage(), Toast.LENGTH_SHORT).show());
                                     }
                                 }).start();
                             })

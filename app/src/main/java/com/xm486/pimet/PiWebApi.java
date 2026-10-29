@@ -25,6 +25,8 @@ import java.nio.charset.StandardCharsets;
 public final class PiWebApi {
 
     public static final int TIMEOUT_MS = 8000;
+    /** 安装 / 卸载 / 更新等需要跑 npm、npx 的长操作使用的超时 */
+    public static final int LONG_TIMEOUT_MS = 300000;
 
     private PiWebApi() {}
 
@@ -76,6 +78,10 @@ public final class PiWebApi {
     }
 
     public static Response request(Context context, String method, String path, Object body) throws Exception {
+        return request(context, method, path, body, TIMEOUT_MS);
+    }
+
+    public static Response request(Context context, String method, String path, Object body, int timeoutMs) throws Exception {
         String baseUrl = getBaseUrl(context);
         String fullUrl = path.startsWith("http://") || path.startsWith("https://")
                 ? path
@@ -84,7 +90,7 @@ public final class PiWebApi {
         URL url = new URL(fullUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setConnectTimeout(TIMEOUT_MS);
-        conn.setReadTimeout(TIMEOUT_MS);
+        conn.setReadTimeout(timeoutMs > 0 ? timeoutMs : TIMEOUT_MS);
         conn.setInstanceFollowRedirects(false);
 
         String upperMethod = method != null ? method.toUpperCase() : "GET";
@@ -116,19 +122,20 @@ public final class PiWebApi {
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             }
 
-            try {
-                conn.setDoOutput(true);
-            } catch (Exception e) {
-                conn.setRequestProperty("X-HTTP-Method-Override", upperMethod);
-                try {
-                    conn.setRequestMethod("POST");
-                } catch (Throwable ignored) {}
-                conn.setDoOutput(true);
-            }
+            conn.setDoOutput(true);
             conn.setFixedLengthStreamingMode(bytes.length);
-            try (OutputStream os = conn.getOutputStream()) {
+            OutputStream os;
+            try {
+                os = conn.getOutputStream();
+            } catch (ProtocolException pe) {
+                conn.disconnect();
+                throw new ApiException(-1, "当前系统的 HttpURLConnection 不支持 " + upperMethod + " 请求携带请求体: " + pe.getMessage(), null);
+            }
+            try {
                 os.write(bytes);
                 os.flush();
+            } finally {
+                try { os.close(); } catch (Throwable ignored) {}
             }
         }
 
@@ -178,9 +185,9 @@ public final class PiWebApi {
                     Field field = HttpURLConnection.class.getDeclaredField("method");
                     field.setAccessible(true);
                     field.set(conn, "PATCH");
-                } catch (Throwable ignored) {
-                    conn.setRequestProperty("X-HTTP-Method-Override", "PATCH");
-                    conn.setRequestMethod("POST");
+                } catch (Throwable t) {
+                    // 不再回退到 X-HTTP-Method-Override + POST：Pi-Web(Next.js) 不识别该头，只会返回 405
+                    throw new ApiException(-1, "当前系统不支持 PATCH 请求: " + t.getMessage(), null);
                 }
             } else {
                 throw pe;
@@ -224,6 +231,10 @@ public final class PiWebApi {
 
     public static JSONObject post(Context context, String path, Object body) throws Exception {
         return handleJsonResponse(request(context, "POST", path, body));
+    }
+
+    public static JSONObject post(Context context, String path, Object body, int timeoutMs) throws Exception {
+        return handleJsonResponse(request(context, "POST", path, body, timeoutMs));
     }
 
     public static JSONObject put(Context context, String path, Object body) throws Exception {
