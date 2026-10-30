@@ -25,12 +25,17 @@ const TRACE_KEEP = 5;
 const MAX_SHOTS = 3;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 /** 变更类动作：单步时默认只回 interactive 快照 */
-const MUTATING = new Set(["click", "tap", "type", "fill", "select", "press", "key", "scroll", "back", "forward", "reload"]);
+const MUTATING = new Set(["click", "tap", "type", "fill", "select", "press", "key", "scroll", "back", "forward", "reload", "hover", "scroll_into_view"]);
+/** 接受统一目标（@N / CSS / text=文字 / [x,y]）的动作 */
+const TARGETED = new Set(["click", "tap", "type", "fill", "select", "hover", "scroll_into_view", "scroll"]);
+/** beta.23 新动作名 → 旧宿主上的同义动作（旧宿主回「未知操作」时自动改用） */
+const LEGACY: Record<string, string> = { tab_new: "new_tab", tab_switch: "switch_tab", tab_close: "close_tab" };
 /** 油猴脚本 / 浏览器设置类动作（beta.22 合同第 3 节）：不带快照，结果按数据字段原样展示 */
 const MANAGE = new Set([
   "scripts", "script_get", "script_install", "script_enable", "script_remove", "script_update", "script_values",
   "menu_commands", "menu_run", "console", "config_get", "config_set", "ua", "desktop", "zoom", "cookies", "clear_data",
   "find", "wait_for", "inject",
+  "containers", "container_keep", "history", "history_delete", "history_clear", "tab_new", "tab_switch", "tab_close",
 ]);
 /** 可能要联网下载的动作：客户端多等一会 */
 const SLOW = new Set(["script_install", "script_update"]);
@@ -55,9 +60,43 @@ function maybeJson(v: any): any {
  * - wait_for：没给 timeout_ms 时用 timeout，且不超过 30000；
  * - script_values / config_set / inject.persist：对象参数允许是 JSON 字符串。
  */
+function targetStr(t: any): string {
+  return Array.isArray(t) ? `[${t.map((x) => Number(x)).join(",")}]` : String(t ?? "");
+}
+
 function adaptParams(action: string, p: Record<string, any>): Record<string, any> {
   const q: Record<string, any> = { ...p };
+  if (TARGETED.has(action)) {
+    // 统一目标：新宿主读 target；同时填 ref 兼容旧宿主（页面辅助脚本两种写法都认）
+    if (q.target === undefined && typeof q.ref === "string" && q.ref.trim()) q.target = q.ref.trim();
+    if (typeof q.target === "string") {
+      const t = q.target.trim();
+      const c = t.match(/^\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]$/);
+      q.target = c ? [Number(c[1]), Number(c[2])] : t;
+    }
+    if (q.target !== undefined && q.target !== "" && (q.ref === undefined || q.ref === "")) q.ref = targetStr(q.target);
+    if (action === "fill" || action === "type") {
+      if (q.text === undefined && q.value !== undefined) q.text = String(q.value);
+      if (q.value === undefined && q.text !== undefined) q.value = String(q.text);
+    }
+  }
   switch (action) {
+    case "batch":
+      q.steps = (Array.isArray(q.steps) ? q.steps : maybeJson(q.steps) || []).map((st: any) => {
+        if (!st || typeof st !== "object") return st;
+        const a = String(st.action ?? "");
+        const { action: _a, ...rest } = st;
+        return { action: a, ...adaptParams(a, rest) };
+      });
+      if (q.stopOnError === undefined) q.stopOnError = true;
+      break;
+    case "tab_new":
+      if (q.container === undefined || q.container === "") q.container = "new";
+      if (q.background === undefined) q.background = true;
+      break;
+    case "snapshot":
+      if (q.scope === "interactive") { q.mode = "interactive"; delete q.scope; }
+      break;
     case "inject":
       if (typeof q.js !== "string") q.js = q.script ?? q.code ?? "";
       delete q.script;
@@ -89,7 +128,7 @@ function adaptParams(action: string, p: Record<string, any>): Record<string, any
       break;
     }
   }
-  if (MANAGE.has(action)) q.snapshot = false;
+  if (MANAGE.has(action) || action === "batch") q.snapshot = false;
   return q;
 }
 
@@ -100,12 +139,25 @@ function clientTimeout(action: string, p: Record<string, any>): number {
   if (action === "wait") extra = Math.min(Number(p.ms) || 0, 60000);
   if (action === "wait_for") extra = Math.min(Number(p.timeout_ms) || 0, 30000);
   if (SLOW.has(action)) extra = Math.max(extra, 90000);
+  if (action === "batch") extra = Math.min(120000, (Array.isArray(p.steps) ? p.steps.length : 1) * 12000);
   return t + extra + 30000;
 }
 
 /** 旧宿主不认识新动作时给出提示 */
 function unknownHint(action: string, msg: string): string {
-  return MANAGE.has(action) && /未知操作/.test(msg) ? `${msg}（当前 PiMet 版本还不支持 ${action}，需要 1.9.0-beta.22 及以上）` : msg;
+  if (/unknown_ref/.test(msg)) return "ref 已失效（unknown_ref）：页面已变化，请重新 snapshot 拿新的编号";
+  return MANAGE.has(action) && /未知操作/.test(msg) ? `${msg}（当前 PiMet 版本还不支持 ${action}，需要更新 PiMet）` : msg;
+}
+
+function isUnknownAction(msg: any): boolean {
+  return /未知操作/.test(String(msg ?? ""));
+}
+
+/** 宿主错误信息：unknown_ref 带 hint 时一并给出 */
+function hostErrText(action: string, j: any): string {
+  let m = unknownHint(action, String(j?.error ?? "操作失败"));
+  if (j?.hint && !m.includes(String(j.hint))) m += `（${j.hint}）`;
+  return m;
 }
 
 function readToken(): string {
@@ -297,6 +349,48 @@ function hostError(msg: string): BrowserError {
 }
 
 async function call(action: string, params: Record<string, any>, signal?: AbortSignal, clientMs?: number): Promise<any> {
+  try {
+    return await call1(action, params, signal, clientMs);
+  } catch (e: any) {
+    if (!(e instanceof FatalError) && isUnknownAction((e as any)?.rawError)) {
+      if (LEGACY[action]) return await call1(LEGACY[action], params, signal, clientMs);
+      if (action === "batch") return await batchLocal(params, signal);
+    }
+    throw e;
+  }
+}
+
+/** 旧宿主没有 batch：在本地按顺序逐步执行，结果格式 {steps:[{i,action,ok,result|error}]} */
+async function batchLocal(params: Record<string, any>, signal?: AbortSignal): Promise<any> {
+  const p = adaptParams("batch", params);
+  const steps: any[] = p.steps || [];
+  const out: any[] = [];
+  let lastUrl = "", title = "";
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i] || {};
+    const { action, ...rest } = s;
+    const sp: Record<string, any> = { ...rest };
+    if (p.tab && sp.tab === undefined) sp.tab = p.tab;
+    if (action !== "snapshot" && sp.snapshot === undefined) sp.snapshot = false;
+    try {
+      const j = await call(String(action), sp, signal);
+      if (j.url) lastUrl = j.url;
+      if (j.title !== undefined) title = j.title;
+      const r: any = { i: i + 1, action, ok: true };
+      if (j.result !== undefined) r.result = j.result;
+      if (action === "snapshot") r.text = j.snapshot ?? j.text;
+      if (j.changed !== undefined) r.changed = j.changed;
+      out.push(r);
+    } catch (e: any) {
+      if (e instanceof FatalError) throw e;
+      out.push({ i: i + 1, action, ok: false, error: e?.message ?? String(e) });
+      if (p.stopOnError !== false) break;
+    }
+  }
+  return { success: true, steps: out, url: lastUrl, title, local: true };
+}
+
+async function call1(action: string, params: Record<string, any>, signal?: AbortSignal, clientMs?: number): Promise<any> {
   if (signal?.aborted) throw new BrowserError("已中止");
   const p = adaptParams(action, params);
   const r = await postBridge({ ...p, action: "browser", browser_action: action }, clientMs ?? clientTimeout(action, p), signal);
@@ -312,8 +406,10 @@ async function call(action: string, params: Record<string, any>, signal?: AbortS
     throw new BrowserError(`宿主返回无法解析：${r.body.slice(0, 300)}`);
   }
   if (j.success === false) {
-    const e = hostError(unknownHint(action, String(j.error ?? "操作失败")));
+    const e = hostError(hostErrText(action, j));
     (e as any).url = j.url;
+    (e as any).rawError = j.error;
+    (e as any).code = j.code ?? (j.error === "unknown_ref" ? "unknown_ref" : undefined);
     throw e;
   }
   return j;
@@ -446,7 +542,10 @@ function clip(s: any, n = 80): string {
 function argSummary(action: string, p: Record<string, any>): string {
   switch (action) {
     case "open": case "new_tab": return clip(p.url);
-    case "click": return clip(p.ref ?? p.text, 40);
+    case "click": case "hover": case "scroll_into_view": return clip(p.target !== undefined ? targetStr(p.target) : p.ref ?? p.text, 40);
+    case "fill": return `${targetStr(p.target ?? p.ref)} 文字${String(p.text ?? p.value ?? "").length}字${p.submit ? " +提交" : ""}`;
+    case "batch": return `${Array.isArray(p.steps) ? p.steps.length : 0} 步`;
+    case "tab_new": return `${clip(p.url ?? "", 50)} 容器=${p.container ?? "new"}`;
     case "type": return `${p.ref ?? ""} 文字${String(p.text ?? "").length}字${p.submit ? " +提交" : ""}`;
     case "select": return `${p.ref ?? ""} = ${clip(p.value, 30)}`;
     case "press": return String(p.key ?? "");
@@ -462,9 +561,26 @@ function fmtStep(s: Step): string {
   return `#${s.i} ${s.action}${s.arg ? " " + s.arg : ""} · ${s.ms}ms · ${s.ok ? "✓" : "✗"}${s.at ? `（${s.at}）` : ""}${s.err ? " " + clip(s.err, 120) : ""}`;
 }
 
+/** 字符串像不像统一目标（@N、eN、[ref=N]、text=、[x,y]、CSS 选择器）；否则当作「按文字找」 */
+const HTML_TAGS = new Set(
+  "a abbr article aside audio b button canvas dd details dialog div dl dt em fieldset figure footer form h1 h2 h3 h4 h5 h6 header i iframe img input label li main nav ol option p pre section select span summary table tbody td textarea th thead tr ul video".split(" ")
+);
+function looksLikeTarget(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (/^@?e?\d+$/i.test(t) || /^\[\s*ref\s*=/i.test(t) || /^text\s*=/i.test(t)) return true;
+  if (/^\[\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*\]$/.test(t)) return true;
+  if (/^[#.\[]/.test(t) || t.includes(">>>")) return true;
+  const m = t.match(/^([a-z][a-z0-9]*)([\s.#\[:>+~]|$)/i);
+  return !!m && HTML_TAGS.has(m[1].toLowerCase()) && !/[\u4e00-\u9fff]/.test(t.replace(/\[[^\]]*\]|"[^"]*"|'[^']*'/g, ""));
+}
+function tgt(t: any): any {
+  return Array.isArray(t) ? t : String(t ?? "").trim();
+}
+
 function makeB(st: RunState, tab?: string): any {
   const sig = st.signal;
-  const isRef = (s: any) => typeof s === "string" && /^e\d+$/.test(s.trim());
+  const isRef = (s: any) => Array.isArray(s) || (typeof s === "string" && looksLikeTarget(s));
 
   /** 所有 b.* 的总入口：致命错误即停 + 轨迹 */
   const exec = async (action: string, params: Record<string, any>, opts: { trace?: boolean; label?: string; stack?: string } = {}) => {
@@ -536,21 +652,106 @@ function makeB(st: RunState, tab?: string): any {
       if (j.load_error) r.load_error = j.load_error;
       return r;
     },
-    async snapshot(opts: { mode?: string; max_chars?: number } = {}) {
+    /** 语义树快照：{scope:"full"|"viewport", max_chars}；返回文本，元素写成 [ref=N]，之后用 "@N" 操作 */
+    async snapshot(opts: { scope?: string; mode?: string; max_chars?: number } = {}) {
       const j = await go("snapshot", { snapshot: true, ...opts });
-      return String(j.snapshot ?? "");
+      return String(j.snapshot ?? j.text ?? "");
     },
-    async click(target: string, opts: { js?: boolean; timeout?: number } = {}) {
-      const j = await go("click", isRef(target) ? { ref: target.trim(), ...opts } : { text: String(target), ...opts });
+    /** 目标：@N / CSS 选择器 / text=文字 / [x,y]；其它字符串按包含的文字找 */
+    async click(target: any, opts: { js?: boolean; timeout?: number } = {}) {
+      const j = await go("click", isRef(target) ? { target: tgt(target), ...opts } : { text: String(target), ...opts });
       return String(j.result ?? "");
     },
-    async fill(ref: string, text: string, opts: { submit?: boolean; clear?: boolean; timeout?: number } = {}) {
-      const j = await go("type", { ref, text: String(text ?? ""), ...opts });
+    async fill(target: any, text: string, opts: { submit?: boolean; clear?: boolean; timeout?: number } = {}) {
+      const j = await go("fill", { target: tgt(target), text: String(text ?? ""), ...opts });
       return String(j.result ?? "");
     },
-    async select(ref: string, value: string) {
-      const j = await go("select", { ref, value: String(value) });
+    async select(target: any, value: string) {
+      const j = await go("select", { target: tgt(target), value: String(value) });
       return String(j.result ?? "");
+    },
+    async hover(target: any) {
+      return String((await go("hover", { target: tgt(target) })).result ?? "");
+    },
+    async scrollIntoView(target: any) {
+      return String((await go("scroll_into_view", { target: tgt(target) })).result ?? "");
+    },
+    /** 一次执行多步：[{action:"click",target:"@3"},{action:"fill",target:"@5",value:"…"},{action:"press",key:"Enter"}]；返回每步结果数组，有失败步骤时抛错 */
+    async batch(steps: any[], opts: { stopOnError?: boolean } = {}) {
+      const j = await exec("batch", { ...(tab ? { tab } : {}), steps, ...opts }, { label: "batch" });
+      const arr = j.steps ?? j.results ?? [];
+      const bad = Array.isArray(arr) ? arr.find((x: any) => x && (x.ok === false || x.error)) : null;
+      if (bad && opts.stopOnError !== false) throw new BrowserError(`batch 第 ${bad.i ?? "?"} 步 ${bad.action ?? ""} 失败：${unknownHint("batch", String(bad.error ?? ""))}`);
+      return arr;
+    },
+    /**
+     * 一边滚动一边找，直到目标出现（CSS 选择器 / text=文字 / 页面函数返回真值）；出现返回 true，滚到底仍没有返回 false。
+     * opts: {max=15 次, direction="down", amount=0.8 屏}
+     */
+    async scrollUntil(target: string | Function, opts: { max?: number; direction?: string; amount?: number } = {}) {
+      const max = Math.max(1, Math.min(Number(opts.max) || 15, 60));
+      const probe: Function =
+        typeof target === "function"
+          ? target
+          : new Function(
+              "t",
+              "if (t.indexOf('text=') === 0) { var s = t.slice(5).replace(/^[\"']|[\"']$/g, ''); return (document.body.innerText || '').indexOf(s) >= 0; }" +
+                "var e = document.querySelector(t); if (!e) return false; var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0;"
+            );
+      const args = typeof target === "function" ? [] : [String(target)];
+      const step: Step = { i: st.trace.length + 1, action: "scrollUntil", arg: typeof target === "function" ? "fn" : clip(target, 40), ms: 0, ok: false, at: codeLocation(new Error().stack) };
+      if (st.fatal) throw st.fatal;
+      st.trace.push(step);
+      const t0 = Date.now();
+      const check = async () => {
+        try {
+          return await runJs(probe, args, { timeout: 3000, trace: false });
+        } catch (e: any) {
+          if (st.fatal || sig.aborted) throw st.fatal ?? e;
+          return false;
+        }
+      };
+      try {
+        for (let i = 0; i <= max; i++) {
+          if (await check()) { step.ok = true; return true; }
+          if (i === max) break;
+          const j = await go("scroll", { direction: opts.direction || "down", amount: opts.amount ?? 0.8 }, { trace: false });
+          if (/没有滚动/.test(String(j.result ?? ""))) {
+            await sleep(500); // 到底了：给懒加载一点时间再查最后一次
+            const v = await check();
+            step.ok = true;
+            if (!v) step.err = "滚到底仍未出现";
+            return !!v;
+          }
+          await sleep(250);
+        }
+        step.ok = true;
+        step.err = `滚动 ${max} 次仍未出现`;
+        return false;
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
+    },
+    /**
+     * 按选择器批量提取：b.extract(".item", {title: ".name", price: ".price", link: "a@href"}, {limit: 50})
+     * 字段写「子选择器」取文字，「子选择器@属性」取属性，"@属性" 取自身属性，"" 取自身文字；不给 fields 返回每项文字。
+     */
+    async extract(selector: string, fields?: Record<string, string> | null, opts: { limit?: number } = {}) {
+      const fn = new Function(
+        "sel", "f", "limit",
+        "function txt(e){ return ((e.innerText != null ? e.innerText : e.textContent) || '').replace(/\\s+/g, ' ').trim(); }" +
+        "function one(el, spec){ var s = String(spec), attr = '', at = s.lastIndexOf('@');" +
+        " if (at >= 0 && !/[\\]\"']/.test(s.slice(at))) { attr = s.slice(at + 1); s = s.slice(0, at); }" +
+        " var t = s.trim() ? el.querySelector(s.trim()) : el; if (!t) return null;" +
+        " if (attr) return (attr === 'href' || attr === 'src') ? (t[attr] || t.getAttribute(attr)) : t.getAttribute(attr);" +
+        " return txt(t); }" +
+        "var list = Array.prototype.slice.call(document.querySelectorAll(sel), 0, limit);" +
+        "return list.map(function(el){ if (!f) return txt(el); var o = {}; for (var k in f) o[k] = one(el, f[k]); return o; });"
+      );
+      return runJs(fn, [selector, fields ?? null, Math.max(1, Math.min(Number(opts.limit) || 50, 500))], { label: "extract", stack: new Error().stack });
     },
     async press(key: string) {
       const j = await go("press", { key });
@@ -646,12 +847,13 @@ function makeB(st: RunState, tab?: string): any {
     async tabs() {
       return (await exec("tabs", {}, { trace: false })).tabs ?? [];
     },
-    async newTab(url?: string) {
-      const j = await exec("new_tab", url ? { url } : {});
+    /** 新标签：container 默认 "new"（独立容器、独立登录态）；"same" 沿用当前标签的容器，"Default" 共享容器，或容器名 */
+    async newTab(url?: string, opts: { container?: string; background?: boolean } = {}) {
+      const j = await exec("tab_new", { ...(url ? { url } : {}), ...opts });
       return makeB(st, j.tab);
     },
     async closeTab() {
-      await exec("close_tab", tab ? { tab } : {});
+      await exec("tab_close", tab ? { tab } : {});
     },
     // 直接发送任意单步 action（与 browser 工具参数相同）
     async call(action: string, params: Record<string, any> = {}) {
@@ -776,7 +978,26 @@ async function runCode(code: string, timeoutSec: number, tab: string | undefined
 
 // ------------------------------------------------------------------ 单步结果
 
-const PLAIN_KEYS = new Set(["success", "result", "url", "title", "tab", "snapshot", "image", "mime", "req_id", "loaded", "http_status", "load_error"]);
+const PLAIN_KEYS = new Set(["success", "result", "url", "title", "tab", "snapshot", "image", "mime", "req_id", "loaded", "http_status", "load_error", "refs", "changed", "text", "local"]);
+
+/** batch 每步结果：#序号 动作 ✓/✗ 结果；快照步骤原样附上文本 */
+function formatSteps(arr: any[]): string {
+  const out: string[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const s = arr[i];
+    if (!s || typeof s !== "object") { out.push(`#${i + 1} ${compact(s)}`); continue; }
+    const ok = s.ok !== false && !s.error;
+    const head = `#${s.i ?? i + 1} ${s.action ?? ""}${s.target !== undefined ? " " + targetStr(s.target) : ""} ${ok ? "✓" : "✗"}`;
+    const msg = ok ? (s.result !== undefined ? String(s.result) : "") : unknownHint("batch", String(s.error ?? "失败")) + (s.hint && !/unknown_ref/.test(String(s.error)) ? `（${s.hint}）` : "");
+    const extra: string[] = [];
+    if (s.changed === true) extra.push("页面有变化");
+    if (s.url && s.url !== arr[i - 1]?.url) extra.push(`网址 ${s.url}`);
+    out.push(head + (msg ? " " + msg : "") + (extra.length ? `（${extra.join("，")}）` : ""));
+    const snap = s.snapshot ?? s.text;
+    if (typeof snap === "string" && snap) out.push(snap);
+  }
+  return out.join("\n");
+}
 
 /** 管理类动作：把宿主返回的数据字段原样列出（字段名以宿主为准，不做假设） */
 function dataFields(j: any): string {
@@ -793,14 +1014,25 @@ function dataFields(j: any): string {
 function formatStep(j: any, action = ""): { text: string; image?: { data: string; mimeType: string } } {
   const parts: string[] = [];
   if (j.result !== undefined) parts.push(String(j.result));
-  if (MANAGE.has(action) || action === "status") {
+  if (action === "batch") {
+    const arr = j.steps ?? j.results;
+    if (Array.isArray(arr)) parts.push(formatSteps(arr) + (j.local ? "\n（当前宿主不支持 batch，已在本地逐步执行）" : ""));
+    const rest: any = { ...j };
+    delete rest.steps;
+    delete rest.results;
+    const d = dataFields(rest);
+    if (d) parts.push(d);
+  } else if (MANAGE.has(action) || action === "status") {
     const d = dataFields(j);
     if (d) parts.push(d);
   }
   const hints = hostHints(j);
+  if (j.changed === true && MUTATING.has(action)) hints.push("（页面有变化）");
+  else if (j.changed === false && MUTATING.has(action)) hints.push("（页面没有变化）");
   if (hints.length) parts.push(hints.join("\n"));
-  if (j.snapshot !== undefined) parts.push(String(j.snapshot));
-  else if (j.url) parts.push(`网址: ${j.url}`);
+  const snap = j.snapshot !== undefined ? j.snapshot : action === "snapshot" && typeof j.text === "string" ? j.text : undefined;
+  if (snap !== undefined) parts.push(String(snap));
+  else if (j.url) parts.push(`网址: ${j.url}${j.title ? `\n标题: ${j.title}` : ""}`);
   if (j.image) return { text: parts.join("\n\n") || "截图", image: { data: j.image, mimeType: j.mime || "image/jpeg" } };
   return { text: parts.join("\n\n") || JSON.stringify(j) };
 }
@@ -813,40 +1045,67 @@ export default function (pi: ExtensionAPI) {
     label: "Browser",
     description:
       "操控 PiMet 手机上的「Pi 浏览器」（真实 Android WebView，用户能看到并随时接手）。用于需要真正打开网页的任务：动态页面、登录后的网站、填表、点按钮、看本地页面。" +
-      "用法细节、常见坑和出错时怎么读轨迹见 pimet-browser 技能，第一次用前先读它。\n" +
-      "【多步优先 action=run】code 是 async 函数体，用 b 操作：b.open b.snapshot b.click b.fill b.select b.press b.scroll b.back b.wait b.waitFor(选择器或函数) " +
-      "b.js(fn, ...args)（提取数据首选，fn 在页面里运行，参数经 JSON 传入）b.screenshot b.log b.tool('站点/工具名',args) b.tab('user') b.newTab(url) b.find b.console b.scripts b.inject b.call(action,参数)；return 结果。出错会给出错位置、当前网址和最后几步轨迹。\n" +
+      "用法细节和常见坑见 pimet-browser 技能，第一次用前先读它。\n" +
+      "【推荐流程】tab_new(url, container:\"new\") 在自己的后台容器标签里干活（拿到 tab id，之后都带上 tab）→ snapshot（语义树，元素带 [ref=N]）→ " +
+      "batch(steps:[{action:\"click\",target:\"@3\"},{action:\"fill\",target:\"@5\",value:\"…\"},{action:\"press\",key:\"Enter\"},{action:\"snapshot\",scope:\"viewport\"}]) 一次做完多步 → " +
+      "要提取数据或流程较长时用 run 一次完成（打开→操作→提取→return）。每个动作自带等待，不用另外 wait。ref 失效（unknown_ref）就重新 snapshot。\n" +
+      "【目标 target】@N（最近一次快照的 ref）| CSS 选择器 | text=文字 | [x,y] 坐标。\n" +
+      "【run】code 是 async 函数体：b.open b.snapshot b.click b.fill b.select b.press b.hover b.scroll b.scrollIntoView b.scrollUntil b.waitFor b.extract(选择器,{字段}) b.batch " +
+      "b.js(fn,...args) b.screenshot b.log b.tool('站点/工具名',args) b.newTab(url,{container}) b.tab(id) b.call(action,参数)；return 结果。出错会给出错位置、当前网址和最后几步轨迹。\n" +
       "【网站任务先 action=tools】看 sites/ 下的现成工具和 notes.md；成功后沉淀工具和经验。\n" +
-      "【单步探索】open | snapshot(mode=interactive 省 token) | click(ref/text) | type(ref,text) | select | press | scroll | back | forward | reload | wait | eval | screenshot | status | tabs | new_tab | switch_tab | close_tab | downloads | show | hide | home | close | reload_ui。ref 如 e3，来自快照。\n" +
-        "【油猴脚本】scripts | script_get(id) | script_install(code 或 url) | script_enable(id,on) | script_remove(id) | script_update(id?) | script_values(id,set?,delete?) | menu_commands | menu_run(id,cmd) | inject(script,persist?)；调试用 console、find、wait_for。\n" +
-        "【自定义浏览器】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?) | clear_data(what)。写脚本和改配置前先读 pimet-browser 技能的「油猴脚本」「自定义浏览器」章节；script_remove、clear_data 前先征得用户同意。\n" +
-      "默认在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show 打断用户。" +
+      "【单步】open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
+      "【标签/容器/历史】tab_new(url,container:new|same|Default|容器名,background) | tabs | tab_switch(tab) | tab_close(tab) | containers | container_keep(name,keep) | history(q,limit,offset) | history_delete(url) | history_clear(since_ms)。" +
+      "需要用户的登录态时用 container:\"same\"（沿用用户当前标签的容器）或用户指定的容器。\n" +
+      "【油猴脚本】scripts | script_get(id) | script_install(code 或 url) | script_enable(id,on) | script_remove(id) | script_update(id?) | script_values(id,set?,delete?) | menu_commands | menu_run(id,cmd) | inject(script,persist?)；调试用 console、find、wait_for。\n" +
+      "【自定义浏览器】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?,container?) | clear_data(what)。script_remove、clear_data、history_clear 前先征得用户同意。\n" +
+      "不传 tab 时在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show / tab_switch 打断用户。" +
       "返回「用户已叫停」或「用户正在操作标签」（user_takeover）时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
     parameters: Type.Object({
       action: Type.String({
         description:
-          "run | tools | open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | tabs | new_tab | switch_tab | close_tab | downloads" +
+          "run | batch | tools | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
+          " | tab_new | tabs | tab_switch | tab_close | containers | container_keep | history | history_delete | history_clear" +
           " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
           " | config_get | config_set | ua | desktop | zoom | cookies | clear_data",
       }),
       code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果；script_install 时是完整用户脚本源码（含 ==UserScript== 头）" })),
-      tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tabs 列出的 id（如 t3）" })),
+      tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tab_new / tabs 给出的 id（如 t3）；tab_switch / tab_close 的目标标签" })),
+      target: Type.Optional(
+        Type.Union([Type.String(), Type.Array(Type.Number())], {
+          description: "click / fill / type / select / hover / scroll_into_view 的目标：@N（快照里的 [ref=N]）| CSS 选择器 | text=文字 | [x,y] 坐标",
+        })
+      ),
+      steps: Type.Optional(
+        Type.Array(Type.Object({ action: Type.String() }, { additionalProperties: true }), {
+          description: "batch 的步骤，每步与单步参数相同，如 {action:\"click\",target:\"@3\"} {action:\"fill\",target:\"@5\",value:\"…\"} {action:\"press\",key:\"Enter\"} {action:\"snapshot\",scope:\"viewport\"}",
+        })
+      ),
+      stopOnError: Type.Optional(Type.Boolean({ description: "batch 某步失败时停止，默认 true" })),
+      scope: Type.Optional(Type.String({ description: "snapshot 范围：full（整页，默认）| viewport（只要当前屏，最省）" })),
+      container: Type.Optional(Type.String({ description: "tab_new：new（新容器，默认，独立登录态）| same（沿用当前标签的容器）| Default（共享容器）| 容器名；cookies：哪个容器（默认当前标签的）" })),
+      background: Type.Optional(Type.Boolean({ description: "tab_new 在后台打开，不切走用户当前标签，默认 true" })),
+      name: Type.Optional(Type.String({ description: "container_keep 的容器名（containers 列出）" })),
+      keep: Type.Optional(Type.Boolean({ description: "container_keep：true = 关闭标签后保留容器数据" })),
+      q: Type.Optional(Type.String({ description: "history 搜索词（网址或标题包含，不区分大小写）" })),
+      limit: Type.Optional(Type.Number({ description: "history 返回条数" })),
+      offset: Type.Optional(Type.Number({ description: "history 跳过条数（翻页）" })),
+      since_ms: Type.Optional(Type.Number({ description: "history_clear：只清除这个时间戳（毫秒）之后的；不填 = 全部" })),
       site: Type.Optional(Type.String({ description: "tools 时只看某个站点，并附上它的 notes.md" })),
-      url: Type.Optional(Type.String({ description: "open / new_tab 的网址或搜索词；script_install 的脚本网址（.user.js）；cookies 的网址" })),
-      ref: Type.Optional(Type.String({ description: "元素编号，如 e12（来自快照）" })),
+      url: Type.Optional(Type.String({ description: "open / tab_new 的网址或搜索词；script_install 的脚本网址（.user.js）；cookies 的网址；history_delete 的网址或前缀" })),
+      ref: Type.Optional(Type.String({ description: "旧写法的元素编号（同 target），如 @12" })),
       text: Type.Optional(Type.String({ description: "type 要输入的文字；click 时按包含的文字查找元素；wait / wait_for 时等待出现的文字；find 要查找的文字" })),
       clear: Type.Optional(Type.Boolean({ description: "type 前清空原内容，默认 true；console 时读完清空日志" })),
       submit: Type.Optional(Type.Boolean({ description: "type 后提交表单 / 回车" })),
-      value: Type.Optional(Type.String({ description: "select 的选项值或文字" })),
+      value: Type.Optional(Type.String({ description: "fill 要输入的文字；select 的选项值或文字" })),
       key: Type.Optional(Type.String({ description: "press 的按键" })),
       direction: Type.Optional(Type.String({ description: "scroll 方向 up/down/left/right，默认 down" })),
       amount: Type.Optional(Type.Number({ description: "scroll 滚动的屏数，默认 0.8" })),
       script: Type.Optional(Type.String({ description: "eval 执行的 JS：表达式或带 return 的语句体，可用 await；inject 要注入当前页的 JS" })),
       ms: Type.Optional(Type.Number({ description: "wait 的毫秒数" })),
       js: Type.Optional(Type.Boolean({ description: "click 时用 JS 点击而不是模拟真实触摸（被遮挡或真实点击无效时用）" })),
-      mode: Type.Optional(Type.String({ description: "快照模式：full（含页面文字）| interactive（只要可交互元素）。open/snapshot 默认 full，点击输入等变更操作默认 interactive" })),
+      mode: Type.Optional(Type.String({ description: "旧快照模式：interactive = 只列可交互元素（单步变更操作后附带的快照默认用它）" })),
       snapshot: Type.Optional(Type.Boolean({ description: "单步操作后是否返回快照，默认 true" })),
-      max_chars: Type.Optional(Type.Number({ description: "快照最大字符数，open/snapshot 默认 6000，变更操作默认 2500" })),
+      max_chars: Type.Optional(Type.Number({ description: "快照最大字符数，snapshot 默认 12000（超出时折叠长列表），变更操作后附带的快照默认 2500" })),
       timeout: Type.Optional(Type.Number({ description: "单步：等待加载 / wait / eval 的超时毫秒，默认 20000，最大 120000；run：整段代码的超时秒数，默认 120，最大 600" })),
       id: Type.Optional(Type.String({ description: "用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
       on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版 / false 手机版" })),
@@ -915,19 +1174,15 @@ export default function (pi: ExtensionAPI) {
         }
         req.fn = true;
       }
-      const r = await postBridge({ ...req, action: "browser", browser_action: action }, clientTimeout(String(action), req), signal);
-      if (!r.ok) {
-        if (r.aborted || signal?.aborted) return fail("已中止（已通知宿主取消该操作）");
-        if (r.timedOut) return fail(`等待宿主响应超时（${action}），已发送取消`);
-        return fail(`无法连接 PiMet 宿主（127.0.0.1:30143）：${r.body}。请确认 PiMet 应用在运行。`);
-      }
       let j: any;
       try {
-        j = JSON.parse(r.body);
-      } catch (e) {
-        return fail(`宿主返回无法解析：${r.body.slice(0, 300)}`);
+        // call 负责：参数翻译、旧宿主同义动作（tab_new→new_tab…）、旧宿主没有 batch 时本地逐步执行
+        j = await call(String(action), req, signal);
+      } catch (e: any) {
+        const msg = e?.message ?? String(e);
+        if (msg === "已中止") return fail("已中止（已通知宿主取消该操作）");
+        return fail(`失败: ${msg}${e?.url ? `\n网址: ${e.url}` : ""}`);
       }
-      if (j.success === false) return fail(`失败: ${unknownHint(String(action), String(j.error ?? r.body))}${j.url ? `\n网址: ${j.url}` : ""}`);
       if (isEval) {
         const v = j.result;
         if (typeof v === "string" && (v.startsWith("脚本出错: ") || /^脚本超时（\d+ms）未返回/.test(v))) return fail(`失败: ${v}`);

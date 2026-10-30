@@ -1,6 +1,6 @@
 ---
 name: pimet-browser
-description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：多步任务用 browser 的 run 代码模式，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于写/安装/调试油猴（Tampermonkey）用户脚本（GM API、菜单命令、console），改工具栏按钮、配色、首页、UA、桌面模式、缩放、Cookie，制作网页小工具。
+description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：在自己的容器标签里工作，语义快照 + @ref，多步用 batch 或 run 一次完成，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于查/清浏览历史、管理容器（独立登录态）。也用于写/安装/调试油猴（Tampermonkey）用户脚本（GM API、菜单命令、console），改工具栏按钮、配色、首页、UA、桌面模式、缩放、Cookie，制作网页小工具。
 ---
 
 # Pi 浏览器
@@ -12,16 +12,65 @@ description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定
 
 ## 操控网页
 
+思路和 ego-browser 一样：**少轮次、少 token**。先拿一次语义快照，元素带编号 `[ref=N]`；然后用 `@N` 把多步操作一次提交（`batch`），或者把「打开→操作→提取→返回」写成一段 `run` 代码一次跑完。每个动作自带等待（导航等加载完，否则等网络空闲 / DOM 稳定），结果里带 `url`、`title`、`changed`（页面是否变化），**不需要另外调 `wait`**。
+
 ### 工作流程
 
-1. **先查经验**：`browser` action=`tools`，看 `/root/pimet-browser/sites/` 里有没有这个网站的现成工具和 notes.md（`site` 参数可以直接显示该站点的 notes.md）。有现成工具就直接 `b.tool("站点/工具名", args)`。
-2. **单步探索**：不熟悉的页面先用单步 action 看清楚：`open` → `snapshot`（`mode: "interactive"` 只要元素列表，更省）→ `click`/`type`……
-3. **多步执行用 `run`**：摸清步骤后，把整个流程写成一段代码一次跑完，只返回你需要的结果。比一步步调工具快得多，也省上下文。
-4. **成功后沉淀**（重要）：一个网站任务做成功后，
-   - 把稳定的步骤写成 `sites/<站点>/tools/<工具名>.mjs`，下次直接调用；
-   - 把踩过的坑写进 `sites/<站点>/notes.md`（选择器、要等待的元素、弹窗、反爬表现、哪些网址能直接拼出来……）；
-   - 最后告诉用户你沉淀了什么工具。
-5. **需要用户本人的时候停下**：遇到验证码、滑块、支付、登录确认、短信验证码、风险提示，停止自动化，告诉用户在浏览器窗口里完成，完成后再继续。不要替用户点「确认支付」之类的按钮。
+1. **先查经验**：`browser` action=`tools`，看 `/root/pimet-browser/sites/` 里有没有这个网站的现成工具和 notes.md（`site` 参数直接显示该站点的 notes.md）。有现成工具就直接 `b.tool("站点/工具名", args)`。
+2. **在自己的标签里干活**：`tab_new`（`url`，`container: "new"` 是默认）开一个后台标签，独立容器、不打扰用户当前标签；记下返回的 `tab` id，之后每次调用都带上 `tab`。需要用户的登录态时见下面「容器」。
+3. **看页面**：`snapshot`（`scope: "viewport"` 只要当前屏，最省；默认 `full` 整页，超过 12000 字会折叠长列表并提示「…还有 N 项」）。
+4. **批量操作**：`batch`，一次提交多步，最后一步放 `{action: "snapshot", scope: "viewport"}` 看结果：
+
+```json
+{"action": "batch", "tab": "t3", "steps": [
+  {"action": "fill", "target": "@5", "value": "机械键盘"},
+  {"action": "press", "key": "Enter"},
+  {"action": "snapshot", "scope": "viewport"}
+]}
+```
+
+   默认某步失败就停（`stopOnError: false` 可继续），结果逐步列出 `#序号 动作 ✓/✗ 结果`。
+5. **要提取数据、流程长或要循环时用 `run`**：一段代码完成整个流程，只 `return` 需要的字段（见下）。
+6. **成功后沉淀**（重要）：把稳定的步骤写成 `sites/<站点>/tools/<工具名>.mjs`，把踩过的坑写进 `sites/<站点>/notes.md`，最后告诉用户你沉淀了什么。
+7. **需要用户本人的时候停下**：验证码、滑块、支付、登录确认、短信验证码、风险提示——停止自动化，告诉用户在浏览器窗口里完成，完成后再继续。不要替用户点「确认支付」之类的按钮。
+
+### 快照与目标
+
+快照是缩进的语义树：
+
+```
+网址: https://example.com/search?q=键盘
+标题: 搜索结果
+滚动: 0/5320 (视口 412x780，只含视口内)
+
+- navigation "主导航":
+  - link "首页" href=/ [ref=1]
+  - link "购物车" href=/cart [ref=2]
+- main:
+  - heading "键盘" [level=1] [ref=3]
+  - form:
+    - searchbox "搜索" value="键盘" [ref=4]
+    - button "搜索" [ref=5]
+  - list:
+    - listitem:
+      - link "Cherry MX 机械键盘" href=/p/1 [ref=6]
+      - text: ¥399 [ref=7]
+    - …还有 18 项
+```
+
+- 每个可交互元素一行：`角色 "可读名" 状态 [ref=N]`；状态有 `value="…"`、`[checked]`、`[expanded]`、`[disabled]`、`href=…`、`[被遮挡]`、`[iframe]`。标题、正文文字、表格行（`row: a | b`）也会列出，有文字的块也带编号。
+- 同一元素多次快照尽量保持同一编号；页面重新渲染后，旧编号会按记录的 CSS 定位自动找回，找不回才报 `unknown_ref`——这时**重新 snapshot**，不要反复重试旧编号。
+- 同源 iframe 和开放的 shadow DOM 会展开；跨源 iframe 只标出网址，需要的话单独打开它。
+- 顶部 `⚠ 当前有弹窗/遮罩` 时先处理弹窗。
+
+**目标（target）** 在 `click / fill / type / select / hover / scroll_into_view` 和 batch 步骤里通用：
+
+| 写法 | 说明 |
+|---|---|
+| `@12` | 最近一次快照里的 `[ref=12]`（首选） |
+| `#kw`、`form button[type=submit]` | CSS 选择器；跨 shadow / iframe 用 `宿主选择器 >>> 内部选择器` |
+| `text=登录` | 按包含的文字找（优先视口内、可交互的） |
+| `[120, 340]` | 视口坐标（CSS 像素），最后的手段 |
 
 ### run：代码模式
 
@@ -31,79 +80,66 @@ description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定
 
 | 方法 | 说明 |
 |---|---|
-| `b.open(url)` | 打开网址（或搜索词），等加载完，返回 `{url, title}`（新宿主还会带 `loaded`、`http_status`、`load_error`） |
-| `b.snapshot({mode})` | 返回快照文本（`mode: "interactive"` 只要元素列表） |
-| `b.click(ref 或 文字, {js})` | `"e12"` 按编号点，其它按包含的文字点；`{js:true}` 强制 JS 点击 |
-| `b.fill(ref, text, {submit, clear})` | 输入文字（别名 `b.type`）；`submit:true` 输入后提交 |
-| `b.select(ref, value)` / `b.press(key)` | 下拉框选择 / 按键（Enter Tab Escape ArrowDown…） |
-| `b.scroll("down" 或 ref, 屏数)` | 滚动页面，或滚到某个元素 |
-| `b.back()` `b.forward()` `b.reload()` | 导航 |
-| `b.wait(毫秒)` / `b.wait("文字", 超时)` | 等待；等文字时返回是否出现（true/false） |
-| `b.waitFor(选择器 或 函数, 超时=15000)` | 等 CSS 选择器出现**且可见**，或等页面里的函数返回真值；返回该真值，超时返回 `false`（不抛错）。页面跳转中也会继续等 |
-| `b.js(fn, ...args)` | **推荐**：`fn` 在页面里执行（可 async），`args` 经 JSON 传进去，返回值原样带回。**提取数据首选** |
-| `b.js("脚本", {timeout})` | 兼容写法：表达式（`"document.title"`）或带 `return` 的语句体 |
-| `b.url()` | 当前网址 |
+| `b.open(url)` | 打开网址（或搜索词），等加载完，返回 `{url, title, loaded?, http_status?, load_error?}` |
+| `b.snapshot({scope})` | 语义树快照文本（`scope: "viewport"` 只要当前屏） |
+| `b.click(目标, {js})` | 目标见上表；其它普通字符串按包含的文字找；`{js:true}` 强制 JS 点击 |
+| `b.fill(目标, text, {submit, clear})` | 输入文字（别名 `b.type`）；`submit:true` 输入后提交 |
+| `b.select(目标, value)` / `b.press(key)` / `b.hover(目标)` | 下拉框选择 / 按键（Enter Tab Escape ArrowDown…）/ 悬停 |
+| `b.scroll("down" 或 目标, 屏数)` / `b.scrollIntoView(目标)` | 滚动页面 / 滚到某个元素 |
+| `b.scrollUntil(选择器 或 "text=…" 或 函数, {max, direction})` | 边滚边找，出现返回 `true`，滚到底仍没有返回 `false`（无限滚动列表、懒加载） |
+| `b.waitFor(选择器 或 函数, 超时=15000)` | 等元素出现**且可见**，或等页面里的函数返回真值；返回真值，超时返回 `false`（不抛错） |
+| `b.extract(选择器, {字段: 子选择器}, {limit})` | 批量提取：`"子选择器"` 取文字、`"子选择器@属性"` 取属性、`"@href"` 取自身属性、`""` 取自身文字；不给字段返回每项文字。默认最多 50 项 |
+| `b.batch(steps)` | 同 batch 动作，返回每步结果；有失败步骤时抛错 |
+| `b.js(fn, ...args)` | `fn` 在页面里执行（可 async），`args` 经 JSON 传进去，返回值原样带回。复杂提取用它 |
+| `b.back()` `b.forward()` `b.reload()` `b.url()` | 导航 / 当前网址 |
+| `b.wait(毫秒)` / `b.wait("文字", 超时)` | 固定等待 / 等文字出现（一般用不到，动作自带等待） |
 | `b.screenshot()` | 截图并附在结果里（最多 3 张） |
 | `b.sleep(ms)` / `b.log(...)` | 等待 / 记录输出 |
 | `b.tool("站点/工具名", args)` | 调用站点工具 |
-| `b.tab("user")` / `await b.newTab(url)` | 换一个标签操作（见「标签页」） |
-| `b.find(文字)` | 页面内查找，返回匹配数 |
-| `b.console(max, {clear})` | 页面 console 日志和 JS 错误（调试用户脚本） |
-| `b.scripts()` / `b.inject(js, {name, match}?)` | 用户脚本列表 / 往当前页注入 JS（带第二个参数时同时安装成用户脚本） |
-| `b.call(action, 参数)` | 发送任意单步 action（参数与 browser 工具相同，如 `b.call("zoom", {percent: 125})`） |
+| `await b.newTab(url, {container})` / `b.tab(id)` / `b.closeTab()` | 新标签（默认新容器）/ 换一个标签操作 / 关掉当前操作的 Pi 标签 |
+| `b.find(文字)` / `b.console(max)` / `b.scripts()` / `b.inject(js, …)` | 查找文字数 / 页面 console / 用户脚本（见「油猴脚本」） |
+| `b.call(action, 参数)` | 发送任意单步 action（参数与 browser 工具相同） |
 
-ref（`e12`）来自快照，页面变了要重新 `b.snapshot()`。在 run 里更稳的做法是：**用 `b.js(fn)` 按 CSS 选择器直接提取**，用 `b.fill`/`b.click` 处理需要真实输入的地方，用 `b.waitFor` 代替固定的 `b.sleep`。每个方法出错都会抛异常；没有捕获时 run 结束并返回出错位置、当前网址和轨迹。
-
-例子：搜索 → 等结果 → 提取前 5 条
+例子：一次完成「打开 → 搜索 → 等结果 → 提取前 5 条」
 
 ```js
-// 能直接拼出结果页网址时直接打开，比找搜索框、点按钮稳得多
-await b.open("https://so.m.jd.com/ware/search.action?keyword=" + encodeURIComponent("机械键盘"));
-if (!(await b.waitFor("[class*=price]", 15000))) return await b.snapshot({ mode: "interactive" }); // 没等到就把页面交回来分析
-const items = await b.js((n) => {
-  return [...document.querySelectorAll("[class*=product], [class*=item]")]
-    .map((e) => ({
-      name: e.querySelector("[class*=name], [class*=title]")?.innerText.trim(),
-      price: e.querySelector("[class*=price]")?.innerText.replace(/\s+/g, ""),
-    }))
-    .filter((x) => x.name && x.price)
-    .slice(0, n);
-}, 5);
-return items;
+const t = await b.newTab("https://m.example.com");          // 自己的后台标签（新容器）
+await t.fill("input[type=search]", "机械键盘", { submit: true }); // 动作自带等待
+if (!(await t.waitFor(".product", 15000))) return await t.snapshot({ scope: "viewport" }); // 没等到就把页面交回来分析
+return await t.extract(".product", { name: ".title", price: ".price", url: "a@href" }, { limit: 5 });
 ```
 
-（选择器只是示意，真实页面要先探索。拼不出网址时：`snapshot` 找到搜索框 ref → `b.fill(ref, 词, {submit:true})` → `b.waitFor(...)`。）
+（选择器只是示意，真实页面先 `snapshot` 探索。能直接拼出结果页网址时直接 `open`，比找搜索框稳。）
 
 ### 常见坑
-- 返回「用户正在操作标签 tX」（user_takeover）：用户正在亲手操作这个页面。立即停下，告诉用户你做到哪一步，等用户说继续再接着做；不要重试、不要换标签绕过。
 
-- **`b.js` 的函数在网页里运行，看不到 run 里的变量**。`const q = "键盘"; b.js(() => q)` 会报 `q is not defined`。要用的值作为参数传：`b.js((q) => …, q)`。参数和返回值都要能转 JSON：返回 DOM 元素、函数、循环引用都不行，先取出文字或属性。
-- **字符串脚本**：写成表达式（`"document.title"`），或者带 `return` 的语句体（`"const a = 1; return a"`）。写成 `"const a = 1; a"` 拿到的是 `undefined`。语法错误在发出前就会报出。
-- **在 `b.js` 里触发跳转会丢掉结果**（页面换了，脚本跟着没了）。要点链接跳转，用 `b.click`，或者 `b.js` 只取出 `href` 再 `b.open`。
-- **返回值不再被猜类型**：页面返回字符串 `"123"`，你拿到的就是字符串 `"123"`。
-- **ref 会失效**：页面变化后旧 ref 可能报「ref eN 已失效」，重新 `snapshot` 拿新的就行，不要反复重试旧 ref。
-- **超时**：单步默认 20 秒（`timeout` 毫秒，最大 120000）；`b.waitFor` 默认 15 秒；整段 run 默认 120 秒（最大 600 秒）。超时或中止时，工具会通知宿主取消还在进行的操作。
+- 返回「用户正在操作标签 tX」（user_takeover）或「用户已叫停」：立即停下，告诉用户做到哪一步，等用户允许再继续；不要重试、不要换标签绕过。
+- **`b.js` / `b.extract` 在网页里运行，看不到 run 里的变量**。`const q = "键盘"; b.js(() => q)` 会报 `q is not defined`；要用的值作为参数传：`b.js((q) => …, q)`。参数和返回值都要能转 JSON：返回 DOM 元素、函数、循环引用都不行。
+- **字符串脚本**（eval / `b.js("…")`）：写成表达式（`"document.title"`），或带 `return` 的语句体。语法错误在发出前就会报出。
+- **在 `b.js` 里触发跳转会丢掉结果**。要点链接跳转用 `b.click`，或 `b.js` 只取出 `href` 再 `b.open`。
+- **`@N` 只对最近的快照可靠**：页面大变（跳转、换页）后先重新 snapshot。普通文字（如 `"登录"`）在 `b.click` 里按文字找；在 `target` 参数里要写成 `text=登录`。
+- **超时**：单步默认 20 秒（`timeout` 毫秒，最大 120000）；动作后的自动等待上限约 10 秒；`b.waitFor` 默认 15 秒；整段 run 默认 120 秒（最大 600 秒）。超时或中止时会通知宿主取消还在进行的操作。
 - **「标签正忙」**：上一个操作还没结束（比如上次 run 超时了）。稍等再试，不要连发。
-- **用户叫停、令牌无效、连不上宿主属于致命错误**：之后所有 `b.*` 立即抛同一个错误，`try/catch` 也拦不住，run 会马上结束，结果首行是「⛔ 已叫停/已终止，做到第 N 步」。这时停下，告诉用户进展，不要重试。
-- 单步操作（click/type/scroll…）默认只回 interactive 快照（约 2500 字），要看页面文字时再 `snapshot`（默认 full）。
+- **致命错误**（用户叫停、令牌无效、连不上宿主）：之后所有 `b.*` 立即抛同一个错误，`try/catch` 也拦不住，run 马上结束，结果首行是「⛔ 已叫停/已终止，做到第 N 步」。停下，告诉用户进展。
+- 单步变更操作（click/fill…）不带 batch 时会附一个精简快照（约 2500 字）；要看全页时再 `snapshot`。
 
 ### 出错时怎么读轨迹
 
 run 出错时返回类似：
 
 ```
-出错: 页面已变化，ref e12 已失效，请重新 snapshot
+出错: ref 已失效（unknown_ref）：页面已变化，请重新 snapshot 拿新的编号
 出错位置: run 代码第 4 行
 当前网址: https://example.com/list
 最后 3 步（共 3 步）:
 #1 open https://example.com · 1830ms · ✓（run 代码第 1 行）
-#2 type e5 文字4字 +提交 · 920ms · ✓（run 代码第 2 行）
-#3 click e12 · 40ms · ✗（run 代码第 4 行） 页面已变化，ref e12 已失效…
+#2 fill @5 文字4字 +提交 · 920ms · ✓（run 代码第 2 行）
+#3 click @12 · 40ms · ✗（run 代码第 4 行） ref 已失效…
 ```
 
 - `出错位置` 是你代码的行号（从 code 第 1 行算起；出错在站点工具里时显示 `站点/工具.mjs 第 N 行`）。
 - 每步是 `#序号 动作 参数摘要 · 耗时 · 成败（行号）`；输入内容只记字数，不记原文。
-- 怎么判断：最后一步 ✗ 就是失败点；某步耗时异常长（接近超时），通常是在等加载或等元素；全部 ✓ 但仍出错，是你自己的代码（如取空值的属性）出了问题，看「出错位置」。
+- 最后一步 ✗ 就是失败点；某步耗时异常长（接近超时）通常是在等加载；全部 ✓ 但仍出错，是你自己的代码出了问题，看「出错位置」。
 - 修正后只重跑失败点之后的部分。页面停在「当前网址」，可以直接从那里继续。
 
 ### 站点工具与经验：/root/pimet-browser/sites/
@@ -120,7 +156,7 @@ run 出错时返回类似：
 - 工具文件**必须用 `.mjs`**（`.js` 会被 Node 当成 CommonJS，`export` 会报错）。
 - **第一行**写 `// 一句话说明`（`tools` 列表里显示的就是它），说明里写清参数。
 - 导出 `default`（或导出的第一个函数），签名 `async (b, args)`，`b` 与 run 里的完全一样；返回结果。改完立即生效（按修改时间重新加载）。
-- 工具里提取数据同样用 `b.js((参数) => {...}, 参数)`，等元素用 `b.waitFor`。
+- 工具里提取数据用 `b.extract` 或 `b.js((参数) => {...}, 参数)`，等元素用 `b.waitFor`，长列表用 `b.scrollUntil`。
 - 工具里可以调用别的工具：`await b.tool("jd/login-check")`。
 
 ```js
@@ -134,22 +170,27 @@ export default async function (b, { q, n = 5 }) {
 
 notes.md 写法：短条目，每条是一个可执行的结论，例如「搜索结果页可以直接拼：so.m.jd.com/ware/search.action?keyword=…」「首次打开会弹定位权限框，点『暂不』」「价格在 .price 里，带 ¥ 和空格」。过时的条目要改掉，不要越堆越长。
 
-### 标签页
+### 标签页与容器
 
-- 浏览器窗口有多个标签：用户自己的标签（🌐）和 **Pi 专属标签（🤖 Pi）**。`browser` 默认在 Pi 标签里操作（没有就新建），**不会改变用户正在看的页面**；Pi 在后台标签操作时，顶栏的标签数按钮会闪烁，地址栏下方出现「🤖 Pi 正在后台标签操作」提示条。
-- 所有标签共用 Cookie，用户在任意标签登录过的网站，你在 Pi 标签里也是登录状态。
-- 只有用户明确要你操作「我现在这个页面」时，才传 `tab: "user"`（run 里用 `b.tab("user")`）。
-- 单步 action：`tabs` 列出标签，`new_tab`（可带 url，返回新标签 id）、`switch_tab`（把某个标签切到前台给用户看）、`close_tab`（只能关 Pi 标签）。同时做两件事时，可以 `const t2 = await b.newTab(url)` 在另一个标签里并行。
-- 用户可以点提示条的「查看」（或在标签页网格里点 Pi 标签）把 Pi 标签切到前台自己操作，也可以点「⏹ 停止」。**任何 browser 调用返回「用户已叫停」时，立刻停下所有浏览器操作，告诉用户做到哪一步了，等用户点「▶ 允许 Pi」后再继续**，不要重试。
-- 浏览器窗口在前台时，后台标签（用户没在看的 Pi 标签）里点击、截图都能正常用；浏览器窗口不在前台（用户在工作台或别的 App）时只能用 JS 点击，也不能截图。
-- **不要打断用户**：你的操作从不把浏览器窗口切到前台（`show` 会切过去、`hide` 会退到后台）。不要为了截图擅自 `show`；需要用户看时先问，或建议用户分屏同时看工作台和浏览器。
-- 下载：网页里点下载链接会存到手机「下载/PiMet/」（带当前登录 Cookie）；用 `downloads` 动作查看最近下载和进度。
+- 浏览器有多个标签：用户自己的标签（🌐）和 **Pi 的标签（🤖）**。Pi 在后台标签操作时，顶栏的标签数按钮会闪烁，地址栏下方出现「🤖 Pi 正在后台标签操作」提示条。**你的操作从不改变用户正在看的页面**。
+- **容器**：每个容器是一套独立的 Cookie / 本地存储 / 缓存（像多开）。**新建标签默认就是新容器**，所以在新容器里网站都是未登录状态；标签栏用颜色条和容器名区分。
+  - `tab_new` 的 `container`：`"new"`（默认，新容器，干净、不碰用户的登录）｜`"same"`（沿用用户当前标签的容器，**需要用户的登录态时用它**）｜`"Default"`（共享容器）｜容器名（用户指定的某个容器，`containers` 可列出）。`background` 默认 true（后台打开）。
+  - 用户说「用我已登录的账号」「在我现在这个号上」时用 `"same"` 或用户点名的容器；不确定时先问。不要在用户的容器里做他没要求的事。
+  - 容器在最后一个标签关闭时自动删除（连同数据）；需要保留登录态以便下次再用，`container_keep {name, keep: true}`（先征得用户同意）。
+  - 系统 WebView 太旧不支持多容器时，所有标签共享登录（`status` 里 `containers_supported: false`）。
+  - Cookie 相关动作（`cookies`）默认作用于当前标签的容器，可传 `container` 指定。
+- 动作：`tabs`（id、网址、标题、容器、是否当前）、`tab_new`、`tab_switch`（把某个标签切到前台给用户看，会打断用户，先问）、`tab_close`（只关你自己开的标签，做完任务记得关）、`containers`、`container_keep`。
+- 只有用户明确要你操作「我现在这个页面」时，才传 `tab: "user"`（run 里 `b.tab("user")`）。同时做两件事时可以开两个标签并行。
+- 用户可以点提示条的「查看」把 Pi 标签切到前台自己操作，也可以点「⏹ 停止」。**任何调用返回「用户已叫停」时，立刻停下所有浏览器操作，告诉用户做到哪一步了，等用户点「▶ 允许 Pi」后再继续**。
+- 浏览器窗口在前台时，后台标签里点击、截图都能正常用；窗口不在前台（用户在工作台或别的 App）时只能用 JS 点击，也不能截图。
+- **不要打断用户**：不要擅自 `show` / `tab_switch`；需要用户看时先问，或建议用户分屏同时看工作台和浏览器。
+- 下载：网页里点下载链接会存到手机「下载/PiMet/」（带当前登录 Cookie）；用 `downloads` 查看最近下载和进度。
 
-### 快照说明
+### 历史记录
 
-- 快照列出可交互元素 `[e3] button "登录"`，视口内的排在前面，其后是 `(下方)`、`(上方)`；嵌套的重复可点击元素只保留最外层。
-- 同源 iframe 和开放的 shadow DOM 里的元素也会列出（iframe 里的带 `[iframe]`），可以直接按 ref 点击/输入。跨源 iframe 只会标出「跨源 iframe：网址」，需要的话单独 `open` 那个网址。
-- 页面文字优先取正文区域（main/article）。只需要元素时用 `mode: "interactive"`。
+- `history {q?, limit?, offset?}`：最近访问（新的在前，每条 网址、标题、容器、时间）；`q` 按网址或标题搜索（不区分大小写）。用户问「我昨天看的那个页面」「之前打开过的某某」时先搜历史，再 `tab_new` 打开。
+- `history_delete {url}`：删除某个网址（或以它开头的所有记录）；`history_clear {since_ms?}`：清除全部，或只清除某个时间之后的（如最近一小时：`Date.now() - 3600000`）。**删除和清除前先征得用户同意**。
+- 用户也可以在顶栏菜单「🕘 历史」里自己查看、搜索、清除。
 
 ## 定制
 
@@ -329,10 +370,10 @@ document.body.appendChild(btn);
 | `ua` | `ua` | 设置自定义 User-Agent；`""` 或 `"default"` 恢复默认 |
 | `desktop` | `on` | 桌面版网页（true）/ 手机版（false） |
 | `zoom` | `percent` | 页面缩放，如 `125` |
-| `cookies` | `url`, `set?` | 读某网址的 Cookie / 设置一条（如 `"theme=dark; path=/"`） |
+| `cookies` | `url`, `set?`, `container?` | 读某网址的 Cookie / 设置一条（如 `"theme=dark; path=/"`）；默认当前标签的容器 |
 | `clear_data` | `what` | 清除 `cookies` / `cache` / `storage` / `all`（会让用户退出登录，**先征得用户同意**） |
 
-`status` 还会返回脚本数量、当前 UA 模式和缩放。直接改 `/root/pimet-browser/config.json` 文件也行（改完调 `reload_ui`）；用 `config_set` 更省事，也不会写坏 JSON。
+`status` 还会返回脚本数量、当前 UA 模式、缩放、当前容器和是否支持多容器。直接改 `/root/pimet-browser/config.json` 文件也行（改完调 `reload_ui`）；用 `config_set` 更省事，也不会写坏 JSON。
 
 ### 自定义页面 pages/<id>/
 

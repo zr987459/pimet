@@ -1,5 +1,6 @@
 /* PiMet 浏览器自动化的页面端辅助脚本（由 BrowserAgent 注入；宿主先发探针 window.__pimetAgent.v === V，不一致才发整份源码）。
  * - V 是占位符，宿主注入前替换成源码哈希。
+ * - A.snapshot({scope,maxChars}) 输出缩进语义树 `- button "登录" [ref=12]` 和 refs{编号: loc}；A.resolve(目标) 接受 @N / CSS（跨层 " >>> "）/ text=文字 / [x,y]；A.settle 判断页面稳定。
  * - 快照递归进入同源 iframe 和开放的 shadowRoot；ref 跨快照稳定：元素→号记在 WeakMap（window.__pimetIds），号永不重用，
  *   ref → 元素记在 window.__pimetRefs（Map），所以 iframe / shadow DOM 里的元素也能定位回去（data-pimet-ref 属性只是辅助）。
  * - 坐标统一换算到顶层页面的视口（累加 iframe 的位置和边框），供宿主做真实触摸。
@@ -323,37 +324,190 @@
     return { stable: !loading && pending === 0 && idle >= quietMs, pending: pending, idleMs: idle };
   };
 
-  // ------------------------------------------------------------------ ref（跨快照稳定）
+  // ------------------------------------------------------------------ ref（跨快照稳定）+ 目标解析
+  // ref 是数字 N：快照里写成 [ref=N]，操作时写 @N（兼容旧写法 eN / N / [ref=N]）。元素→号记在 WeakMap，号永不重用；
+  // 同时记 N → loc（稳定 CSS 选择器），元素被框架重建后按 loc 自动找回。
   var IDS = window.__pimetIds || (window.__pimetIds = new WeakMapC());
   if (typeof window.__pimetSeq !== 'number' || !(window.__pimetRefs instanceof MapC)) { window.__pimetSeq = 0; window.__pimetRefs = new MapC(); } // 旧版（按序号重排）的 ref 一律作废
-  var REFS = window.__pimetRefs;
-  function refFor(el) {
+  if (!(window.__pimetLocs instanceof MapC)) window.__pimetLocs = new MapC();
+  var REFS = window.__pimetRefs, LOCS = window.__pimetLocs;
+  function idFor(el) {
     var n = IDS.get(el);
     if (!n) { n = ++window.__pimetSeq; IDS.set(el, n); }
-    var ref = 'e' + n;
-    REFS.set(ref, el);
-    return ref;
+    REFS.set('e' + n, el);
+    return n;
   }
-  function staleErr(ref) { return { ok: false, error: '页面已变化，ref ' + ref + ' 已失效，请重新 snapshot' }; }
-  /** 内部：{el} 或 {ok:false,error} */
-  function resolve(ref) {
-    ref = String(ref || '');
-    var m = /^e(\d+)$/.exec(ref);
-    if (!m) return { ok: false, error: '无效的 ref ' + ref + '（应形如 e12），请先 snapshot' };
-    var n = +m[1];
-    var el = REFS.get(ref);
-    if (el) {
-      if (connected(el) && IDS.get(el) === n) return { el: el };
-      return staleErr(ref);
+  /** 登记 ref：编号 + data-pimet-ref 属性 + loc；返回编号（字符串） */
+  function refFor(el, locsOut) {
+    var n = idFor(el);
+    try { el.setAttribute('data-pimet-ref', String(n)); } catch (e) {}
+    var loc = '';
+    try { loc = locOf(el); } catch (e2) {}
+    if (loc) LOCS.set(n, loc);
+    if (locsOut) locsOut[n] = loc;
+    return String(n);
+  }
+
+  function cssEsc(s) {
+    s = String(s);
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return s.replace(/([^A-Za-z0-9_\u00a0-\uffff-])/g, '\\$1').replace(/^(\d)/, '\\3$1 ');
+  }
+  function attrQ(v) { return '"' + String(v).replace(/["\\]/g, '\\$&') + '"'; }
+  function uniqueIn(root, sel, el) {
+    try { var l = root.querySelectorAll(sel); return l.length === 1 && l[0] === el; } catch (e) { return false; }
+  }
+  /** 元素在它自己的根（document / shadowRoot）里的选择器：id > data-testid > aria-label > name > 短路径 nth-of-type */
+  function locPart(el, root) {
+    var tag = el.tagName.toLowerCase();
+    if (el.id && !/^\d/.test(el.id) && uniqueIn(root, '#' + cssEsc(el.id), el)) return '#' + cssEsc(el.id);
+    var attrs = ['data-testid', 'data-test-id', 'data-test', 'aria-label', 'name'];
+    for (var i = 0; i < attrs.length; i++) {
+      var v = el.getAttribute(attrs[i]);
+      if (v && v.length <= 80) { var s = tag + '[' + attrs[i] + '=' + attrQ(v) + ']'; if (uniqueIn(root, s, el)) return s; }
     }
-    var found = null;
-    try { found = document.querySelector('[data-pimet-ref="' + ref + '"]'); } catch (e) {}
-    if (found) {
-      if (IDS.get(found) === n) { REFS.set(ref, found); return { el: found }; }
-      return staleErr(ref); // 框架克隆了带属性的节点：不是同一个元素
+    var parts = [], n = el, k = 0;
+    while (n && n.nodeType === 1 && k++ < 15) {
+      if (n !== el && n.id && !/^\d/.test(n.id) && uniqueIn(root, '#' + cssEsc(n.id), n)) { parts.unshift('#' + cssEsc(n.id)); break; }
+      var t = n.tagName.toLowerCase(), p = n.parentNode, idx = 1, same = 0;
+      if (p && p.firstElementChild) {
+        for (var c = p.firstElementChild; c; c = c.nextElementSibling) if (c.tagName === n.tagName) { same++; if (c === n) idx = same; }
+      }
+      parts.unshift(same > 1 ? t + ':nth-of-type(' + idx + ')' : t);
+      if (!p || p.nodeType !== 1) break; // 到了 document / shadowRoot
+      if (parts.length >= 3 && uniqueIn(root, parts.join(' > '), el)) break;
+      n = p;
     }
-    if (n <= window.__pimetSeq) return staleErr(ref);
-    return { ok: false, error: '找不到元素 ' + ref + '，请先 snapshot' };
+    return parts.join(' > ');
+  }
+  /** 稳定定位：跨 shadowRoot / 同源 iframe 用 " >>> " 连接各层 */
+  function locOf(el) {
+    var segs = [], cur = el, guard = 0;
+    while (cur && guard++ < 10) {
+      var root = rootOf(cur);
+      segs.unshift(locPart(cur, root));
+      if (root && root.host) { cur = root.host; continue; } // shadowRoot
+      if (root && root.nodeType === 9 && root !== document) {
+        var fe = null;
+        try { fe = root.defaultView.frameElement; } catch (e) { fe = null; }
+        if (fe) { cur = fe; continue; }
+      }
+      break;
+    }
+    return segs.join(' >>> ');
+  }
+  function queryLoc(loc) {
+    var parts = String(loc).split(/\s*>>>\s*/), root = document, el = null;
+    for (var i = 0; i < parts.length; i++) {
+      if (!root || !root.querySelector) return null;
+      el = root.querySelector(parts[i]); // 选择器不合法时抛出，由调用方处理
+      if (!el) return null;
+      if (i < parts.length - 1) {
+        var d = null;
+        if (el.shadowRoot) d = el.shadowRoot;
+        else { try { d = el.contentDocument; } catch (e) { d = null; } }
+        root = d;
+      }
+    }
+    return el;
+  }
+  /** 在所有根（含同源 iframe / shadowRoot）里找第一个匹配选择器的元素，优先可见的 */
+  function queryDeep(sel) {
+    var first = null, vis = null, bad = null;
+    walkRoots(function (root, el, isStart) {
+      if (vis || bad || !isStart || !root.querySelectorAll) return;
+      var list;
+      try { list = root.querySelectorAll(sel); } catch (e) { bad = e; return; }
+      for (var i = 0; i < list.length && i < 50; i++) {
+        if (!first) first = list[i];
+        if (visible(list[i])) { vis = list[i]; return; }
+      }
+    }, null);
+    if (bad) throw bad;
+    return vis || first;
+  }
+  /** 坐标（顶层视口 CSS 像素）处的元素，穿透 shadowRoot 和同源 iframe */
+  function elementAt(x, y) {
+    var doc = document, el = null, ox = 0, oy = 0, guard = 0;
+    while (guard++ < 10) {
+      try { el = doc.elementFromPoint(x - ox, y - oy); } catch (e) { el = null; }
+      if (!el) return null;
+      var g2 = 0;
+      while (el.shadowRoot && el.shadowRoot.elementFromPoint && g2++ < 10) {
+        var inner = null;
+        try { inner = el.shadowRoot.elementFromPoint(x - ox, y - oy); } catch (e) {}
+        if (!inner || inner === el) break;
+        el = inner;
+      }
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+        var d = null;
+        try { d = el.contentDocument; } catch (e) { d = null; }
+        if (!d) return el;
+        var r = el.getBoundingClientRect();
+        ox += r.left + el.clientLeft; oy += r.top + el.clientTop;
+        doc = d;
+        continue;
+      }
+      return el;
+    }
+    return el;
+  }
+  function unknownRef(n, gone) {
+    return { ok: false, code: 'unknown_ref', hint: '重新 snapshot', error: gone ? '页面已变化，ref @' + n + ' 已失效，请重新 snapshot' : '找不到元素 @' + n + '，请先 snapshot' };
+  }
+  function byRef(n) {
+    var key = 'e' + n, el = REFS.get(key);
+    if (el && connected(el) && IDS.get(el) === n) return { el: el };
+    if (!el) {
+      var f = null;
+      try { f = document.querySelector('[data-pimet-ref="' + n + '"],[data-pimet-ref="' + key + '"]'); } catch (e) {}
+      if (f && IDS.get(f) === n) { REFS.set(key, f); return { el: f }; }
+    }
+    var loc = LOCS.get(n);
+    if (loc) { // 元素被重建（框架重新渲染）：按 loc 找回，沿用同一编号
+      var g = null;
+      try { g = queryLoc(loc); } catch (e2) { g = null; }
+      if (g) {
+        IDS.set(g, n); REFS.set(key, g);
+        try { g.setAttribute('data-pimet-ref', String(n)); } catch (e3) {}
+        return { el: g, relocated: true };
+      }
+    }
+    return unknownRef(n, n <= window.__pimetSeq);
+  }
+  var COORD_RE = /^\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]\s*$/;
+  var REF_RE = /^\s*(?:@|ref\s*=\s*|\[\s*ref\s*=\s*)?e?(\d+)\s*\]?\s*$/i;
+  /**
+   * 内部：目标 → {el} 或 {ok:false,error[,code]}。目标可以是：
+   * @N / N / eN / [ref=N]（快照编号）、text=文字、[x,y] 坐标（数组或字符串，顶层视口 CSS 像素）、CSS 选择器（跨层用 " >>> "）。
+   */
+  function resolve(target) {
+    if (target && typeof target === 'object' && target.length === 2) {
+      var e0 = elementAt(+target[0], +target[1]);
+      return e0 ? { el: closest(e0, SEL) || e0 } : { ok: false, error: '坐标 [' + target[0] + ',' + target[1] + '] 处没有元素' };
+    }
+    var t = String(target == null ? '' : target);
+    if (!t.replace(/\s+/g, '')) return { ok: false, error: '缺少目标（@N、CSS 选择器、text=文字 或 [x,y]），请先 snapshot' };
+    var m = COORD_RE.exec(t);
+    if (m) {
+      var e1 = elementAt(+m[1], +m[2]);
+      return e1 ? { el: closest(e1, SEL) || e1 } : { ok: false, error: '坐标 ' + t + ' 处没有元素' };
+    }
+    m = REF_RE.exec(t);
+    if (m) return byRef(+m[1]);
+    m = /^\s*text\s*=\s*([\s\S]*)$/.exec(t);
+    if (m) {
+      var q = m[1].replace(/^\s+|\s+$/g, '').replace(/^(["'])([\s\S]*)\1$/, '$2');
+      var e2 = q ? findByText(q) : null;
+      return e2 ? { el: e2 } : { ok: false, error: '找不到包含「' + q + '」的元素' };
+    }
+    var e3 = null;
+    try {
+      e3 = /\s>>>\s/.test(t) ? queryLoc(t) : (document.querySelector(t) && visible(document.querySelector(t)) ? document.querySelector(t) : queryDeep(t));
+    } catch (e) {
+      return { ok: false, error: '无效的目标「' + cut(t, 60) + '」：应为 @N、CSS 选择器、text=文字 或 [x,y]' };
+    }
+    return e3 ? { el: e3 } : { ok: false, error: '找不到元素「' + cut(t, 60) + '」（CSS 选择器没有匹配）' };
   }
   /** 成功返回元素；失效返回 {ok:false,error} */
   A.get = function (ref) { var r = resolve(ref); return r.el || r; };
@@ -373,6 +527,7 @@
     if (!name && tag !== 'input' && tag !== 'textarea' && tag !== 'select') name = textOf(el, 70);
     if (!name) { var img = el.querySelector && el.querySelector('img[alt]'); if (img) name = img.getAttribute('alt'); }
     if (!name && tag === 'img') name = el.getAttribute('alt') || '';
+    if (!name && (tag === 'input' || tag === 'textarea' || tag === 'select') && el.labels && el.labels.length) { try { name = textOf(el.labels[0], 70); } catch (e) {} }
     if (!name && (tag === 'input' || tag === 'textarea')) name = el.getAttribute('placeholder') || el.getAttribute('name') || '';
     if (!name && (type === 'submit' || type === 'button')) name = el.value || '';
     return cut(name, 70);
@@ -390,11 +545,313 @@
     return cut(u, 40);
   }
 
-  A.snapshot = function (maxChars, mode) {
-    maxChars = maxChars > 0 ? maxChars : 6000;
+  /**
+   * 快照。新写法 A.snapshot({scope:'full'|'viewport', maxChars}) → {ok,url,title,text,refs,count}：缩进的语义树，
+   *   每个可交互元素一行 `- button "登录" [ref=12]`，refs = {编号: loc}。
+   *   兼容：{mode:'interactive'} 或旧写法 A.snapshot(maxChars, mode) 返回按位置排序的元素列表。
+   */
+  A.snapshot = function (a, b) {
+    if (a && typeof a === 'object') {
+      var mc = +(a.maxChars || a.max_chars) || 12000;
+      var scope = a.scope || 'full';
+      beginCache();
+      try {
+        if (scope === 'interactive' || a.mode === 'interactive') return doSnapshot(mc, 'interactive');
+        return semSnapshot(mc, scope === 'viewport');
+      } finally { endCache(); }
+    }
+    var maxChars = a > 0 ? a : 6000;
     beginCache();
-    try { return doSnapshot(maxChars, mode); } finally { endCache(); }
+    try { return doSnapshot(maxChars, b); } finally { endCache(); }
   };
+
+  // ------------------------------------------------------------------ 语义树快照
+  var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, HEAD: 1, META: 1, LINK: 1, TITLE: 1, svg: 1, SVG: 1, CANVAS: 1, VIDEO: 0, AUDIO: 1, OBJECT: 1, EMBED: 1, MAP: 1 };
+  var BLOCK_TAGS = { DIV: 1, P: 1, SECTION: 1, ARTICLE: 1, MAIN: 1, NAV: 1, HEADER: 1, FOOTER: 1, ASIDE: 1, UL: 1, OL: 1, LI: 1, MENU: 1, TABLE: 1, THEAD: 1,
+    TBODY: 1, TFOOT: 1, TR: 1, TD: 1, TH: 1, CAPTION: 1, FORM: 1, FIELDSET: 1, LEGEND: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, BLOCKQUOTE: 1, PRE: 1,
+    DL: 1, DT: 1, DD: 1, FIGURE: 1, FIGCAPTION: 1, DETAILS: 1, DIALOG: 1, HR: 1, BR: 1, ADDRESS: 1, CENTER: 1, BODY: 1, IFRAME: 1, IMG: 0, VIDEO: 1 };
+  var LANDMARK = { NAV: 'navigation', MAIN: 'main', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog', UL: 'list', OL: 'list', MENU: 'list',
+    LI: 'listitem', TABLE: 'table', TR: 'row', ARTICLE: 'article', FIELDSET: 'group', DL: 'list' };
+  var ROLE_CONTAINERS = { navigation: 1, main: 1, complementary: 1, form: 1, dialog: 1, alertdialog: 1, list: 1, listbox: 1, menu: 1, menubar: 1, tablist: 1,
+    listitem: 1, table: 1, grid: 1, row: 1, article: 1, group: 0, region: 1, banner: 1, contentinfo: 1, search: 1, toolbar: 1, tree: 1, radiogroup: 1, feed: 1 };
+  var LIST_ROLES = { list: 1, listbox: 1, menu: 1, menubar: 1, tablist: 1, table: 1, grid: 1, tree: 1, radiogroup: 1, feed: 1 };
+
+  function roleOf(el, tag, type) {
+    return el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox'
+      : tag === 'summary' ? 'button' : tag === 'label' ? 'label'
+      : tag === 'input' ? (type === 'checkbox' || type === 'radio' ? type : (type === 'submit' || type === 'button' || type === 'reset' || type === 'image' ? 'button'
+        : type === 'range' ? 'slider' : type === 'file' ? 'file' : type === 'search' ? 'searchbox' : 'textbox')) : el.isContentEditable ? 'textbox' : 'clickable');
+  }
+  function q(s) { return '"' + String(s).replace(/"/g, '\\"') + '"'; }
+  /** 关键状态：value / checked / disabled / expanded / href / 遮挡 */
+  function statesOf(el, tag, type, role, name) {
+    var ex = '';
+    if (role === 'textbox' || role === 'searchbox' || tag === 'input' || tag === 'textarea') {
+      var v = el.isContentEditable ? textOf(el, 60) : el.value;
+      if (v && type !== 'password' && type !== 'checkbox' && type !== 'radio' && type !== 'submit' && type !== 'button') ex += ' value=' + q(cut(v, 60));
+      else if (v && type === 'password') ex += ' [已填' + v.length + '位]';
+      var ph = el.getAttribute('placeholder');
+      if (ph && !v && cut(ph, 70) !== name) ex += ' placeholder=' + q(cut(ph, 40));
+      if (type && type !== 'text' && type !== 'checkbox' && type !== 'radio' && type !== 'submit' && type !== 'button' && type !== 'search') ex += ' type=' + type;
+    }
+    if (type === 'checkbox' || type === 'radio' || el.getAttribute('aria-checked') || el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-pressed')) {
+      if (el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true' || el.getAttribute('aria-pressed') === 'true') ex += ' [checked]';
+      else if (type === 'checkbox' || type === 'radio' || el.getAttribute('aria-checked')) ex += ' [unchecked]';
+    }
+    if (el.getAttribute('aria-expanded')) ex += el.getAttribute('aria-expanded') === 'true' ? ' [expanded]' : ' [collapsed]';
+    if (tag === 'select') {
+      var o = el.options[el.selectedIndex];
+      ex += ' value=' + q(cut(o ? o.text : '', 30)) + ' options=' + el.options.length;
+    }
+    if (tag === 'a') { var hr = shortHref(el); if (hr) ex += ' href=' + hr; }
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') ex += ' [disabled]';
+    if (el.required || el.getAttribute('aria-required') === 'true') ex += ' [required]';
+    return ex;
+  }
+  function slotKids(el) {
+    if (el.tagName === 'SLOT' && el.assignedNodes) {
+      var an = [];
+      try { an = el.assignedNodes({ flatten: true }); } catch (e) {}
+      if (an && an.length) return an;
+    }
+    return el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes;
+  }
+  var BR = { k: 'b' };
+  /** 合并相邻文字（中间没有块级边界时），去掉边界标记 */
+  function mergeText(items) {
+    var out = [], last = null;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it === BR) { last = null; continue; }
+      if (it.k === 't') {
+        if (last && !last.row && !it.row) { last.s += (last.trail || it.lead ? ' ' : '') + it.s; last.trail = it.trail; last.el = null; continue; }
+        last = { k: 't', s: it.s, el: it.el, row: it.row, lead: it.lead, trail: it.trail };
+        out.push(last);
+        continue;
+      }
+      last = null;
+      out.push(it);
+    }
+    return out;
+  }
+  function semVisit(el, out, st) {
+    if (st.n++ > st.maxNodes) { st.cut = true; return; }
+    var tag = el.tagName;
+    if (SKIP_TAGS[tag] || el.__pimetOwn) return;
+    if (el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert') || el.hidden) return;
+    var s = styleOf(el);
+    if (s) {
+      if (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse' || parseFloat(s.opacity || '1') <= 0.05) return;
+    }
+    var contents = s && s.display === 'contents';
+    var r = contents ? null : lrect(el), tr = null;
+    if (r) {
+      if (r.width < 2 && r.height < 2 && s && /(hidden|clip)/.test(s.overflow || (s.overflowX + s.overflowY))) return; // 读屏专用的 1px 文字等
+      if (st.vp && (r.width > 0 || r.height > 0)) {
+        tr = el.ownerDocument === document ? r : rectOf(el);
+        if (tr.bottom <= 0 || tr.top >= st.H || tr.right <= 0 || tr.left >= st.W) return;
+      }
+    }
+    var ltag = tag.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+
+    // ---- 可交互元素
+    var inter = matches(el, SEL), viaPtr = false;
+    if (!inter && POINTER_TAGS[tag] && s && s.cursor === 'pointer' && r && r.width * r.height < st.vpArea * 0.6) {
+      var ps = styleOf(parentOf(el) || document.body);
+      if (!ps || ps.cursor !== 'pointer') { inter = true; viaPtr = true; }
+    }
+    if (inter) {
+      var role = roleOf(el, ltag, type), name = nameOf(el, ltag, type);
+      if (!(viaPtr && !name) && !(role === 'label' && !name)) {
+        var node = { k: 'n', line: role + (name ? ' ' + q(name) : '') + statesOf(el, ltag, type, role, name) + (inFrame(el) ? ' [iframe]' : ''), el: el, ref: true, inter: true, kids: null };
+        if (st.vp && st.hits < 150 && r && (r.width > 0 || r.height > 0)) {
+          st.hits++;
+          var h = hitAt(el, r.left + r.width / 2, r.top + r.height / 2);
+          if (!h.ok) node.line += ' [被遮挡]';
+        }
+        // 里面还有可交互元素（卡片式链接里的按钮、包着输入框的 label）：当容器继续往下走
+        var innerInter = false;
+        if (tag !== 'SELECT' && tag !== 'INPUT' && tag !== 'TEXTAREA') { try { innerInter = !!el.querySelector(SEL); } catch (e) {} }
+        if (innerInter) {
+          var kids = [];
+          semChildren(el, kids, st);
+          node.kids = mergeText(kids);
+          if (name) { // 名字已经写在行里：去掉和名字一样的文字
+            var f = [];
+            for (var i = 0; i < node.kids.length; i++) if (!(node.kids[i].k === 't' && name.indexOf(cut(node.kids[i].s, 70).replace(/…$/, '')) >= 0)) f.push(node.kids[i]);
+            node.kids = f;
+          }
+        }
+        st.refs++;
+        out.push(node);
+        return;
+      }
+    }
+
+    // ---- 标题
+    var hm = /^H([1-6])$/.exec(tag), arole = el.getAttribute('role');
+    if (hm || arole === 'heading') {
+      var lvl = hm ? hm[1] : (el.getAttribute('aria-level') || '2');
+      var hasInter = false;
+      try { hasInter = !!el.querySelector(SEL); } catch (e) {}
+      if (!hasInter) {
+        var ht = cut(itext(el), 150);
+        if (ht) { out.push(BR); out.push({ k: 'n', line: 'heading ' + q(ht) + ' [level=' + lvl + ']', el: el, ref: true }); out.push(BR); }
+        return;
+      }
+      var hk = [];
+      semChildren(el, hk, st);
+      out.push(BR); out.push({ k: 'n', line: 'heading [level=' + lvl + ']', el: el, ref: true, kids: mergeText(hk) }); out.push(BR);
+      return;
+    }
+    // ---- 图片
+    if (tag === 'IMG') {
+      var alt = clean(el.getAttribute('alt') || el.getAttribute('title') || '');
+      if (alt && r && r.width >= 16 && r.height >= 16) out.push({ k: 'n', line: 'img ' + q(cut(alt, 60)), el: el, ref: true });
+      return;
+    }
+    if (tag === 'BR' || tag === 'HR') { out.push(BR); return; }
+    // ---- iframe
+    if (tag === 'IFRAME' || tag === 'FRAME') {
+      var d = null;
+      try { d = el.contentDocument; } catch (e) { d = null; }
+      if (d && d.body) {
+        observeRoot(d);
+        var fk = [];
+        semVisit(d.body, fk, st);
+        out.push(BR); out.push({ k: 'n', line: 'iframe', kids: mergeText(fk) }); out.push(BR);
+      } else {
+        var src = el.src || el.getAttribute('src') || '(无地址)';
+        st.cross.push(src);
+        out.push(BR); out.push({ k: 'n', line: 'iframe (跨源，内容不在快照里) ' + cut(src, 80) }); out.push(BR);
+      }
+      return;
+    }
+
+    // ---- 普通元素：递归
+    if (el.shadowRoot) observeRoot(el.shadowRoot);
+    var items = [];
+    semChildren(el, items, st);
+    items = mergeText(items);
+    var sem = (arole && ROLE_CONTAINERS[arole]) ? arole : LANDMARK[tag] || '';
+    if (tag === 'SECTION' && (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby'))) sem = 'region';
+    if (!items.length) return;
+    if (sem === 'row') { // 一行全是文字：写成一行 a | b | c
+      var allText = true;
+      for (var j = 0; j < items.length; j++) if (items[j].k !== 't') { allText = false; break; }
+      if (allText) {
+        var cells = [];
+        for (j = 0; j < items.length; j++) cells.push(items[j].s);
+        out.push(BR); out.push({ k: 't', s: cells.join(' | '), el: el, row: true }); out.push(BR);
+        return;
+      }
+    }
+    if (sem === 'listitem' && items.length === 1) { // 只有一项内容的列表项：不单独占一层
+      if (items[0].k === 't' && !items[0].el) items[0].el = el;
+      out.push(BR); out.push(items[0]); out.push(BR);
+      return;
+    }
+    if (sem) {
+      var label = el.getAttribute('aria-label') || '';
+      if (!label && tag === 'FIELDSET') { var lg = el.querySelector('legend'); if (lg) label = textOf(lg, 40); }
+      out.push(BR);
+      out.push({ k: 'n', line: sem + (label ? ' ' + q(cut(label, 40)) : ''), kids: items, list: !!LIST_ROLES[sem] });
+      out.push(BR);
+      return;
+    }
+    var block = BLOCK_TAGS[tag] || (s && /^(block|flex|grid|table|list-item)/.test(s.display));
+    if (items.length === 1 && items[0].k === 't') {
+      if (!items[0].el && (block || items[0].s.length >= 2)) items[0].el = el;
+      if (block) out.push(BR);
+      out.push(items[0]);
+      if (block) out.push(BR);
+      return;
+    }
+    // 很多同级子项（卡片列表、div 堆出来的列表）：放进一个可折叠的组
+    var nodes = 0;
+    for (var k2 = 0; k2 < items.length; k2++) if (items[k2].k !== 't') nodes++;
+    if (block) out.push(BR);
+    if (items.length >= 8 && nodes >= items.length / 2) out.push({ k: 'g', kids: items, list: true });
+    else for (var k3 = 0; k3 < items.length; k3++) { if (k3) out.push(BR); out.push(items[k3]); }
+    if (block) out.push(BR);
+  }
+  function semChildren(el, out, st) {
+    var kids = slotKids(el);
+    for (var i = 0; i < kids.length; i++) {
+      if (st.cut) return;
+      var c = kids[i];
+      if (c.nodeType === 3) {
+        var raw = c.nodeValue || '', t = clean(raw);
+        if (t) out.push({ k: 't', s: t, lead: /^\s/.test(raw), trail: /\s$/.test(raw) });
+      } else if (c.nodeType === 1) {
+        semVisit(c, out, st);
+      }
+    }
+  }
+  /** 渲染成缩进文本；K>0 时列表只保留前 K 项，其余写「…还有 N 项」 */
+  function semRender(items, depth, K, isList, st, lines) {
+    var ind = '';
+    for (var d = 0; d < depth; d++) ind += '  ';
+    for (var i = 0; i < items.length; i++) {
+      if (K > 0 && isList && i >= K) { lines.push(ind + '- …还有 ' + (items.length - K) + ' 项'); return; }
+      var it = items[i];
+      if (it.k === 't') {
+        lines.push(ind + '- ' + (it.row ? 'row: ' : 'text: ') + cut(it.s, st.tmax) + (it.el && st.textRefs ? refTag(it.el, st) : ''));
+      } else if (it.k === 'g') {
+        semRender(it.kids, depth, K, true, st, lines);
+      } else {
+        lines.push(ind + '- ' + it.line + (it.ref && it.el ? refTag(it.el, st) : '') + (it.kids && it.kids.length ? ':' : ''));
+        if (it.kids && it.kids.length) semRender(it.kids, depth + 1, K, !!it.list, st, lines);
+      }
+    }
+  }
+  function refTag(el, st) {
+    if (st.final) { var n = refFor(el, st.locs); st.count++; return ' [ref=' + n + ']'; }
+    return ' [ref=' + idFor(el) + ']';
+  }
+  function semSnapshot(maxChars, vp) {
+    pruneRefs();
+    var H = innerHeight, W = innerWidth;
+    var st = { vp: vp, H: H, W: W, vpArea: H * W, n: 0, maxNodes: 20000, cut: false, cross: [], hits: 0, refs: 0, tmax: vp ? 300 : 200,
+      textRefs: true, final: false, locs: {}, count: 0 };
+    var items = [];
+    if (document.body) semVisit(document.body, items, st);
+    items = mergeText(items);
+
+    var se = document.scrollingElement || document.documentElement;
+    var head = '网址: ' + location.href + '\n标题: ' + document.title + '\n滚动: ' + Math.round(se.scrollTop) + '/' + Math.max(0, Math.round(se.scrollHeight - H)) +
+      ' (视口 ' + W + 'x' + H + '，' + (vp ? '只含视口内' : '整页') + ')';
+    var modal = null;
+    try { modal = findModal(); } catch (e) {}
+    if (modal) head += '\n⚠ 当前有弹窗/遮罩：' + describe(modal) + '（背景元素可能点不到，先处理弹窗）';
+    for (var c = 0; c < st.cross.length && c < 6; c++) head += '\n跨源 iframe：' + cut(st.cross[c], 120) + '（内容不在快照里，可 open 该网址单独查看）';
+    if (st.cut) head += '\n（页面节点太多，只遍历了前 ' + st.maxNodes + ' 个）';
+    head += '\n\n';
+
+    var Ks = [0, 30, 15, 8, 4, 2], lines = null, K = 0, body = '';
+    for (var i = 0; i < Ks.length; i++) {
+      K = Ks[i];
+      lines = [];
+      semRender(items, 0, K, true, st, lines);
+      body = lines.join('\n');
+      if (head.length + body.length <= maxChars) break;
+      if (i === Ks.length - 2) st.textRefs = false; // 最后一档：文字行不再带编号
+    }
+    // 最终渲染：登记 ref 和 loc
+    st.final = true; st.locs = {}; st.count = 0;
+    lines = [];
+    semRender(items, 0, K, true, st, lines);
+    body = lines.join('\n') || '(页面没有可见内容)';
+    var note = K > 0 ? '\n（内容较多，长列表已折叠为前 ' + K + ' 项；需要更多用 scope:"viewport" 配合滚动，或用 run 里的 b.extract 提取）' : '';
+    var text = head + body;
+    if (text.length + note.length > maxChars) {
+      var cutAt = Math.max(0, maxChars - note.length - 60);
+      var nl = text.lastIndexOf('\n', cutAt);
+      text = text.slice(0, nl > cutAt * 0.8 ? nl : cutAt) + '\n…（快照已截断，共 ' + (head.length + body.length) + ' 字符；用 scope:"viewport" 或滚动后再 snapshot）';
+    }
+    return { ok: true, url: location.href, title: document.title, scope: vp ? 'viewport' : 'full', count: st.count, refs: st.locs, text: text + note };
+  }
+
 
   function doSnapshot(maxChars, mode) {
     pruneRefs();
@@ -474,14 +931,13 @@
     var head = '网址: ' + location.href + '\n标题: ' + document.title + '\n滚动: ' + Math.round(se.scrollTop) + '/' + Math.max(0, Math.round(se.scrollHeight - H)) + ' (视口 ' + W + 'x' + H + ')';
     if (modal) head += '\n⚠ 当前有弹窗/遮罩：' + describe(modal) + '（弹窗内元素排在最前；背景元素可能点不到，先处理弹窗）';
     for (var c = 0; c < cross.length && c < 6; c++) head += '\n跨源 iframe：' + cut(cross[c], 120) + '（内容不在快照里，可 open 该网址单独查看）';
-    var body = '\n\n可交互元素（用 ref 操作，视口内的在前）:\n';
+    var body = '\n\n可交互元素（用 @编号 操作，视口内的在前）:\n';
 
     var interactive = mode === 'interactive';
     var lineBudget = interactive ? maxChars - head.length - body.length - 80 : Math.max(1200, Math.floor(maxChars * 0.65) - head.length - body.length);
     var lines = [], used = 0, listed = 0;
     for (var k = 0; k < items.length; k++) {
       var it = items[k], el2 = it.el, ref = refFor(el2);
-      try { el2.setAttribute('data-pimet-ref', ref); } catch (e) {}
       var ex = '', tg = it.tag, ty = it.type;
       if (it.role === 'textbox' || tg === 'input') {
         var v = el2.isContentEditable ? textOf(el2, 60) : el2.value;
@@ -501,7 +957,7 @@
         var lr = lrect(el2), h = hitAt(el2, lr.left + lr.width / 2, lr.top + lr.height / 2);
         if (!h.ok) ex += ' [被遮挡]';
       } else if (it.where === 2) ex += ' (上方)'; else ex += ' (下方)';
-      var line = '[' + ref + '] ' + it.role + (it.name ? ' "' + it.name + '"' : '') + ex;
+      var line = '[ref=' + ref + '] ' + it.role + (it.name ? ' "' + it.name + '"' : '') + ex;
       if (used + line.length + 1 > lineBudget && listed > 0) { for (var z = k; z < items.length; z++) countExtra(items[z].where); break; }
       lines.push(line); used += line.length + 1; listed++;
     }
@@ -644,6 +1100,56 @@
     if (!m.ok) return { ok: false, error: (ref ? ref + ' ' : '') + m.error };
     flash(m._r);
     return strip(m);
+  };
+
+  /**
+   * 解析目标并滚到可见处、量出可点击的坐标（同 locate）：target = @N / CSS / text=文字 / [x,y]。
+   * 返回 {ok, ref, loc, x, y, vw, tag, label, covered, coveredBy, frame, relocated}；之后 A.relocate / A.jsClick 作用于它。
+   * 失败：{ok:false, error, code?:'unknown_ref', hint?}。opts.noScroll=true 时不滚动。
+   */
+  A.resolve = function (target, opts) {
+    var rs = resolve(target);
+    if (!rs.el) return rs;
+    var el = rs.el;
+    if (!(opts && opts.noScroll)) reveal(el);
+    var m = measure(el);
+    if (!m.ok) return m;
+    if (!(opts && opts.noFlash)) flash(m._r);
+    strip(m);
+    m.ref = refFor(el);
+    m.loc = LOCS.get(+m.ref) || '';
+    if (rs.relocated) m.relocated = true;
+    return m;
+  };
+
+  /** 页面是否稳定（MutationObserver 静默 quietMs 且没有在途请求）；同步返回 {stable, pending, idleMs}，宿主轮询 */
+  A.settle = function (quietMs, maxMs) { return A.waitStable(quietMs > 0 ? quietMs : 300, maxMs > 0 ? maxMs : 10000); };
+
+  /** 悬停：派发 pointerover/mouseover/mousemove 等事件（菜单、提示框） */
+  A.hover = function (target) {
+    var rs = resolve(target);
+    if (!rs.el) return rs;
+    var el = rs.el, W = winOf(el);
+    reveal(el);
+    var r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var types = ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove'];
+    for (var i = 0; i < types.length; i++) {
+      var t = types[i];
+      try {
+        var C = t.indexOf('pointer') === 0 && W.PointerEvent ? W.PointerEvent : W.MouseEvent;
+        el.dispatchEvent(new C(t, { bubbles: t.indexOf('enter') < 0, cancelable: true, composed: true, clientX: x, clientY: y, view: W }));
+      } catch (e) {}
+    }
+    window.__pimetTarget = el;
+    return { ok: true, ref: refFor(el), result: '已悬停在 ' + (describe(el) || '元素') };
+  };
+
+  /** 把目标滚到视口中间 */
+  A.scrollIntoView = function (target) {
+    var rs = resolve(target);
+    if (!rs.el) return rs;
+    reveal(rs.el);
+    return { ok: true, ref: refFor(rs.el), result: '已滚动到 ' + (describe(rs.el) || '元素') };
   };
 
   /** 触摸前重新量上一次 locate 的元素（页面可能因懒加载 / 动画移动了） */
