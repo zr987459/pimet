@@ -387,7 +387,7 @@ public final class FloatingApps {
         tabCountBtn.setContentDescription("标签页");
         tabCountBtn.setOnClickListener(v -> openSwitcher());
         tabCountBtn.setOnLongClickListener(v -> {
-            newUserTab();
+            showNewTabChooser(v);
             return true;
         });
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(24), dp(24));
@@ -462,6 +462,10 @@ public final class FloatingApps {
             closeSwitcher();
             newUserTab();
         });
+        swNew.setOnLongClickListener(v -> {
+            showNewTabChooser(v);
+            return true;
+        });
         swHead.addView(swNew, new LinearLayout.LayoutParams(dp(44), dp(44)));
         TextView swTitle = barBtn("标签页", "", 16);
         swTitle.setGravity(Gravity.CENTER);
@@ -507,6 +511,12 @@ public final class FloatingApps {
         // ---- 悬浮球（全屏、刷新、翻译、主题、缩放、终端、问 Pi…）
         buildBall();
 
+        // 上次进程留下的未保留容器（这时还没有任何标签）
+        try {
+            if (ContainerManager.supported()) containers().cleanupOrphans(Collections.<String>emptyList());
+        } catch (Throwable e) {
+            Log.w(TAG, "cleanup containers failed", e);
+        }
         switchTo(newTab(false));
         reloadConfigIfChanged();
         layoutOffscreen();
@@ -518,7 +528,7 @@ public final class FloatingApps {
 
     /**
      * 一个标签 = 一个 WebView。用户标签是用户自己浏览用的；Pi 标签（🤖 Pi）是 Pi 默认操作的，不打扰用户正在看的页面。
-     * 所有标签共用全局 CookieManager，所以 Pi 能用到用户的登录状态。
+     * 每个标签有自己的容器（WebView Profile，独立 Cookie/Storage）：新建标签默认新容器，也可选当前容器或共享容器 Default（见 ContainerManager）。
      * <p>
      * 可见性策略（后台标签怎么做真实触摸 / 截图）：
      * 平时只有当前标签 VISIBLE，其余 INVISIBLE —— INVISIBLE 保持布局尺寸，页面里的 innerWidth/坐标都正确，Chromium 也会暂停后台页面的渲染。
@@ -563,14 +573,26 @@ public final class FloatingApps {
         /** 当前页面的控制台日志（最多 300 条） */
         final java.util.ArrayDeque<JSONObject> console = new java.util.ArrayDeque<>();
 
+        /** 容器（WebView Profile）名；ContainerManager.DEFAULT = 共享容器 */
+        volatile String container = ContainerManager.DEFAULT;
+        /** 该容器的 CookieManager（主线程建 WebView 时取好，后台线程直接用） */
+        volatile android.webkit.CookieManager cookies;
+
         Tab(String id, boolean pi) {
             this.id = id;
             this.pi = pi;
         }
     }
 
+    /** 新标签 = 新容器 */
     private Tab newTab(boolean pi) {
+        return newTab(pi, resolveContainer("new", null));
+    }
+
+    /** container 为容器名（已解析）；WebView 创建后、第一次 loadUrl 之前绑定容器 */
+    private Tab newTab(boolean pi, String container) {
         Tab t = new Tab("t" + (++tabSeq), pi);
+        t.container = container == null || container.isEmpty() ? ContainerManager.DEFAULT : container;
         t.web = createWebView(t);
         t.web.setVisibility(View.INVISIBLE);
         webFrame.addView(t.web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -701,6 +723,7 @@ public final class FloatingApps {
             t.web.destroy();
         } catch (Throwable ignored) {}
         t.web = null;
+        releaseContainer(t.container);
         if (active == t) {
             Tab next = null;
             for (Tab x : tabs) if (!x.pi) { next = x; break; }
@@ -772,7 +795,8 @@ public final class FloatingApps {
         org.json.JSONArray a = new org.json.JSONArray();
         for (Tab x : tabs) {
             a.put(new JSONObject().put("id", x.id).put("kind", x.pi ? "pi" : "user").put("active", x == active)
-                    .put("busy", x.busy > 0).put("url", x.url).put("title", x.title));
+                    .put("busy", x.busy > 0).put("url", x.url).put("title", x.title)
+                    .put("container", x.container).put("containerLabel", containerLabel(x.container)));
         }
         return a;
     }
@@ -781,7 +805,7 @@ public final class FloatingApps {
         StringBuilder sb = new StringBuilder();
         for (Tab x : tabs) {
             sb.append(x.id).append(x.pi ? " 🤖Pi" : " 用户").append(x == active ? " [当前显示]" : "")
-                    .append(x.busy > 0 ? " [操作中]" : "").append("  ").append(x.title.isEmpty() ? "" : x.title + "  ").append(x.url).append('\n');
+                    .append(x.busy > 0 ? " [操作中]" : "").append(" {").append(containerLabel(x.container)).append("}  ").append(x.title.isEmpty() ? "" : x.title + "  ").append(x.url).append('\n');
         }
         return sb.toString().trim();
     }
@@ -829,7 +853,8 @@ public final class FloatingApps {
         Tab busy = busyPiTab();
         GradientDrawable tb = new GradientDrawable();
         tb.setCornerRadius(dp(5));
-        tb.setStroke(dp(2), busy != null ? cAccent : cFg);
+        int idle = active != null && ContainerManager.supported() && !ContainerManager.DEFAULT.equals(active.container) ? containerColor(active.container) : cFg;
+        tb.setStroke(dp(2), busy != null ? cAccent : idle);
         tabCountBtn.setBackground(tb);
         tabCountBtn.setTextColor(busy != null ? cAccent : cFg);
         if (busy != null && busyPulse == null) {
@@ -949,6 +974,23 @@ public final class FloatingApps {
         String tt = x.title;
         if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "新标签页" : x.url.replaceFirst("^https?://", "");
         title.setText((x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
+        if (ContainerManager.supported()) {
+            View strip = new View(vctx);
+            GradientDrawable sd = new GradientDrawable();
+            sd.setCornerRadius(dp(2));
+            sd.setColor(containerColor(x.container));
+            strip.setBackground(sd);
+            LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(dp(4), dp(16));
+            stl.rightMargin = dp(6);
+            head.addView(strip, stl);
+            TextView badge = new TextView(vctx);
+            badge.setText(containerLabel(x.container) + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : ""));
+            badge.setSingleLine(true);
+            badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            badge.setTextColor(x == active ? Color.WHITE : containerColor(x.container));
+            badge.setPadding(0, 0, dp(6), 0);
+            head.addView(badge);
+        }
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
@@ -994,7 +1036,11 @@ public final class FloatingApps {
             closeSwitcher();
             switchTo(x);
         });
-        card.setContentDescription((x.pi ? "Pi 标签 " : "标签 ") + tt);
+        card.setOnLongClickListener(v -> {
+            showTabMenu(x, v);
+            return true;
+        });
+        card.setContentDescription((x.pi ? "Pi 标签 " : "标签 ") + tt + "，容器 " + containerLabel(x.container));
         return card;
     }
 
@@ -1008,6 +1054,8 @@ public final class FloatingApps {
         String u = currentUrl();
         boolean webPage = u.startsWith("http://") || u.startsWith("https://");
         m.add(0, 1, 0, "新标签页");
+        if (ContainerManager.supported()) m.add(0, 19, 0, "新标签页（选择容器）…");
+        m.add(0, 20, 0, "🕘 历史");
         m.add(0, 2, 0, "前进").setEnabled(web != null && web.canGoForward());
         m.add(0, 3, 0, "刷新");
         m.add(0, 4, 0, isBookmarked(u) ? "★ 已加书签（点按移除）" : "☆ 添加书签").setEnabled(webPage);
@@ -1045,6 +1093,8 @@ public final class FloatingApps {
                 case 16: openPiWebTab(); break;
                 case 17: openWorkbench(); break;
                 case 18: setBallEnabled(!ballEnabled()); break;
+                case 19: showNewTabChooser(anchor); break;
+                case 20: showHistoryPanel(); break;
                 default: return false;
             }
             return true;
@@ -1455,6 +1505,12 @@ public final class FloatingApps {
                 return super.dispatchKeyEvent(e);
             }
         };
+        try {
+            containers().apply(w, t.container);
+        } catch (Throwable e) {
+            Log.w(TAG, "apply container " + t.container + " failed", e);
+        }
+        t.cookies = cookiesFor(t.container);
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
@@ -1470,6 +1526,8 @@ public final class FloatingApps {
         ws.setDisplayZoomControls(false);
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // 用户标签里 target=_blank / window.open 开新标签（继承容器）；Pi 标签保持在本标签打开
+        ws.setSupportMultipleWindows(!t.pi);
         ws.setCacheMode(WebSettings.LOAD_NO_CACHE); // 应用由 Pi 随时改写，总是读最新文件
         // 双指布局缩放：和 Pi-Web 工作台同一套（所有网页重排适配屏宽，不横向溢出）
         WebPinchZoom.attach(w, (pct, committed) -> { if (committed) MAIN.post(this::refreshBall); }, zoomStore(t));
@@ -1551,6 +1609,7 @@ public final class FloatingApps {
                     t.title = title;
                     refreshTabs();
                 }
+                recordHistory(t, t.url, t.title);
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
                 reloadConfigIfChanged();
                 injectScripts(t, view, url, "document-end");
@@ -1670,6 +1729,33 @@ public final class FloatingApps {
             public void onReceivedTitle(WebView view, String title) {
                 t.title = title != null ? title : "";
                 if (!t.pi) refreshTabs();
+                if (!t.loading) recordHistory(t, t.url, t.title);
+            }
+
+            /** target=_blank / window.open：在新标签打开，继承来源标签的容器 */
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
+                if (t.pi || resultMsg == null || !(resultMsg.obj instanceof WebView.WebViewTransport)) return false;
+                Tab nt = newTab(false, t.container);
+                ((WebView.WebViewTransport) resultMsg.obj).setWebView(nt.web);
+                resultMsg.sendToTarget();
+                if (host != null && t == active) {
+                    userTouched = true;
+                    switchTo(nt);
+                } else {
+                    refreshTabs();
+                }
+                return true;
+            }
+
+            @Override
+            public void onCloseWindow(WebView window) {
+                for (Tab x : new ArrayList<>(tabs)) {
+                    if (x.web == window && !x.pi) {
+                        closeTab(x);
+                        break;
+                    }
+                }
             }
 
             @Override
@@ -1740,8 +1826,8 @@ public final class FloatingApps {
             }
         });
         try {
-            android.webkit.CookieManager.getInstance().setAcceptCookie(true);
-            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
+            tabCookies(t).setAcceptCookie(true);
+            tabCookies(t).setAcceptThirdPartyCookies(w, true);
         } catch (Throwable ignored) {}
         w.setLongClickable(true);
         w.setHapticFeedbackEnabled(true);
@@ -1798,7 +1884,7 @@ public final class FloatingApps {
         try {
             android.app.DownloadManager dm = (android.app.DownloadManager) ctx.getSystemService(Context.DOWNLOAD_SERVICE);
             android.app.DownloadManager.Request req = new android.app.DownloadManager.Request(Uri.parse(url));
-            String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
+            String cookie = tabCookies(t).getCookie(url);
             if (cookie != null && !cookie.isEmpty()) req.addRequestHeader("Cookie", cookie);
             if (ua != null && !ua.isEmpty()) req.addRequestHeader("User-Agent", ua);
             if (t.url.startsWith("http")) req.addRequestHeader("Referer", t.url);
@@ -2513,7 +2599,7 @@ public final class FloatingApps {
             }
             if (!(target.startsWith("http://") || target.startsWith("https://"))) return;
             MAIN.post(() -> {
-                Tab nt = newTab(false);
+                Tab nt = newTab(false, tab.container);
                 loadIn(nt, target, false);
                 if (!background && host != null) switchTo(nt);
                 refreshTabs();
@@ -2692,7 +2778,7 @@ public final class FloatingApps {
                     }
                 }
                 if (!anonymous && !hasCookie) {
-                    String ck = android.webkit.CookieManager.getInstance().getCookie(url.toString());
+                    String ck = tabCookies(t).getCookie(url.toString());
                     if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
                 }
                 if (!hasUa && sDefaultUa != null) c.setRequestProperty("User-Agent", sDefaultUa);
@@ -2706,7 +2792,7 @@ public final class FloatingApps {
                 int code = c.getResponseCode();
                 if (!anonymous) {
                     java.util.List<String> sc = c.getHeaderFields().get("Set-Cookie");
-                    if (sc != null) for (String v : sc) android.webkit.CookieManager.getInstance().setCookie(url.toString(), v);
+                    if (sc != null) for (String v : sc) tabCookies(t).setCookie(url.toString(), v);
                 }
                 String loc = c.getHeaderField("Location");
                 if (code >= 300 && code < 400 && code != 304 && loc != null && !loc.isEmpty()) {
@@ -2825,9 +2911,10 @@ public final class FloatingApps {
         lastInstallUrl = url;
         lastInstallAt = now;
         Toast.makeText(ctx, "正在读取用户脚本…", Toast.LENGTH_SHORT).show();
+        final android.webkit.CookieManager ck = tabCookies(active);
         new Thread(() -> {
             try {
-                String code = httpGetText(url);
+                String code = httpGetText(url, ck);
                 UserScriptManager.Script s = UserScriptManager.parse(code);
                 MAIN.post(() -> showInstallDialog(code, s, url));
             } catch (Throwable e) {
@@ -2892,7 +2979,7 @@ public final class FloatingApps {
     }
 
     /** 下载文本（带浏览器 Cookie，跟随跨协议重定向，最大 5MB），后台线程调用 */
-    private static String httpGetText(String u) throws Exception {
+    private static String httpGetText(String u, android.webkit.CookieManager cookies) throws Exception {
         java.net.URL url = new java.net.URL(u);
         for (int hop = 0; hop < 6; hop++) {
             java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
@@ -2900,7 +2987,7 @@ public final class FloatingApps {
                 c.setInstanceFollowRedirects(false);
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(20000);
-                String ck = android.webkit.CookieManager.getInstance().getCookie(url.toString());
+                String ck = cookies != null ? cookies.getCookie(url.toString()) : null;
                 if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
                 if (sDefaultUa != null) c.setRequestProperty("User-Agent", sDefaultUa);
                 int code = c.getResponseCode();
@@ -3559,10 +3646,15 @@ public final class FloatingApps {
 
     /** 清除浏览数据：cookies | cache | storage | all */
     void clearData(String what) {
+        clearData(what, null);
+    }
+
+    /** container：null = 当前标签的容器（Cookie 按容器清；cache/storage 目前是整个 WebView 的） */
+    void clearData(String what, String container) {
         String w = what == null ? "all" : what.trim().toLowerCase(java.util.Locale.ROOT);
         boolean all = w.equals("all");
         if (all || w.equals("cookies")) {
-            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            android.webkit.CookieManager cm = cookiesFor(containerOrActive(container));
             cm.removeAllCookies(null);
             cm.flush();
         }
@@ -3575,15 +3667,457 @@ public final class FloatingApps {
     }
 
     String getCookies(String url) {
-        String c = android.webkit.CookieManager.getInstance().getCookie(url);
+        return getCookies(url, null);
+    }
+
+    /** container：null = 当前标签的容器 */
+    String getCookies(String url, String container) {
+        String c = cookiesFor(containerOrActive(container)).getCookie(url);
         return c == null ? "" : c;
+    }
+
+    private String containerOrActive(String container) {
+        if (container != null && !container.trim().isEmpty()) return container.trim();
+        return active != null && active.container != null ? active.container : ContainerManager.DEFAULT;
     }
 
     /** cookie 为 Set-Cookie 格式（如 "a=1; Path=/; Max-Age=3600"） */
     void setCookie(String url, String cookie) {
-        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        setCookie(url, cookie, null);
+    }
+
+    /** container：null = 当前标签的容器 */
+    void setCookie(String url, String cookie, String container) {
+        android.webkit.CookieManager cm = cookiesFor(containerOrActive(container));
         cm.setCookie(url, cookie);
         cm.flush();
+    }
+
+    // ------------------------------------------------------------------ 容器标签 + 历史（beta.23，逻辑在 ContainerManager / HistoryStore）
+
+    private ContainerManager containerMgr;
+    private HistoryStore historyStore;
+    private static boolean sWarnedNoProfile = false;
+
+    /** 容器管理（M1 实现）。BrowserAgent 也用它 */
+    synchronized ContainerManager containers() {
+        if (containerMgr == null) containerMgr = new ContainerManager(appsDir);
+        return containerMgr;
+    }
+
+    /** 浏览历史（M1 实现）。BrowserAgent 也用它 */
+    synchronized HistoryStore history() {
+        if (historyStore == null) historyStore = new HistoryStore(appsDir);
+        return historyStore;
+    }
+
+    /** 全部标签（主线程读） */
+    List<Tab> tabs() {
+        return tabs;
+    }
+
+    String containerOf(Tab t) {
+        return t == null ? null : t.container;
+    }
+
+    /** 解析容器参数：null / "" / "new" = 新容器；"same" = 当前标签的容器；"Default" = 共享容器；其它 = 容器名。不支持多 Profile 时一律 Default */
+    private String resolveContainer(String spec, Tab from) {
+        if (!ContainerManager.supported()) {
+            if (!sWarnedNoProfile) {
+                sWarnedNoProfile = true;
+                Toast.makeText(ctx, "系统 WebView 版本太低，标签共享登录", Toast.LENGTH_LONG).show();
+            }
+            return ContainerManager.DEFAULT;
+        }
+        String s = spec == null ? "" : spec.trim();
+        if (s.isEmpty() || s.equalsIgnoreCase("new")) {
+            try {
+                return containers().newContainer();
+            } catch (Throwable e) {
+                Log.w(TAG, "newContainer failed", e);
+                return ContainerManager.DEFAULT;
+            }
+        }
+        if (s.equalsIgnoreCase("same")) {
+            Tab f = from != null ? from : active;
+            return f != null && f.container != null ? f.container : ContainerManager.DEFAULT;
+        }
+        if (s.equalsIgnoreCase(ContainerManager.DEFAULT)) return ContainerManager.DEFAULT;
+        return s;
+    }
+
+    /**
+     * 给 BrowserAgent（tab_new）：在指定容器里开一个 Pi 标签。container：null / "new" = 新容器，"same" = 当前标签的容器，"Default" = 共享，其它 = 容器名。
+     * background = true 时不切到前台。主线程调用。
+     */
+    Tab newTabInContainer(String url, String container, boolean background) {
+        Tab t = newTab(true, resolveContainer(container, active));
+        if (url == null || url.isEmpty()) t.web.loadUrl("about:blank");
+        else loadIn(t, url, false);
+        if (!background) switchTo(t);
+        else refreshTabs();
+        return t;
+    }
+
+    /** 用户新建标签：container 规则同 resolveContainer */
+    private void newUserTabIn(String containerSpec) {
+        userTouched = true;
+        Tab t = newTab(false, resolveContainer(containerSpec, active));
+        switchTo(t);
+        goHome(t, true);
+    }
+
+    /** 标签关闭后：没有其他标签还在用这个容器就交给 ContainerManager 释放（keep 的、Default 由它自己判断不删） */
+    private void releaseContainer(String name) {
+        if (name == null || ContainerManager.DEFAULT.equals(name) || !ContainerManager.supported()) return;
+        for (Tab x : tabs) if (!x.closed && name.equals(x.container)) return;
+        try {
+            containers().release(name);
+        } catch (Throwable e) {
+            Log.w(TAG, "release container failed", e);
+        }
+    }
+
+    /** 容器显示信息：[标签, 颜色]；Default 显示为「共享」 */
+    private String containerLabel(String name) {
+        if (name == null || ContainerManager.DEFAULT.equals(name)) return "共享";
+        try {
+            JSONObject m = containers().meta(name);
+            if (m != null) {
+                String l = m.optString("label", "");
+                if (!l.isEmpty()) return l;
+            }
+        } catch (Throwable ignored) {}
+        return name;
+    }
+
+    private int containerColor(String name) {
+        if (name == null || ContainerManager.DEFAULT.equals(name)) return cDim;
+        try {
+            JSONObject m = containers().meta(name);
+            if (m != null) return color(m, "color", cDim);
+        } catch (Throwable ignored) {}
+        return cDim;
+    }
+
+    private boolean containerKeep(String name) {
+        if (name == null) return false;
+        if (ContainerManager.DEFAULT.equals(name)) return true;
+        try {
+            JSONObject m = containers().meta(name);
+            return m != null && m.optBoolean("keep", false);
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 该容器的 CookieManager（主线程取；不支持多 Profile 时是全局的） */
+    private android.webkit.CookieManager cookiesFor(String container) {
+        try {
+            android.webkit.CookieManager cm = containers().cookies(container == null ? ContainerManager.DEFAULT : container);
+            if (cm != null) return cm;
+        } catch (Throwable ignored) {}
+        return android.webkit.CookieManager.getInstance();
+    }
+
+    private static android.webkit.CookieManager tabCookies(Tab t) {
+        android.webkit.CookieManager cm = t != null ? t.cookies : null;
+        return cm != null ? cm : android.webkit.CookieManager.getInstance();
+    }
+
+    /** 长按「＋」/ 标签数：选在哪个容器开新标签 */
+    private void showNewTabChooser(View anchor) {
+        if (host == null) return;
+        PopupMenu pm = new PopupMenu(host, anchor);
+        Menu m = pm.getMenu();
+        boolean sup = ContainerManager.supported();
+        m.add(0, 1, 0, "新标签页（新容器）");
+        if (sup && active != null && active.container != null) m.add(0, 2, 0, "新标签页（当前容器：" + containerLabel(active.container) + "）");
+        if (sup) m.add(0, 3, 0, "新标签页（共享容器 Default）");
+        pm.setOnMenuItemClickListener(item -> {
+            closeSwitcher();
+            switch (item.getItemId()) {
+                case 2: newUserTabIn("same"); break;
+                case 3: newUserTabIn(ContainerManager.DEFAULT); break;
+                default: newUserTabIn("new"); break;
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    /** 标签卡片长按：保留容器、重命名、在同容器新建、关闭 */
+    private void showTabMenu(Tab x, View anchor) {
+        if (host == null || x == null) return;
+        PopupMenu pm = new PopupMenu(host, anchor);
+        Menu m = pm.getMenu();
+        boolean sup = ContainerManager.supported();
+        boolean isDefault = x.container == null || ContainerManager.DEFAULT.equals(x.container);
+        if (sup && !isDefault) {
+            m.add(0, 1, 0, "保留此容器（关闭后不删数据）").setCheckable(true).setChecked(containerKeep(x.container));
+            m.add(0, 2, 0, "重命名容器…");
+        }
+        if (sup) m.add(0, 3, 0, "在此容器新建标签");
+        m.add(0, 4, 0, "关闭标签");
+        pm.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1: {
+                    boolean keep = !containerKeep(x.container);
+                    try {
+                        containers().setKeep(x.container, keep);
+                    } catch (Throwable ignored) {}
+                    Toast.makeText(ctx, keep ? "已保留容器：关闭标签后登录和数据都还在" : "已取消保留：最后一个标签关闭时删除容器数据", Toast.LENGTH_SHORT).show();
+                    rebuildSwitcher();
+                    break;
+                }
+                case 2:
+                    renameContainer(x.container);
+                    break;
+                case 3:
+                    closeSwitcher();
+                    userTouched = true;
+                    Tab nt = newTab(false, x.container);
+                    switchTo(nt);
+                    goHome(nt, true);
+                    break;
+                case 4:
+                    closeTab(x);
+                    if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
+                    break;
+                default:
+                    return false;
+            }
+            return true;
+        });
+        pm.show();
+    }
+
+    private void renameContainer(String name) {
+        if (host == null || name == null) return;
+        EditText et = new EditText(host);
+        et.setSingleLine(true);
+        et.setText(containerLabel(name));
+        et.selectAll();
+        FrameLayout f = new FrameLayout(host);
+        f.setPadding(dp(20), dp(8), dp(20), 0);
+        f.addView(et);
+        new AlertDialog.Builder(host).setTitle("重命名容器").setView(f)
+                .setPositiveButton("确定", (d, w) -> {
+                    String l = et.getText().toString().trim();
+                    if (l.isEmpty()) return;
+                    try {
+                        containers().rename(name, l);
+                    } catch (Throwable ignored) {}
+                    refreshTabs();
+                    if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
+                })
+                .setNegativeButton("取消", null).show();
+    }
+
+    /** 记一条历史（launcher、应用目录页面、非 http(s)/file 不记） */
+    private void recordHistory(Tab t, String url, String title) {
+        if (t == null || url == null || url.isEmpty() || isLauncher(url) || isTrusted(url)) return;
+        if (!(url.startsWith("http://") || url.startsWith("https://"))) return;
+        try {
+            history().add(url, title == null ? "" : title, t.container);
+        } catch (Throwable e) {
+            Log.w(TAG, "history add failed", e);
+        }
+    }
+
+    // ---- 🕘 历史面板
+
+    private static final int HISTORY_PAGE = 100;
+
+    private void showHistoryPanel() {
+        if (host == null || host.isFinishing()) return;
+        hideIme();
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(18), dp(14), dp(18), dp(12));
+
+        LinearLayout head = new LinearLayout(host);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(panelText("🕘 历史", 16f, p.text, true), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        final AlertDialog[] dlg = new AlertDialog[1];
+        final Runnable[] reload = new Runnable[1];
+        head.addView(panelButton("清除…", p, v -> new AlertDialog.Builder(host).setTitle("清除历史")
+                .setItems(new String[]{"最近一小时", "今天", "全部"}, (d, w) -> {
+                    new Thread(() -> {
+                        try {
+                            if (w == 0) history().clearSince(System.currentTimeMillis() - 3600_000L);
+                            else if (w == 1) history().clearSince(startOfDay(System.currentTimeMillis()));
+                            else history().clear();
+                        } catch (Throwable ignored) {}
+                        MAIN.post(() -> {
+                            Toast.makeText(ctx, "已清除", Toast.LENGTH_SHORT).show();
+                            if (reload[0] != null) reload[0].run();
+                        });
+                    }, "pimet-history-clear").start();
+                }).show()));
+        col.addView(head);
+
+        EditText search = new EditText(host);
+        search.setSingleLine(true);
+        search.setHint("搜索历史");
+        search.setTextSize(14f);
+        search.setTextColor(p.text);
+        search.setHintTextColor(p.textDim);
+        search.setBackground(ThemeManager.createSecondaryButtonDrawable(host, p, 8f));
+        search.setPadding(dp(12), dp(8), dp(12), dp(8));
+        search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(10);
+        slp.bottomMargin = dp(6);
+        col.addView(search, slp);
+
+        LinearLayout list = new LinearLayout(host);
+        list.setOrientation(LinearLayout.VERTICAL);
+        ScrollView sv = new ScrollView(host);
+        sv.addView(list);
+        DisplayMetrics dm = host.getResources().getDisplayMetrics();
+        col.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) (dm.heightPixels * 0.62f)));
+
+        final int[] gen = {0};
+        final int[] offset = {0};
+        final String[] lastDay = {null};
+        final TextView[] more = new TextView[1];
+
+        final Runnable[] loadPage = new Runnable[1];
+        loadPage[0] = () -> {
+            final int myGen = gen[0];
+            final String q = search.getText().toString().trim();
+            final int off = offset[0];
+            new Thread(() -> {
+                JSONArray a;
+                try {
+                    a = q.isEmpty() ? history().recent(HISTORY_PAGE, off) : history().search(q, 500);
+                } catch (Throwable e) {
+                    a = new JSONArray();
+                }
+                final JSONArray items = a == null ? new JSONArray() : a;
+                MAIN.post(() -> {
+                    if (myGen != gen[0] || host == null) return;
+                    if (more[0] != null) {
+                        list.removeView(more[0]);
+                        more[0] = null;
+                    }
+                    if (off == 0 && items.length() == 0) {
+                        list.addView(panelText(q.isEmpty() ? "还没有浏览历史" : "没有找到「" + q + "」", 12f, p.textDim, false));
+                        return;
+                    }
+                    for (int i = 0; i < items.length(); i++) {
+                        JSONObject h = items.optJSONObject(i);
+                        if (h == null) continue;
+                        long ts = h.optLong("t", 0);
+                        String day = dayLabel(ts);
+                        if (!day.equals(lastDay[0])) {
+                            lastDay[0] = day;
+                            list.addView(panelSection(day, p));
+                        }
+                        list.addView(historyRow(h, p, dlg), rowLp(dp(4)));
+                    }
+                    offset[0] = off + items.length();
+                    if (q.isEmpty() && items.length() >= HISTORY_PAGE) {
+                        more[0] = panelButton("加载更多", p, v -> loadPage[0].run());
+                        list.addView(more[0], rowLp(dp(8)));
+                    }
+                });
+            }, "pimet-history-load").start();
+        };
+        reload[0] = () -> {
+            gen[0]++;
+            offset[0] = 0;
+            lastDay[0] = null;
+            more[0] = null;
+            list.removeAllViews();
+            loadPage[0].run();
+        };
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                final int g = ++gen[0];
+                MAIN.postDelayed(() -> { if (g == gen[0]) reload[0].run(); }, 250);
+            }
+        });
+
+        FrameLayout wrap = new FrameLayout(host);
+        wrap.setBackground(ThemeManager.createCardDrawable(host, p, 14f));
+        wrap.addView(col);
+        AlertDialog d = new AlertDialog.Builder(host).setView(wrap).create();
+        dlg[0] = d;
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawableResource(android.R.color.transparent);
+            w.setGravity(Gravity.BOTTOM);
+        }
+        d.show();
+        if (w != null) w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        reload[0].run();
+    }
+
+    private View historyRow(JSONObject h, ThemeManager.ThemePalette p, AlertDialog[] dlg) {
+        final String url = h.optString("url", "");
+        String title = h.optString("title", "");
+        long ts = h.optLong("t", 0);
+        String time = ts > 0 ? new java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(ts)) : "";
+        String sub = time + "  " + url.replaceFirst("^https?://", "");
+        View row = panelRow(title.isEmpty() ? url : title, sub, p, v -> {
+            if (dlg[0] != null) dlg[0].dismiss();
+            load(url);
+        });
+        row.setOnLongClickListener(v -> {
+            new AlertDialog.Builder(host).setTitle(title.isEmpty() ? url : title)
+                    .setItems(new String[]{"在新标签打开（当前容器）", "在新标签打开（新容器）", "复制链接", "删除这条记录"}, (d, w) -> {
+                        switch (w) {
+                            case 0:
+                            case 1: {
+                                if (dlg[0] != null) dlg[0].dismiss();
+                                userTouched = true;
+                                Tab nt = newTab(false, resolveContainer(w == 0 ? "same" : "new", active));
+                                switchTo(nt);
+                                loadIn(nt, url, true);
+                                break;
+                            }
+                            case 2:
+                                try {
+                                    ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("url", url));
+                                    Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show();
+                                } catch (Throwable ignored) {}
+                                break;
+                            default:
+                                new Thread(() -> {
+                                    try { history().delete(url); } catch (Throwable ignored) {}
+                                }, "pimet-history-del").start();
+                                row.setVisibility(View.GONE);
+                                break;
+                        }
+                    }).show();
+            return true;
+        });
+        return row;
+    }
+
+    private static long startOfDay(long ms) {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.setTimeInMillis(ms);
+        c.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        c.set(java.util.Calendar.MINUTE, 0);
+        c.set(java.util.Calendar.SECOND, 0);
+        c.set(java.util.Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
+    }
+
+    private static String dayLabel(long ts) {
+        if (ts <= 0) return "更早";
+        long today = startOfDay(System.currentTimeMillis());
+        if (ts >= today) return "今天";
+        if (ts >= today - 86400_000L) return "昨天";
+        return new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(new java.util.Date(ts));
     }
 
     // ------------------------------------------------------------------ 应用列表
@@ -4388,7 +4922,10 @@ public final class FloatingApps {
             if (t.thumb != null) t.thumb.recycle();
             t.thumb = null;
         }
+        java.util.Set<String> used = new java.util.HashSet<>();
+        for (Tab t : tabs) if (t.container != null) used.add(t.container);
         tabs.clear();
+        for (String c : used) releaseContainer(c);
         if (sInstance == this) sInstance = null;
         if (a != null) {
             try { a.finishAndRemoveTask(); } catch (Throwable ignored) {}
