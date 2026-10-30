@@ -22,6 +22,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -611,6 +612,16 @@ public final class BrowserAgent {
                 boolean csup = ContainerManager.supported();
                 String cont = onMain(() -> win.containerOf(tab), 3000);
                 out.put("container", nz(cont)).put("containers_supported", csup);
+                try {
+                    BrowserCustomizer cz = cust(win);
+                    JSONObject cfg = cz.config();
+                    JSONArray pa = cfg.optJSONArray("panels");
+                    out.put("ui_version", cfg.optInt("version", 1)).put("panels", pa == null ? 0 : pa.length());
+                } catch (AbortException a) {
+                    throw a;
+                } catch (Exception e) {
+                    out.put("ui_version", -1).put("panels", -1);
+                }
                 result += "；用户脚本 " + out.optInt("scripts") + " 个（当前页生效 " + out.optInt("scripts_matching") + " 个）；UA " + mode
                         + "；缩放 " + zoom + "%；容器 " + (nz(cont).isEmpty() ? "-" : cont) + (csup ? "" : "（系统不支持多容器）");
                 break;
@@ -1531,8 +1542,231 @@ public final class BrowserAgent {
                 return ok().put("result", "已清除全部历史");
             }
             default:
+                return doUi(win, action, req);
+        }
+    }
+
+    // ------------------------------------------------------------------ 自定义浏览器（beta.24：ui.json / 面板 / 规则）
+
+    private static BrowserCustomizer cust(FloatingApps win) throws Exception {
+        BrowserCustomizer c = onMain(win::customizer, 3000);
+        if (c == null) throw new IllegalStateException("浏览器自定义配置不可用（customizer 未初始化）");
+        return c;
+    }
+
+    /** 写入类操作的统一结果：成功 {ok:true, errors:[]}；校验失败 {success:false, ok:false, errors:[...]}（未写入） */
+    private interface UiWrite { void run() throws Exception; }
+
+    private static JSONObject uiWrite(String what, UiWrite w) throws Exception {
+        try {
+            w.run();
+        } catch (AbortException a) {
+            throw a;
+        } catch (Exception e) {
+            String m = e.getMessage() == null ? e.toString() : e.getMessage();
+            JSONArray errs = new JSONArray();
+            for (String line : m.split("[;；]|\\n")) if (!line.trim().isEmpty()) errs.put(line.trim());
+            return err(what + "失败，配置未改动：" + m).put("ok", false).put("errors", errs);
+        }
+        return ok().put("ok", true).put("errors", new JSONArray()).put("result", what + "成功，已立即生效");
+    }
+
+    /** JSON Pointer 段转义（RFC 6901）：~ → ~0，/ → ~1 */
+    private static String ptrSeg(String s) {
+        return s.replace("~", "~0").replace("/", "~1");
+    }
+
+    /** ui.bak 目录：appsDir/ui.bak（由 panels/ 目录反推 appsDir） */
+    private static File backupDir(BrowserCustomizer c) {
+        File pf = c.panelFile("_");
+        File apps = pf == null ? null : pf.getParentFile() == null ? null : pf.getParentFile().getParentFile();
+        return apps == null ? null : new File(apps, "ui.bak");
+    }
+
+    private static JSONObject doUi(FloatingApps win, String action, JSONObject req) throws Exception {
+        switch (action) {
+            case "ui_get": {
+                BrowserCustomizer c = cust(win);
+                String ptr = req.optString("pointer", "").trim();
+                Object v = ptr.isEmpty() || ptr.equals("/") ? c.config() : c.get(ptr);
+                return ok().put("pointer", ptr).put("value", v == null ? JSONObject.NULL : v)
+                        .put("result", v == null ? "配置里没有 " + ptr : (ptr.isEmpty() ? "完整配置（含默认值）" : ptr + " 的当前值"));
+            }
+            case "ui_schema":
+                return ok().put("schema", nz(BrowserCustomizer.schemaDoc())).put("builtins", BrowserCustomizer.builtins())
+                        .put("result", "ui.json 结构说明与内置 id 列表");
+            case "ui_set": {
+                String ptr = req.optString("pointer", "").trim();
+                if (ptr.isEmpty() || !ptr.startsWith("/")) return err("ui_set 需要 pointer（JSON Pointer，如 /theme/accent；/toolbar/- 追加）");
+                if (!req.has("value")) return err("ui_set 需要 value");
+                BrowserCustomizer c = cust(win);
+                Object v = req.opt("value");
+                return uiWrite("设置 " + ptr, () -> c.set(ptr, v));
+            }
+            case "ui_patch": {
+                JSONObject patch = req.optJSONObject("patch");
+                if (patch == null) return err("ui_patch 需要 patch（JSON 对象，RFC 7386 合并补丁；null 表示删除）");
+                BrowserCustomizer c = cust(win);
+                return uiWrite("合并补丁", () -> c.patch(patch));
+            }
+            case "ui_remove": {
+                String ptr = req.optString("pointer", "").trim();
+                if (ptr.isEmpty() || !ptr.startsWith("/")) return err("ui_remove 需要 pointer");
+                BrowserCustomizer c = cust(win);
+                return uiWrite("删除 " + ptr, () -> c.remove(ptr));
+            }
+            case "ui_reset": {
+                String ptr = req.optString("pointer", "").trim();
+                BrowserCustomizer c = cust(win);
+                return uiWrite(ptr.isEmpty() ? "恢复全部默认" : "恢复默认 " + ptr, () -> c.reset(ptr.isEmpty() ? null : ptr));
+            }
+            case "ui_backups": {
+                BrowserCustomizer c = cust(win);
+                File dir = backupDir(c);
+                File[] fs = dir == null ? null : dir.listFiles((d, n) -> n.endsWith(".json"));
+                JSONArray a = new JSONArray();
+                if (fs != null) {
+                    java.util.Arrays.sort(fs, (x, y) -> Long.compare(y.lastModified(), x.lastModified()));
+                    for (File f : fs) a.put(new JSONObject().put("name", f.getName()).put("t", f.lastModified()).put("size", f.length()));
+                }
+                return ok().put("backups", a).put("result", a.length() == 0 ? "还没有备份（每次写入前自动备份）" : "共 " + a.length() + " 份备份（新的在前），用 ui_restore{name} 恢复");
+            }
+            case "ui_restore": {
+                String name = req.optString("name", "").trim();
+                if (name.isEmpty()) return err("ui_restore 需要 name（ui_backups 列出）");
+                if (name.contains("/") || name.contains("\\") || name.startsWith(".")) return err("备份名不合法：" + name);
+                BrowserCustomizer c = cust(win);
+                File dir = backupDir(c);
+                File f = dir == null ? null : new File(dir, name.endsWith(".json") ? name : name + ".json");
+                if (f == null || !f.isFile()) return err("没有备份 " + name + "（用 ui_backups 查看）");
+                JSONObject snap;
+                try {
+                    snap = new JSONObject(new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception e) {
+                    return err("备份文件损坏：" + friendly(e));
+                }
+                final JSONObject sn = snap;
+                return uiWrite("从备份 " + f.getName() + " 恢复", () -> c.restore(sn));
+            }
+            case "ui_reload":
+                onMain(() -> { win.reloadUi(); return null; }, 5000);
+                return ok().put("result", "已按 ui.json 重建工具栏/菜单/悬浮球并重新应用主题");
+            case "panels": {
+                JSONArray pa = cust(win).config().optJSONArray("panels");
+                if (pa == null) pa = new JSONArray();
+                return ok().put("panels", pa).put("result", pa.length() == 0 ? "还没有自定义面板" : "共 " + pa.length() + " 个面板");
+            }
+            case "panel_write": {
+                String id = req.optString("id", "").trim();
+                String html = req.optString("html", "");
+                if (id.isEmpty() || !id.matches("[A-Za-z0-9._-]+") || id.startsWith(".")) return err("panel_write 需要 id（只允许 A-Z a-z 0-9 . _ -）");
+                if (html.isEmpty()) return err("panel_write 需要 html");
+                String title = req.optString("title", id);
+                String icon = req.optString("icon", "🧩");
+                String where = req.optString("where", "menu").trim();
+                if (!where.equals("menu") && !where.equals("toolbar") && !where.equals("ball") && !where.equals("none")) return err("where 只能是 menu / toolbar / ball / none");
+                BrowserCustomizer c = cust(win);
+                JSONObject r = uiWrite("写入面板 " + id, () -> c.writePanel(id, title, icon, html, where));
+                if (r.optBoolean("ok")) r.put("id", id).put("result", "已写入面板 " + id + "（" + where + "），用 panel_open{id} 打开");
+                return r;
+            }
+            case "panel_open": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("panel_open 需要 id");
+                File f = cust(win).panelFile(id);
+                if (f == null || !f.isFile()) return err("没有面板 " + id + "（panels 列出）");
+                onMain(() -> { win.openPanel(id); return null; }, 5000);
+                return ok().put("id", id).put("result", "已打开面板 " + id);
+            }
+            case "panel_delete": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("panel_delete 需要 id");
+                boolean gone = cust(win).deletePanel(id);
+                return gone ? ok().put("result", "已删除面板 " + id) : err("没有面板 " + id);
+            }
+            case "action_run": {
+                JSONObject act = req.optJSONObject("action");
+                if (act == null) return err("action_run 需要 action（如 {type:\"builtin\",id:\"reload\"}）");
+                if (act.optString("type", "").isEmpty()) return err("action 缺少 type（builtin/open/js/script_menu/panel/askpi/seq）");
+                onMain(() -> { win.runAction(act); return null; }, 8000);
+                return ok().put("result", "已执行 " + act.optString("type") + (act.has("id") ? " " + act.optString("id") : ""));
+            }
+            case "site_set": {
+                String pat = req.optString("pattern", "").trim();
+                if (pat.isEmpty()) return err("site_set 需要 pattern（如 *.example.com）");
+                Object st = req.opt("settings");
+                BrowserCustomizer c = cust(win);
+                String ptr = "/sites/" + ptrSeg(pat);
+                if (st == null || st == JSONObject.NULL) return uiWrite("删除站点规则 " + pat, () -> c.remove(ptr));
+                if (!(st instanceof JSONObject)) return err("settings 应是对象，如 {ua:\"desktop\",zoom:120}");
+                JSONObject sites = new JSONObject().put(pat, st);
+                // 合并补丁：只改给出的字段，其余保留
+                return uiWrite("设置站点 " + pat, () -> c.patch(new JSONObject().put("sites", sites)));
+            }
+            case "site_get": {
+                String u = normalize(req.optString("url", ""));
+                if (u.isEmpty()) u = peekUrl(win, req);
+                if (u.isEmpty()) return err("site_get 需要 url");
+                JSONObject st = cust(win).siteSettings(u);
+                return ok().put("url", u).put("settings", st == null ? new JSONObject() : st)
+                        .put("result", st == null || st.length() == 0 ? "没有匹配该网址的站点设置" : "该网址生效的站点设置");
+            }
+            case "rules": {
+                BrowserCustomizer c = cust(win);
+                Object r = c.get("/rules");
+                JSONObject rules = r instanceof JSONObject ? (JSONObject) r : new JSONObject();
+                return ok().put("rules", rules).put("result", "拦截 " + lenOf(rules.optJSONArray("block")) + " 条，重定向 " + lenOf(rules.optJSONArray("redirect")) + " 条");
+            }
+            case "rule_add": {
+                String kind = req.optString("kind", "").trim();
+                Object rule = req.opt("rule");
+                if (!kind.equals("block") && !kind.equals("redirect")) return err("rule_add 的 kind 只能是 block / redirect");
+                if (rule == null) return err("rule_add 需要 rule");
+                if (kind.equals("block") && !(rule instanceof String)) return err("block 规则是字符串，如 ||ads.example.com^");
+                if (kind.equals("redirect") && !(rule instanceof JSONObject)) return err("redirect 规则是对象 {from:正则, to:替换}");
+                BrowserCustomizer c = cust(win);
+                if (!(c.get("/rules") instanceof JSONObject)) {
+                    JSONObject r0 = uiWrite("初始化规则", () -> c.set("/rules", new JSONObject()));
+                    if (!r0.optBoolean("ok")) return r0;
+                }
+                if (!(c.get("/rules/" + kind) instanceof JSONArray)) {
+                    JSONObject r0 = uiWrite("初始化规则", () -> c.set("/rules/" + kind, new JSONArray()));
+                    if (!r0.optBoolean("ok")) return r0;
+                }
+                return uiWrite("添加 " + kind + " 规则", () -> c.set("/rules/" + kind + "/-", rule));
+            }
+            case "rule_remove": {
+                String kind = req.optString("kind", "").trim();
+                if (!kind.equals("block") && !kind.equals("redirect")) return err("rule_remove 的 kind 只能是 block / redirect");
+                BrowserCustomizer c = cust(win);
+                Object a0 = c.get("/rules/" + kind);
+                JSONArray a = a0 instanceof JSONArray ? (JSONArray) a0 : new JSONArray();
+                int idx = -1;
+                if (req.has("index")) {
+                    idx = req.optInt("index", -1);
+                } else if (req.has("rule")) {
+                    Object want = req.opt("rule");
+                    for (int i = 0; i < a.length(); i++) {
+                        Object x = a.opt(i);
+                        boolean same = want instanceof JSONObject && x instanceof JSONObject
+                                ? ((JSONObject) want).optString("from").equals(((JSONObject) x).optString("from"))
+                                : String.valueOf(want).equals(String.valueOf(x));
+                        if (same) { idx = i; break; }
+                    }
+                } else {
+                    return err("rule_remove 需要 index 或 rule");
+                }
+                if (idx < 0 || idx >= a.length()) return err("没有找到要删除的 " + kind + " 规则（rules 查看）");
+                final int i = idx;
+                return uiWrite("删除 " + kind + " 规则 #" + i, () -> c.remove("/rules/" + kind + "/" + i));
+            }
+            default:
                 return null;
         }
+    }
+
+    private static int lenOf(JSONArray a) {
+        return a == null ? 0 : a.length();
     }
 
     /** tab_new {url?, container?:"new"|"same"|"Default"|<name>, background?}；默认 container=new、background=true（Pi 在自己的后台标签里干活） */
