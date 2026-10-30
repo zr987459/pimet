@@ -3182,8 +3182,11 @@ public class MainActivity extends AppCompatActivity {
                     return true;
 
                 case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
                     if (!isFloatDragging) {
-                        toggleFloatingMenu();
+                        if (event.getAction() == MotionEvent.ACTION_UP) toggleFloatingMenu();
+                    } else {
+                        snapFloatingBallToEdge();
                     }
                     return true;
             }
@@ -6959,5 +6962,17 @@ public class MainActivity extends AppCompatActivity {
         holder.tvDetail = tvDetail;
         holder.progressBar = progressBar;
         return holder;
+    }
+
+    /** 松手后悬浮球自动吸附到最近的左/右屏幕边缘（保留 8dp 边距） */
+    private void snapFloatingBallToEdge() {
+        if (floatingMenuContainer == null) return;
+        View parent = (View) floatingMenuContainer.getParent();
+        if (parent == null) return;
+        float margin = 8 * getResources().getDisplayMetrics().density;
+        float curX = floatingMenuContainer.getLeft() + floatingMenuContainer.getTranslationX();
+        float center = curX + floatingMenuContainer.getWidth() / 2f;
+        float targetX = center < parent.getWidth() / 2f ? margin : parent.getWidth() - floatingMenuContainer.getWidth() - margin;
+        floatingMenuContainer.animate().translationX(targetX - floatingMenuContainer.getLeft()).setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
     }
 }

@@ -4595,7 +4595,13 @@ public final class FloatingApps {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     if (moved) {
-                        prefs().edit().putFloat("ball_x", ballWrap.getX()).putFloat("ball_y", ballWrap.getY()).apply();
+                        // 松手自动吸附到最近的左/右边缘
+                        int bw = Math.max(ballWrap.getWidth(), dp(50));
+                        float side = dp(8);
+                        float tx = (ballWrap.getX() + bw / 2f < root.getWidth() / 2f) ? side : root.getWidth() - bw - side;
+                        final float ty = ballWrap.getY();
+                        ballWrap.animate().x(tx).setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+                        prefs().edit().putFloat("ball_x", tx).putFloat("ball_y", ty).apply();
                     } else if (ev.getActionMasked() == MotionEvent.ACTION_UP) {
                         toggleBallMenu();
                     }
