@@ -656,6 +656,7 @@ public final class FloatingApps {
         int idx = webFrame.indexOfChild(dead);
         try { webFrame.removeView(dead); } catch (Throwable ignored) {}
         try { dead.destroy(); } catch (Throwable ignored) {}
+        releaseContainer(t.container); // 旧 WebView 的 apply 计数还回去；下面 createWebView 会对新 WebView 再 apply
         t.loading = false;
         t.translated = false;
         t.web = createWebView(t);
@@ -3770,7 +3771,7 @@ public final class FloatingApps {
     /** 标签关闭后：没有其他标签还在用这个容器就交给 ContainerManager 释放（keep 的、Default 由它自己判断不删） */
     private void releaseContainer(String name) {
         if (name == null || ContainerManager.DEFAULT.equals(name) || !ContainerManager.supported()) return;
-        for (Tab x : tabs) if (!x.closed && name.equals(x.container)) return;
+        // 每个 WebView apply 一次就 release 一次：引用计数由 ContainerManager 管（还有别的标签在用时它不会删）
         try {
             containers().release(name);
         } catch (Throwable e) {
@@ -4922,10 +4923,10 @@ public final class FloatingApps {
             if (t.thumb != null) t.thumb.recycle();
             t.thumb = null;
         }
-        java.util.Set<String> used = new java.util.HashSet<>();
+        List<String> used = new ArrayList<>();
         for (Tab t : tabs) if (t.container != null) used.add(t.container);
         tabs.clear();
-        for (String c : used) releaseContainer(c);
+        for (String c : used) releaseContainer(c); // 每个标签各 release 一次，与 apply 次数对应
         if (sInstance == this) sInstance = null;
         if (a != null) {
             try { a.finishAndRemoveTask(); } catch (Throwable ignored) {}

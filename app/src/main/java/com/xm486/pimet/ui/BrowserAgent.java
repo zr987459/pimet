@@ -206,7 +206,8 @@ public final class BrowserAgent {
         if (reqId.isEmpty()) reqId = "h" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         // wait 的 ms 不占 timeout（与 TS 侧客户端超时 = timeout + ms + 30s 对齐）
         long extra = action.equals("wait") && req.optString("text", "").isEmpty() ? clamp(req.optInt("ms", 1000), 0, 60000)
-                : action.equals("wait_for") ? clamp(req.optInt("timeout_ms", 10000), 0, 30000) : 0;
+                : action.equals("wait_for") ? clamp(req.optInt("timeout_ms", 10000), 0, 30000)
+                : action.equals("batch") ? Math.min(120000, Math.max(1, req.optJSONArray("steps") == null ? 1 : req.optJSONArray("steps").length()) * 12000L) : 0;
         Req r = new Req(reqId, timeout, extra);
         r.tabSpec = req.optString("tab", "");
         if (PRE_CANCELLED.remove(reqId) != null) r.cancelled = true;
@@ -489,7 +490,7 @@ public final class BrowserAgent {
                 int seq = tab.navSeq;
                 String before = tab.url;
                 JSONObject r = evalAgent(tab, "A.select(" + JSONObject.quote(fieldOf(req)) + "," + JSONObject.quote(req.optString("value", "")) + ")", 5000);
-                if (!r.optBoolean("ok")) return err(r.optString("error", "选择失败"));
+                if (!r.optBoolean("ok")) return err(agentErr(r, "选择失败"));
                 result = r.optString("result");
                 settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
@@ -500,7 +501,7 @@ public final class BrowserAgent {
                 if (tgt.isEmpty()) return err("hover 需要 target/ref/text");
                 checkUser(tab);
                 JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
-                if (!loc.optBoolean("ok")) return err(loc.optString("error", "定位失败"));
+                if (!loc.optBoolean("ok")) return err(agentErr(loc, "定位失败"));
                 evalJson(tab, HOVER_JS, 3000);
                 result = "已悬停 " + tgt + (loc.optString("label").isEmpty() ? "" : "（" + loc.optString("label") + "）");
                 sleep(150);
@@ -510,7 +511,7 @@ public final class BrowserAgent {
                 String tgt = targetOf(req);
                 if (tgt.isEmpty()) return err("scroll_into_view 需要 target/ref/text");
                 JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
-                if (!loc.optBoolean("ok")) return err(loc.optString("error", "定位失败"));
+                if (!loc.optBoolean("ok")) return err(agentErr(loc, "定位失败"));
                 result = "已把 " + tgt + " 滚动到可见";
                 wantSnapshot = req.optBoolean("snapshot", false);
                 break;
@@ -532,7 +533,7 @@ public final class BrowserAgent {
                 String js = "A.scroll(" + JSONObject.quote(fieldOf(req)) + "," + JSONObject.quote(req.optString("direction", "down"))
                         + "," + req.optDouble("amount", 0.8) + ")";
                 JSONObject r = evalAgent(tab, js, 5000);
-                if (!r.optBoolean("ok")) return err(r.optString("error", "滚动失败"));
+                if (!r.optBoolean("ok")) return err(agentErr(r, "滚动失败"));
                 result = r.optString("result");
                 if (r.has("moved") && !r.optBoolean("moved", true)) result += "（页面没有移动）";
                 else if (r.optBoolean("atEnd", false)) result += "（已到尽头）";
@@ -660,7 +661,7 @@ public final class BrowserAgent {
 
         if (result != null) out.put("result", result);
         if (wantSnapshot) {
-            JSONObject snap = snapshot(tab, req.optInt("max_chars", 6000), scopeOf(req));
+            JSONObject snap = snapshot(tab, req.optInt("max_chars", action.equals("snapshot") ? 12000 : 6000), scopeOf(req));
             out.put("url", snap.optString("url", tab.url));
             out.put("title", snap.optString("title", tab.title));
             out.put("snapshot", snap.optString("text"));
@@ -871,7 +872,7 @@ public final class BrowserAgent {
         if (tgt.isEmpty()) throw new IllegalArgumentException("click 需要 target / ref / text");
         checkUser(tab);
         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
-        if (!loc.optBoolean("ok")) throw new IllegalStateException(loc.optString("error", "定位失败"));
+        if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
         String label = loc.optString("label");
         boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab), 2000));
         if (!active) waitFrame(tab, 600); // 后台标签刚变可见，等它画出一帧再触摸
@@ -1016,7 +1017,7 @@ public final class BrowserAgent {
         boolean submit = req.optBoolean("submit", false);
         checkUser(tab);
         JSONObject r = evalAgent(tab, "A.type(" + JSONObject.quote(ref) + "," + JSONObject.quote(text) + "," + clear + ")", 5000);
-        if (!r.optBoolean("ok")) throw new IllegalStateException(r.optString("error", "输入失败"));
+        if (!r.optBoolean("ok")) throw new IllegalStateException(agentErr(r, "输入失败"));
         String res = "已输入" + (ref.isEmpty() ? "" : "到 " + ref);
         // 校验：A.type 回读了 value（密码框只回 len）
         if (clear && r.has("value") && !r.isNull("value")) {
@@ -1438,7 +1439,8 @@ public final class BrowserAgent {
                     return ok().put("url", url).put("container", JSONObject.NULL).put("cookies", nz(got))
                             .put("result", (n > 0 ? "已写入 " + n + " 条 cookie；" : "") + (got == null || got.isEmpty() ? "该网址没有 cookie" : "该网址的 cookie 如上"));
                 }
-                // 指定容器：用该容器的 CookieManager
+                // 指定容器：用该容器的 CookieManager（不存在的容器不新建 Profile）
+                if (ContainerManager.supported() && !containerExists(win, cont)) return err("没有容器 " + cont + "，用 containers 查看");
                 final android.webkit.CookieManager cm = onMain(() -> win.containers() == null ? android.webkit.CookieManager.getInstance() : win.containers().cookies(cont), 3000);
                 if (cm == null) return err("拿不到容器 " + cont + " 的 cookie 管理器");
                 for (final String c : list) {
@@ -1483,6 +1485,7 @@ public final class BrowserAgent {
             case "container_keep": {
                 String name = req.optString("name", "").trim();
                 if (name.isEmpty()) return err("container_keep 需要 name");
+                if (!containerExists(win, name)) return err("没有容器 " + name + "，用 containers 查看");
                 boolean keep = req.optBoolean("keep", true);
                 onMain(() -> { if (win.containers() != null) win.containers().setKeep(name, keep); return null; }, 3000);
                 return ok().put("name", name).put("keep", keep)
@@ -1492,6 +1495,7 @@ public final class BrowserAgent {
                 String name = req.optString("name", "").trim();
                 String label = req.optString("label", "").trim();
                 if (name.isEmpty() || label.isEmpty()) return err("container_rename 需要 name 和 label");
+                if (!containerExists(win, name)) return err("没有容器 " + name + "，用 containers 查看");
                 onMain(() -> { if (win.containers() != null) win.containers().rename(name, label); return null; }, 3000);
                 return ok().put("name", name).put("label", label).put("result", "已把容器 " + name + " 改名为「" + label + "」");
             }
@@ -1511,7 +1515,7 @@ public final class BrowserAgent {
                 if (h == null) return err("历史记录不可用");
                 final String url = req.optString("url", "").trim();
                 if (url.isEmpty()) return err("history_delete 需要 url（可为前缀）");
-                int n = onMain(() -> h.delete(url), 3000);
+                int n = h.delete(url); // HistoryStore 线程安全，会等加载完成：不放主线程
                 return ok().put("deleted", n).put("result", "已删除 " + n + " 条匹配「" + url + "」的历史");
             }
             case "history_clear": {
@@ -1519,10 +1523,11 @@ public final class BrowserAgent {
                 if (h == null) return err("历史记录不可用");
                 if (req.has("since_ms")) {
                     final long since = req.optLong("since_ms", 0);
-                    onMain(() -> { h.clearSince(since); return null; }, 3000);
-                    return ok().put("result", "已清除最近 " + since + "ms 的历史");
+                    h.clearSince(since);
+                    String what = since < 100_000_000_000L ? "最近 " + (since / 1000) + " 秒" : "时间戳 " + since + " 之后";
+                    return ok().put("result", "已清除" + what + "的历史");
                 }
-                onMain(() -> { h.clear(); return null; }, 3000);
+                h.clear();
                 return ok().put("result", "已清除全部历史");
             }
             default:
@@ -1536,11 +1541,15 @@ public final class BrowserAgent {
         String container = req.optString("container", "new").trim();
         if (container.isEmpty()) container = "new";
         boolean background = req.optBoolean("background", true);
-        final String spec = container;
+        final String spec = mapContainer(container);
+        if (spec != null && !spec.equalsIgnoreCase("same") && ContainerManager.supported() && !containerExists(win, spec)) {
+            return err("没有容器 " + spec + "，用 containers 查看（新容器用 container:\"new\"）");
+        }
         final boolean bg = background;
         FloatingApps.Tab t;
         synchronized (WINDOW_LOCK) {
-            t = onMain(() -> win.newTabInContainer(url.isEmpty() ? null : url, mapContainer(spec), bg), 6000);
+            // 先开 about:blank，再像 new_tab 一样等它落定后导航，避免把 about:blank 的加载当成目标页完成
+            t = onMain(() -> win.newTabInContainer(null, spec, bg), 6000);
         }
         if (t == null) return err("新建标签失败");
         CUR.get().tab = t;
@@ -1550,8 +1559,11 @@ public final class BrowserAgent {
         ReentrantLock lk = lockOf(t);
         acquire(lk, t);
         try {
+            long e = SystemClock.uptimeMillis() + 2000;
+            while (SystemClock.uptimeMillis() < e && (t.navSeq == 0 || t.loading || t.finishedSeq != t.navSeq)) sleep(50);
             int seq = t.navSeq;
             String before = t.url;
+            onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
             boolean loaded = navWait(t, seq, before, softLeft());
             JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + " 新建标签 " + t.id + " 并打开 " + url);
             if (bad != null) return bad.put("tab", t.id).put("container", nz(cont));
@@ -1559,6 +1571,21 @@ public final class BrowserAgent {
         } finally {
             lk.unlock();
         }
+    }
+
+    /** 容器是否存在（Default 总是存在）；不存在的名字不要交给 ContainerManager，否则会凭空建 Profile */
+    private static boolean containerExists(FloatingApps win, String name) throws Exception {
+        if (name == null || name.isEmpty()) return false;
+        if (ContainerManager.DEFAULT.equalsIgnoreCase(name)) return true;
+        Boolean ok = onMain(() -> win.containers() != null && win.containers().meta(name) != null, 3000);
+        return Boolean.TRUE.equals(ok);
+    }
+
+    /** agent.js 失败结果 → 错误文本；ref 失效时带上 unknown_ref 标记，TS 侧据此提示重新 snapshot */
+    private static String agentErr(JSONObject r, String def) {
+        String e = r == null ? def : r.optString("error", def);
+        if (r != null && "unknown_ref".equals(r.optString("code")) && !e.contains("unknown_ref")) e = "unknown_ref：" + e + "（重新 snapshot）";
+        return e;
     }
 
     /** 把 action 里的 container 规格映射成 newTabInContainer 的参数：new -> null（新容器）；其余原样（same/Default/<name> 由 M2 解释） */
@@ -1802,7 +1829,7 @@ public final class BrowserAgent {
                         sr.put("result", type(win, tab, st)); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
                     case "select": {
                         JSONObject r = evalAgent(tab, "A.select(" + JSONObject.quote(fieldOf(st)) + "," + JSONObject.quote(st.optString("value", "")) + ")", 5000);
-                        if (!r.optBoolean("ok")) throw new IllegalStateException(r.optString("error", "选择失败"));
+                        if (!r.optBoolean("ok")) throw new IllegalStateException(agentErr(r, "选择失败"));
                         sr.put("result", r.optString("result")); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
                     }
                     case "press": case "key": {
@@ -1816,20 +1843,20 @@ public final class BrowserAgent {
                         String tgt = targetOf(st);
                         if (tgt.isEmpty()) throw new IllegalStateException("hover 需要 target");
                         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
-                        if (!loc.optBoolean("ok")) throw new IllegalStateException(loc.optString("error", "定位失败"));
+                        if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
                         evalJson(tab, HOVER_JS, 3000);
                         sr.put("result", "已悬停 " + tgt); sleep(120); break;
                     }
                     case "scroll": {
                         JSONObject r = evalAgent(tab, "A.scroll(" + JSONObject.quote(fieldOf(st)) + "," + JSONObject.quote(st.optString("direction", "down")) + "," + st.optDouble("amount", 0.8) + ")", 5000);
-                        if (!r.optBoolean("ok")) throw new IllegalStateException(r.optString("error", "滚动失败"));
+                        if (!r.optBoolean("ok")) throw new IllegalStateException(agentErr(r, "滚动失败"));
                         sr.put("result", r.optString("result")); sleep(200); break;
                     }
                     case "scroll_into_view": {
                         String tgt = targetOf(st);
                         if (tgt.isEmpty()) throw new IllegalStateException("scroll_into_view 需要 target");
                         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
-                        if (!loc.optBoolean("ok")) throw new IllegalStateException(loc.optString("error", "定位失败"));
+                        if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
                         sr.put("result", "已滚动到可见"); break;
                     }
                     case "wait": {
@@ -1843,7 +1870,7 @@ public final class BrowserAgent {
                         sr.put("result", w.optString("result")).put("found", w.optBoolean("found")); break;
                     }
                     case "snapshot": case "read": {
-                        JSONObject snap = snapshot(tab, st.optInt("max_chars", req.optInt("max_chars", 6000)), scopeOf(st));
+                        JSONObject snap = snapshot(tab, st.optInt("max_chars", req.optInt("max_chars", 12000)), scopeOf(st));
                         sr.put("result", "快照").put("snapshot", snap.optString("text"));
                         lastSnap = snap; break;
                     }
