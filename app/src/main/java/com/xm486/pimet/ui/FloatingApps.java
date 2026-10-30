@@ -78,7 +78,7 @@ import java.util.concurrent.TimeUnit;
  * Activity 不在前台时 {@link #minimized} = true，BrowserAgent 会退回 JS 点击、不截图（与以前悬浮窗最小化时一致）。
  * <p>
  * 容器 /root/pimet-browser/ 决定这个浏览器的样子和功能，Pi 可以随时改：config.json（扩展按钮、配色、首页）、
- * scripts/*.js（油猴风格用户脚本，按 @match 注入任意网站）、pages/&lt;id&gt;/index.html（自定义页面，可用 window.pimet）、home.html（自定义首页）。
+ * scripts/&lt;id&gt;.user.js（油猴用户脚本，由 {@link UserScriptManager} 管理，按 run-at 注入，GM API 经 window.PiMetGM）、pages/&lt;id&gt;/index.html（自定义页面，可用 window.pimet）、home.html（自定义首页）。
  */
 public final class FloatingApps {
 
@@ -376,8 +376,8 @@ public final class FloatingApps {
         plp.setMargins(dp(2), 0, dp(4), 0);
         bar.addView(urlPill, plp);
 
-        extBtn = barBtn("🧩", "扩展（config.json 里的按钮）", 18);
-        extBtn.setOnClickListener(this::showExtensionsMenu);
+        extBtn = barBtn("🧩", "脚本管理（用户脚本、扩展按钮）", 18);
+        extBtn.setOnClickListener(v -> showScriptsPanel());
         bar.addView(extBtn, new LinearLayout.LayoutParams(dp(40), dp(44)));
 
         tabCountBtn = new TextView(vctx);
@@ -556,6 +556,12 @@ public final class FloatingApps {
         volatile boolean translated; // 网页翻译已开启（悬浮球显示「原」）
         String autoAuthKey;      // 已自动用保存的账号密码登录过的 host|realm（失败时改为弹窗，避免死循环）
         long lastUsed = System.currentTimeMillis();
+        /** 当前页面已注入的用户脚本 id（新导航开始时清空；PiMetGM 据此校验调用方） */
+        final java.util.Set<String> injectedIds = java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+        /** 当前页面注册的 GM 菜单命令：脚本 id → (命令 id → 标题) */
+        final java.util.LinkedHashMap<String, java.util.LinkedHashMap<String, String>> menus = new java.util.LinkedHashMap<>();
+        /** 当前页面的控制台日志（最多 300 条） */
+        final java.util.ArrayDeque<JSONObject> console = new java.util.ArrayDeque<>();
 
         Tab(String id, boolean pi) {
             this.id = id;
@@ -1046,40 +1052,6 @@ public final class FloatingApps {
         pm.show();
     }
 
-    /** 🧩：列出 config.json 里的扩展按钮（由 Pi 编辑） */
-    private void showExtensionsMenu(View anchor) {
-        if (host == null) return;
-        hideIme();
-        PopupMenu pm = new PopupMenu(host, anchor);
-        Menu m = pm.getMenu();
-        JSONArray btns = config.optJSONArray("buttons");
-        int n = 0;
-        if (btns != null) {
-            for (int i = 0; i < btns.length(); i++) {
-                JSONObject b = btns.optJSONObject(i);
-                if (b == null) continue;
-                m.add(0, 100 + i, 0, buttonLabel(b, true));
-                n++;
-            }
-        }
-        if (n == 0) m.add(0, 1, 0, "还没有扩展按钮：跟 Pi 说「给 Pi 浏览器加一个…」").setEnabled(false);
-        m.add(0, 2, 0, "🏠 Pi 做的页面");
-        pm.setOnMenuItemClickListener(item -> {
-            int id = item.getItemId();
-            if (id == 2) {
-                goHome();
-                return true;
-            }
-            if (id >= 100 && btns != null) {
-                JSONObject b = btns.optJSONObject(id - 100);
-                if (b != null) runCustomButton(b);
-                return true;
-            }
-            return false;
-        });
-        pm.show();
-    }
-
     private static String buttonLabel(JSONObject b, boolean withTitle) {
         String icon = b.optString("icon", "");
         String label = b.optString("label", "");
@@ -1385,7 +1357,10 @@ public final class FloatingApps {
     private static volatile String sDefaultUa;
 
     private void toggleDesktop() {
-        Tab t = active;
+        toggleDesktop(active, true);
+    }
+
+    private void toggleDesktop(Tab t, boolean toast) {
         if (t == null || t.web == null) return;
         WebSettings ws = t.web.getSettings();
         if (sDefaultUa == null) sDefaultUa = WebSettings.getDefaultUserAgent(ctx);
@@ -1396,13 +1371,13 @@ public final class FloatingApps {
             if (m.find()) ver = m.group(1);
             ws.setUserAgentString("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + " Safari/537.36");
         } else {
-            ws.setUserAgentString(null);
+            ws.setUserAgentString(customUa());
         }
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
  applyZoom(t);
         t.web.reload();
-        Toast.makeText(ctx, t.desktop ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
+        if (toast) Toast.makeText(ctx, t.desktop ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
     }
 
     // ---- 分享 / 复制 / 外部浏览器
@@ -1499,11 +1474,20 @@ public final class FloatingApps {
         // 双指布局缩放：和 Pi-Web 工作台同一套（所有网页重排适配屏宽，不横向溢出）
         WebPinchZoom.attach(w, (pct, committed) -> { if (committed) MAIN.post(this::refreshBall); }, zoomStore(t));
         ws.setTextZoom(100);
+        if (sDefaultUa == null) {
+            try { sDefaultUa = WebSettings.getDefaultUserAgent(ctx); } catch (Throwable ignored) {}
+        }
+        String cua = customUa();
+        if (cua != null) ws.setUserAgentString(cua);
         w.setBackgroundColor(pageColor);
         w.addJavascriptInterface(new Bridge(t), "PiMetNative");
         w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
         w.addJavascriptInterface(new ThemeBridge(t), "PiMetTheme");
-        w.setDownloadListener((url, ua, contentDisposition, mime, length) -> startDownload(t, url, ua, contentDisposition, mime));
+        w.addJavascriptInterface(new GMBridge(t), "PiMetGM");
+        w.setDownloadListener((url, ua, contentDisposition, mime, length) -> {
+            if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
+            startDownload(t, url, ua, contentDisposition, mime);
+        });
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
@@ -1512,6 +1496,7 @@ public final class FloatingApps {
                     if (!t.pi && isTrusted(t.url)) MAIN.post(() -> handlePimetLink(u));
                     return true;
                 }
+                if (!t.pi && req.isForMainFrame() && isUserJsUrl(u) && promptInstallFromUrl(u)) return true;
                 if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file://")
                         || u.startsWith("about:") || u.startsWith("data:") || u.startsWith("blob:")) {
                     return false;
@@ -1537,6 +1522,14 @@ public final class FloatingApps {
                 if (t == active) { updateProgress(); refreshBall(); }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
+                t.injectedIds.clear();
+                synchronized (t.menus) { t.menus.clear(); }
+                clearConsoleLogs(t);
+                if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) {
+                    view.stopLoading();
+                    return;
+                }
+                injectScripts(t, view, url, "document-start");
             }
 
             @Override
@@ -1560,13 +1553,16 @@ public final class FloatingApps {
                 }
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
                 reloadConfigIfChanged();
-                injectUserScripts(view, url);
+                injectScripts(t, view, url, "document-end");
+                injectScripts(t, view, url, "document-idle");
             }
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
                 applyZoom(t);
                 if (WebPinchZoom.isLocal(url)) PiWebCompat.apply(view, url);
+                injectScripts(t, view, url, "document-start");
+                injectScripts(t, view, url, "document-end");
             }
 
             /** HTTP 基本认证（如 ttyd、路由器后台、Nginx auth_basic）：WebView 默认直接取消 → 白屏，这里弹登录框 */
@@ -1652,6 +1648,22 @@ public final class FloatingApps {
             public boolean onJsPrompt(WebView view, String url, String message, String defaultValue, JsPromptResult result) {
                 if (host == null) { result.cancel(); return true; }
                 return false;
+            }
+
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                if (cm != null) {
+                    String lv;
+                    switch (cm.messageLevel()) {
+                        case ERROR: lv = "error"; break;
+                        case WARNING: lv = "warn"; break;
+                        case DEBUG: lv = "debug"; break;
+                        case TIP: lv = "info"; break;
+                        default: lv = "log"; break;
+                    }
+                    addConsole(t, lv, cm.message(), cm.sourceId(), cm.lineNumber());
+                }
+                return super.onConsoleMessage(cm);
             }
 
             @Override
@@ -2053,6 +2065,7 @@ public final class FloatingApps {
             goHome(t, restore);
             return;
         }
+        if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
         t.web.loadUrl(url);
     }
 
@@ -2279,73 +2292,1266 @@ public final class FloatingApps {
         }
     }
 
-    private static final class UserScript {
-        String name;
-        long mtime;
-        String code;
-        List<java.util.regex.Pattern> include = new ArrayList<>();
-        List<java.util.regex.Pattern> exclude = new ArrayList<>();
+    // ------------------------------------------------------------------ 油猴用户脚本（beta.22，逻辑在 UserScriptManager）
+
+    private UserScriptManager scriptMgr;
+
+    /** 用户脚本管理器（M1 实现，线程安全）。BrowserAgent 也用它 */
+    synchronized UserScriptManager scripts() {
+        if (scriptMgr == null) scriptMgr = new UserScriptManager(appsDir);
+        return scriptMgr;
     }
 
-    private final java.util.Map<String, UserScript> scriptCache = new java.util.HashMap<>();
-
-    /** 油猴风格的匹配：* 任意字符；以 / 包围则为正则 */
-    private static java.util.regex.Pattern globToPattern(String g) {
-        g = g.trim();
-        if (g.length() > 2 && g.startsWith("/") && g.endsWith("/")) {
-            return java.util.regex.Pattern.compile(g.substring(1, g.length() - 1));
-        }
-        if (g.equals("<all_urls>")) g = "*";
-        StringBuilder sb = new StringBuilder("^");
-        for (char c : g.toCharArray()) {
-            if (c == '*') sb.append(".*");
-            else if ("\\.[]{}()+-?^$|".indexOf(c) >= 0) sb.append('\\').append(c);
-            else sb.append(c);
-        }
-        return java.util.regex.Pattern.compile(sb.append("$").toString());
+    private static boolean injectableUrl(String url) {
+        return url != null && (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://"));
     }
 
-    private UserScript loadScript(File f) {
-        UserScript cached = scriptCache.get(f.getName());
-        if (cached != null && cached.mtime == f.lastModified()) return cached;
-        UserScript u = new UserScript();
-        u.name = f.getName();
-        u.mtime = f.lastModified();
+    /**
+     * 按 run-at 注入匹配的脚本。document-start 在 onPageStarted 注入（并在 onPageCommitVisible 再补一次，防止落在旧文档里），
+     * document-end 在 onPageCommitVisible（onPageFinished 再补一次），document-idle 在 onPageFinished。
+     * buildInjection 自带防重复守卫，所以补的那一次在已经执行过的文档里不会重复运行。
+     */
+    private void injectScripts(Tab t, WebView view, String url, String runAt) {
+        if (t == null || view == null || !injectableUrl(url) || isLauncher(url) || isTrusted(url)) return;
         try {
-            u.code = readFile(f);
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("(?m)^\\s*//\\s*@(match|include|exclude)\\s+(\\S+)").matcher(u.code);
-            while (m.find()) {
-                try {
-                    if (m.group(1).equals("exclude")) u.exclude.add(globToPattern(m.group(2)));
-                    else u.include.add(globToPattern(m.group(2)));
-                } catch (Throwable ignored) {}
+            List<UserScriptManager.Script> list = scripts().matching(url, runAt);
+            if (list == null || list.isEmpty()) return;
+            for (UserScriptManager.Script s : list) {
+                if (s == null || s.id == null) continue;
+                String js = scripts().buildInjection(s, t.id);
+                if (js == null || js.isEmpty()) continue;
+                t.injectedIds.add(s.id);
+                view.evaluateJavascript(js, null);
             }
-        } catch (Throwable t) {
-            u.code = null;
+        } catch (Throwable e) {
+            Log.w(TAG, "inject user scripts failed (" + runAt + ")", e);
+            addConsole(t, "error", "[PiMet] 用户脚本注入失败: " + e.getMessage(), "pimet", 0);
         }
-        scriptCache.put(f.getName(), u);
-        return u;
     }
 
-    private void injectUserScripts(WebView view, String url) {
-        if (url == null || isLauncher(url)) return;
-        File dir = new File(appsDir, "scripts");
-        File[] files = dir.listFiles((d, n) -> n.endsWith(".js") && !n.startsWith("."));
-        if (files == null || files.length == 0) return;
-        Arrays.sort(files);
-        for (File f : files) {
-            UserScript u = loadScript(f);
-            if (u.code == null || u.include.isEmpty()) continue;
-            boolean hit = false;
-            for (java.util.regex.Pattern p : u.include) if (p.matcher(url).matches()) { hit = true; break; }
-            if (!hit) continue;
-            for (java.util.regex.Pattern p : u.exclude) if (p.matcher(url).matches()) { hit = false; break; }
-            if (!hit) continue;
-            String guard = "__pimet_us_" + u.name.replaceAll("[^A-Za-z0-9_]", "_");
-            view.evaluateJavascript("(function(){if(window." + guard + ")return;window." + guard + "=1;try{\n" + u.code
-                    + "\n}catch(e){console.error('[PiMet 用户脚本 " + u.name.replace("'", "") + "]',e)}})()", null);
+    private int matchingCount(String url) {
+        if (!injectableUrl(url) || isLauncher(url)) return 0;
+        try {
+            List<UserScriptManager.Script> l = scripts().matching(url, null);
+            return l == null ? 0 : l.size();
+        } catch (Throwable e) {
+            return 0;
         }
+    }
+
+    private java.util.Set<String> matchingIds(String url) {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        if (!injectableUrl(url) || isLauncher(url)) return ids;
+        try {
+            List<UserScriptManager.Script> l = scripts().matching(url, null);
+            if (l != null) for (UserScriptManager.Script s : l) if (s != null && s.id != null) ids.add(s.id);
+        } catch (Throwable ignored) {}
+        return ids;
+    }
+
+    // ---- 控制台（每页最多 300 条，onConsoleMessage + GM_log）
+
+    private static final int MAX_CONSOLE = 300;
+
+    private static void addConsole(Tab t, String level, String text, String source, int line) {
+        if (t == null) return;
+        try {
+            JSONObject o = new JSONObject();
+            o.put("time", System.currentTimeMillis());
+            o.put("level", level);
+            o.put("text", text == null ? "" : (text.length() > 4000 ? text.substring(0, 4000) + "…" : text));
+            if (source != null && !source.isEmpty()) o.put("source", source);
+            if (line > 0) o.put("line", line);
+            synchronized (t.console) {
+                t.console.addLast(o);
+                while (t.console.size() > MAX_CONSOLE) t.console.removeFirst();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 给 BrowserAgent：该标签当前页面最近 max 条控制台日志（console.* 和 JS 错误），旧的在前 */
+    JSONArray consoleLogs(Tab t, int max) {
+        JSONArray a = new JSONArray();
+        if (t == null) return a;
+        if (max <= 0) max = 100;
+        synchronized (t.console) {
+            int skip = Math.max(0, t.console.size() - max);
+            int i = 0;
+            for (JSONObject o : t.console) {
+                if (i++ < skip) continue;
+                a.put(o);
+            }
+        }
+        return a;
+    }
+
+    /** 给 BrowserAgent：清空该标签的控制台日志（console 的 clear 参数） */
+    void clearConsoleLogs(Tab t) {
+        if (t == null) return;
+        synchronized (t.console) {
+            t.console.clear();
+        }
+    }
+
+    // ---- GM 菜单命令（每个标签当前页面注册的）
+
+    /** 给 BrowserAgent：[{script, scriptName, cmd, caption}] */
+    JSONArray menuCommands(Tab t) {
+        JSONArray a = new JSONArray();
+        if (t == null) return a;
+        synchronized (t.menus) {
+            for (java.util.Map.Entry<String, java.util.LinkedHashMap<String, String>> e : t.menus.entrySet()) {
+                String name = e.getKey();
+                try {
+                    UserScriptManager.Script s = scripts().get(e.getKey());
+                    if (s != null && s.name != null) name = s.name;
+                } catch (Throwable ignored) {}
+                for (java.util.Map.Entry<String, String> c : e.getValue().entrySet()) {
+                    try {
+                        JSONObject o = new JSONObject();
+                        o.put("script", e.getKey());
+                        o.put("scriptName", name);
+                        o.put("cmd", c.getKey());
+                        o.put("caption", c.getValue());
+                        a.put(o);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }
+        return a;
+    }
+
+    /** 给 BrowserAgent / 面板：执行一个 GM 菜单命令（主线程） */
+    void runMenuCommand(Tab t, String scriptId, String cmdId) {
+        if (t == null || t.web == null || scriptId == null || cmdId == null) return;
+        t.web.evaluateJavascript("window.__pimetGMmenu&&window.__pimetGMmenu(" + JSONObject.quote(scriptId) + "," + JSONObject.quote(cmdId) + ")", null);
+    }
+
+    // ---- window.PiMetGM：GM 垫片里需要原生的部分
+
+    private final class GMBridge {
+        private final Tab tab;
+
+        GMBridge(Tab tab) {
+            this.tab = tab;
+        }
+
+        /** 脚本必须存在、启用，并且已注入到这个标签的当前页面 */
+        private UserScriptManager.Script ok(String id) {
+            if (id == null || !tab.injectedIds.contains(id)) return null;
+            try {
+                UserScriptManager.Script s = scripts().get(id);
+                return s != null && s.enabled ? s : null;
+            } catch (Throwable e) {
+                return null;
+            }
+        }
+
+        /** 没有脚本 id 的方法：要求当前页面至少注入了一个仍然启用的脚本 */
+        private boolean anyOk() {
+            for (String id : tab.injectedIds) if (ok(id) != null) return true;
+            return false;
+        }
+
+        @JavascriptInterface
+        public void setValue(String id, String key, String json) {
+            if (ok(id) == null || key == null) return;
+            try {
+                scripts().setValue(id, key, json);
+            } catch (Throwable e) {
+                Log.w(TAG, "GM setValue failed", e);
+            }
+        }
+
+        @JavascriptInterface
+        public void deleteValue(String id, String key) {
+            if (ok(id) == null || key == null) return;
+            try {
+                scripts().deleteValue(id, key);
+            } catch (Throwable e) {
+                Log.w(TAG, "GM deleteValue failed", e);
+            }
+        }
+
+        /** 异步请求；返回 callId（取 req.callId，没有就生成），结果回调 window.__pimetGMcb(callId, resultJson字符串) */
+        @JavascriptInterface
+        public String xhr(String id, String reqJson) {
+            JSONObject req;
+            try {
+                req = new JSONObject(reqJson == null ? "{}" : reqJson);
+            } catch (Throwable e) {
+                req = new JSONObject();
+            }
+            String callId = req.optString("callId", "");
+            if (callId.isEmpty()) callId = "x" + System.nanoTime();
+            final String cid = callId;
+            final JSONObject r = req;
+            UserScriptManager.Script s = ok(id);
+            if (s == null) {
+                JSONObject res = new JSONObject();
+                try {
+                    res.put("status", 0);
+                    res.put("readyState", 4);
+                    res.put("error", "脚本未启用或未在本页注入");
+                } catch (Throwable ignored) {}
+                deliverGm(tab, cid, res);
+                return cid;
+            }
+            final String pageUrl = tab.url;
+            new Thread(() -> deliverGm(tab, cid, doGmXhr(tab, s, pageUrl, r)), "pimet-gm-xhr").start();
+            return cid;
+        }
+
+        @JavascriptInterface
+        public void openInTab(String url, boolean background) {
+            if (!anyOk() || url == null) return;
+            final String target;
+            try {
+                target = tab.url != null && !tab.url.isEmpty() ? new java.net.URL(new java.net.URL(tab.url), url).toString() : url;
+            } catch (Throwable e) {
+                return;
+            }
+            if (!(target.startsWith("http://") || target.startsWith("https://"))) return;
+            MAIN.post(() -> {
+                Tab nt = newTab(false);
+                loadIn(nt, target, false);
+                if (!background && host != null) switchTo(nt);
+                refreshTabs();
+            });
+        }
+
+        @JavascriptInterface
+        public void setClipboard(String text) {
+            if (!anyOk()) return;
+            MAIN.post(() -> {
+                try {
+                    ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("PiMet", text == null ? "" : text));
+                } catch (Throwable ignored) {}
+            });
+        }
+
+        @JavascriptInterface
+        public void notify(String id, String title, String text) {
+            UserScriptManager.Script s = ok(id);
+            if (s == null) return;
+            String head = title != null && !title.isEmpty() ? title : (s.name != null ? s.name : id);
+            String msg = text == null || text.isEmpty() ? head : head + "：" + text;
+            MAIN.post(() -> Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show());
+        }
+
+        @JavascriptInterface
+        public void registerMenu(String id, String cmdId, String caption) {
+            if (ok(id) == null || cmdId == null) return;
+            synchronized (tab.menus) {
+                java.util.LinkedHashMap<String, String> m = tab.menus.get(id);
+                if (m == null) {
+                    m = new java.util.LinkedHashMap<>();
+                    tab.menus.put(id, m);
+                }
+                m.put(cmdId, caption == null || caption.isEmpty() ? cmdId : caption);
+            }
+        }
+
+        @JavascriptInterface
+        public void unregisterMenu(String id, String cmdId) {
+            if (id == null || cmdId == null) return;
+            synchronized (tab.menus) {
+                java.util.LinkedHashMap<String, String> m = tab.menus.get(id);
+                if (m != null) {
+                    m.remove(cmdId);
+                    if (m.isEmpty()) tab.menus.remove(id);
+                }
+            }
+        }
+
+        @JavascriptInterface
+        public void download(String url, String name) {
+            if (!anyOk() || url == null) return;
+            final String target;
+            try {
+                target = tab.url != null && !tab.url.isEmpty() && !url.startsWith("blob:") && !url.startsWith("data:")
+                        ? new java.net.URL(new java.net.URL(tab.url), url).toString() : url;
+            } catch (Throwable e) {
+                return;
+            }
+            String safe = name == null ? "" : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String cd = safe.isEmpty() ? null : "attachment; filename=\"" + safe + "\"";
+            MAIN.post(() -> {
+                String ua = tab.web != null ? tab.web.getSettings().getUserAgentString() : null;
+                startDownload(tab, target, ua, cd, null);
+            });
+        }
+
+        @JavascriptInterface
+        public void log(String id, String text) {
+            UserScriptManager.Script s = ok(id);
+            if (s == null) return;
+            addConsole(tab, "log", text, "GM:" + (s.name != null ? s.name : id), 0);
+        }
+    }
+
+    private void deliverGm(Tab t, String callId, JSONObject res) {
+        String js = "window.__pimetGMcb&&window.__pimetGMcb(" + JSONObject.quote(callId) + "," + JSONObject.quote(res.toString()) + ")";
+        MAIN.post(() -> { if (t.web != null && !t.closed) t.web.evaluateJavascript(js, null); });
+    }
+
+    /** @connect 检查：未声明则允许（并记一条提示）；声明了则 host 必须命中（* / self / 域名及其子域 / IP） */
+    private static boolean connectAllowed(Tab t, UserScriptManager.Script s, String host, String pageUrl) {
+        if (s.connects == null || s.connects.isEmpty()) {
+            addConsole(t, "warn", "[PiMet] 脚本 " + s.name + " 未声明 @connect，已允许请求 " + host, "pimet", 0);
+            return true;
+        }
+        String pageHost = "";
+        try {
+            pageHost = Uri.parse(pageUrl).getHost();
+        } catch (Throwable ignored) {}
+        if (pageHost == null) pageHost = "";
+        host = host.toLowerCase(java.util.Locale.ROOT);
+        for (String c : s.connects) {
+            if (c == null) continue;
+            c = c.trim().toLowerCase(java.util.Locale.ROOT);
+            if (c.isEmpty()) continue;
+            if (c.equals("*")) return true;
+            if (c.equals("self") && host.equals(pageHost.toLowerCase(java.util.Locale.ROOT))) return true;
+            if (c.startsWith("*.")) c = c.substring(2);
+            if (host.equals(c) || host.endsWith("." + c)) return true;
+        }
+        return false;
+    }
+
+    private static final int GM_MAX_BODY = 30 * 1024 * 1024;
+
+    /** GM_xmlhttpRequest 的原生实现（后台线程）：跨域、headers/method/data、responseType text|json|arraybuffer|blob（后两者 base64） */
+    private JSONObject doGmXhr(Tab t, UserScriptManager.Script s, String pageUrl, JSONObject req) {
+        JSONObject res = new JSONObject();
+        java.net.HttpURLConnection c = null;
+        try {
+            res.put("readyState", 4);
+            res.put("status", 0);
+            String raw = req.optString("url", "");
+            java.net.URL url = pageUrl != null && pageUrl.startsWith("http") ? new java.net.URL(new java.net.URL(pageUrl), raw) : new java.net.URL(raw);
+            String proto = url.getProtocol();
+            if (!"http".equals(proto) && !"https".equals(proto)) throw new IllegalArgumentException("只支持 http/https：" + raw);
+            if (!connectAllowed(t, s, url.getHost(), pageUrl)) {
+                addConsole(t, "error", "[PiMet] 脚本 " + s.name + " 的请求被 @connect 拦截：" + url.getHost(), "pimet", 0);
+                res.put("error", "@connect 不允许访问 " + url.getHost());
+                return res;
+            }
+            String method = req.optString("method", "GET").trim().toUpperCase(java.util.Locale.ROOT);
+            if (method.isEmpty()) method = "GET";
+            int timeout = req.optInt("timeout", 0);
+            if (timeout <= 0) timeout = 30000;
+            JSONObject headers = req.optJSONObject("headers");
+            boolean anonymous = req.optBoolean("anonymous", false);
+            byte[] body = null;
+            if (req.has("dataBase64") && !req.isNull("dataBase64")) body = android.util.Base64.decode(req.optString("dataBase64", ""), android.util.Base64.DEFAULT);
+            else if (req.has("data") && !req.isNull("data")) body = String.valueOf(req.opt("data")).getBytes(StandardCharsets.UTF_8);
+            String rt = req.optString("responseType", "text").toLowerCase(java.util.Locale.ROOT);
+
+            for (int hop = 0; hop < 6; hop++) {
+                c = (java.net.HttpURLConnection) url.openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setConnectTimeout(Math.min(timeout, 30000));
+                c.setReadTimeout(timeout);
+                setMethod(c, method);
+                boolean hasCookie = false, hasUa = false;
+                if (headers != null) {
+                    java.util.Iterator<String> it = headers.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        String v = headers.optString(k, "");
+                        if (k.equalsIgnoreCase("cookie")) hasCookie = true;
+                        if (k.equalsIgnoreCase("user-agent")) hasUa = true;
+                        c.setRequestProperty(k, v);
+                    }
+                }
+                if (!anonymous && !hasCookie) {
+                    String ck = android.webkit.CookieManager.getInstance().getCookie(url.toString());
+                    if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
+                }
+                if (!hasUa && sDefaultUa != null) c.setRequestProperty("User-Agent", sDefaultUa);
+                if (body != null && !method.equals("GET") && !method.equals("HEAD")) {
+                    c.setDoOutput(true);
+                    c.setFixedLengthStreamingMode(body.length);
+                    try (java.io.OutputStream os = c.getOutputStream()) {
+                        os.write(body);
+                    }
+                }
+                int code = c.getResponseCode();
+                if (!anonymous) {
+                    java.util.List<String> sc = c.getHeaderFields().get("Set-Cookie");
+                    if (sc != null) for (String v : sc) android.webkit.CookieManager.getInstance().setCookie(url.toString(), v);
+                }
+                String loc = c.getHeaderField("Location");
+                if (code >= 300 && code < 400 && code != 304 && loc != null && !loc.isEmpty()) {
+                    url = new java.net.URL(url, loc);
+                    c.disconnect();
+                    c = null;
+                    if (code == 303 || ((code == 301 || code == 302) && method.equals("POST"))) {
+                        method = "GET";
+                        body = null;
+                    }
+                    continue;
+                }
+                break;
+            }
+            if (c == null) throw new java.io.IOException("重定向次数过多");
+            int code = c.getResponseCode();
+            res.put("status", code);
+            String msg = c.getResponseMessage();
+            res.put("statusText", msg == null ? "" : msg);
+            res.put("finalUrl", c.getURL().toString());
+            StringBuilder hs = new StringBuilder();
+            for (java.util.Map.Entry<String, java.util.List<String>> e : c.getHeaderFields().entrySet()) {
+                if (e.getKey() == null) continue;
+                for (String v : e.getValue()) hs.append(e.getKey().toLowerCase(java.util.Locale.ROOT)).append(": ").append(v).append("\r\n");
+            }
+            res.put("responseHeaders", hs.toString());
+            byte[] data = new byte[0];
+            if (!method.equals("HEAD")) {
+                InputStream in = null;
+                try {
+                    in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                } catch (Throwable ignored) {}
+                if (in != null) {
+                    ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                    byte[] buf = new byte[16384];
+                    int n;
+                    try {
+                        while ((n = in.read(buf)) != -1) {
+                            if (bo.size() + n > GM_MAX_BODY) throw new java.io.IOException("响应超过 30MB");
+                            bo.write(buf, 0, n);
+                        }
+                    } finally {
+                        try { in.close(); } catch (Throwable ignored) {}
+                    }
+                    data = bo.toByteArray();
+                }
+            }
+            if (rt.equals("arraybuffer") || rt.equals("blob")) {
+                res.put("responseBase64", android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP));
+                String ct = c.getContentType();
+                if (ct != null) res.put("contentType", ct);
+            } else {
+                java.nio.charset.Charset cs = StandardCharsets.UTF_8;
+                String ct = c.getContentType();
+                if (ct != null) {
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)charset=\\s*\"?([\\w.:-]+)").matcher(ct);
+                    if (m.find()) {
+                        try { cs = java.nio.charset.Charset.forName(m.group(1)); } catch (Throwable ignored) {}
+                    }
+                }
+                res.put("responseText", new String(data, cs));
+            }
+        } catch (java.net.SocketTimeoutException e) {
+            try {
+                res.put("timeout", true);
+                res.put("error", "timeout");
+            } catch (Throwable ignored) {}
+        } catch (Throwable e) {
+            try {
+                res.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            } catch (Throwable ignored) {}
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Throwable ignored) {}
+        }
+        return res;
+    }
+
+    /** HttpURLConnection 不认 PATCH 等方法：用反射写 method 字段 */
+    private static void setMethod(java.net.HttpURLConnection c, String method) throws Exception {
+        try {
+            c.setRequestMethod(method);
+        } catch (java.net.ProtocolException pe) {
+            java.lang.reflect.Field f = java.net.HttpURLConnection.class.getDeclaredField("method");
+            f.setAccessible(true);
+            f.set(c, method);
+        }
+    }
+
+    // ---- .user.js 安装拦截
+
+    private String lastInstallUrl;
+    private long lastInstallAt;
+
+    static boolean isUserJsUrl(String url) {
+        if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return false;
+        try {
+            String p = Uri.parse(url).getPath();
+            return p != null && p.toLowerCase(java.util.Locale.ROOT).endsWith(".user.js");
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** 打开 .user.js：下载 → 解析头 → 弹「安装脚本」确认框。没有界面时返回 false（照常加载） */
+    private boolean promptInstallFromUrl(String url) {
+        if (host == null || host.isFinishing() || url == null) return false;
+        long now = System.currentTimeMillis();
+        if (url.equals(lastInstallUrl) && now - lastInstallAt < 3000) return true;
+        lastInstallUrl = url;
+        lastInstallAt = now;
+        Toast.makeText(ctx, "正在读取用户脚本…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String code = httpGetText(url);
+                UserScriptManager.Script s = UserScriptManager.parse(code);
+                MAIN.post(() -> showInstallDialog(code, s, url));
+            } catch (Throwable e) {
+                MAIN.post(() -> Toast.makeText(ctx, "读取脚本失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }, "pimet-us-fetch").start();
+        return true;
+    }
+
+    private static String joinList(List<String> l) {
+        if (l == null || l.isEmpty()) return "（无）";
+        return TextUtils.join("\n", l);
+    }
+
+    private void showInstallDialog(String code, UserScriptManager.Script s, String url) {
+        if (host == null || host.isFinishing()) return;
+        if (s == null || code == null || !code.contains("==UserScript==")) {
+            Toast.makeText(ctx, "不是有效的用户脚本（缺少 ==UserScript== 头）", Toast.LENGTH_LONG).show();
+            return;
+        }
+        UserScriptManager.Script old = null;
+        try {
+            for (UserScriptManager.Script x : scripts().list()) {
+                if (x != null && TextUtils.equals(x.name, s.name) && TextUtils.equals(x.namespace, s.namespace)) old = x;
+            }
+        } catch (Throwable ignored) {}
+        StringBuilder sb = new StringBuilder();
+        sb.append("版本：").append(s.version == null || s.version.isEmpty() ? "?" : s.version);
+        if (old != null) sb.append("（已安装 ").append(old.version == null ? "?" : old.version).append("，将覆盖）");
+        if (s.author != null && !s.author.isEmpty()) sb.append("\n作者：").append(s.author);
+        if (s.description != null && !s.description.isEmpty()) sb.append("\n\n").append(s.description);
+        List<String> rules = new ArrayList<>();
+        if (s.matches != null) rules.addAll(s.matches);
+        if (s.includes != null) rules.addAll(s.includes);
+        sb.append("\n\n运行于：\n").append(joinList(rules));
+        if (s.excludes != null && !s.excludes.isEmpty()) sb.append("\n\n排除：\n").append(joinList(s.excludes));
+        sb.append("\n\n权限 @grant：\n").append(joinList(s.grants));
+        if (s.connects != null && !s.connects.isEmpty()) sb.append("\n\n可访问 @connect：\n").append(joinList(s.connects));
+        if (s.requires != null && !s.requires.isEmpty()) sb.append("\n\n依赖 @require：\n").append(joinList(s.requires));
+        sb.append("\n\n来源：").append(url == null || url.isEmpty() ? "本地" : url);
+        new AlertDialog.Builder(host)
+                .setTitle((old != null ? "更新脚本：" : "安装脚本：") + (s.name == null ? "未命名" : s.name))
+                .setMessage(sb.toString())
+                .setPositiveButton(old != null ? "更新" : "安装", (d, w) -> installCode(code, url))
+                .setNeutralButton("查看源码", (d, w) -> showCodeViewer(s.name, code, () -> showInstallDialog(code, s, url)))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void installCode(String code, String url) {
+        new Thread(() -> {
+            try {
+                UserScriptManager.Script r = scripts().install(code, url);
+                MAIN.post(() -> {
+                    Toast.makeText(ctx, "已安装：" + (r != null && r.name != null ? r.name : "脚本") + "，刷新页面后生效", Toast.LENGTH_LONG).show();
+                    if (active != null && active.web != null && !isLauncher(active.url) && !isUserJsUrl(active.url)) active.web.reload();
+                });
+            } catch (Throwable e) {
+                MAIN.post(() -> Toast.makeText(ctx, "安装失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }, "pimet-us-install").start();
+    }
+
+    /** 下载文本（带浏览器 Cookie，跟随跨协议重定向，最大 5MB），后台线程调用 */
+    private static String httpGetText(String u) throws Exception {
+        java.net.URL url = new java.net.URL(u);
+        for (int hop = 0; hop < 6; hop++) {
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+            try {
+                c.setInstanceFollowRedirects(false);
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(20000);
+                String ck = android.webkit.CookieManager.getInstance().getCookie(url.toString());
+                if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
+                if (sDefaultUa != null) c.setRequestProperty("User-Agent", sDefaultUa);
+                int code = c.getResponseCode();
+                String loc = c.getHeaderField("Location");
+                if (code >= 300 && code < 400 && loc != null) {
+                    url = new java.net.URL(url, loc);
+                    continue;
+                }
+                if (code >= 400) throw new java.io.IOException("HTTP " + code);
+                try (InputStream in = c.getInputStream()) {
+                    ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        if (bo.size() + n > 5 * 1024 * 1024) throw new java.io.IOException("脚本超过 5MB");
+                        bo.write(buf, 0, n);
+                    }
+                    return bo.toString("UTF-8");
+                }
+            } finally {
+                c.disconnect();
+            }
+        }
+        throw new java.io.IOException("重定向次数过多");
+    }
+
+    // ---- 🧩 脚本管理面板
+
+    private AlertDialog scriptsPanel;
+
+    private TextView panelText(String s, float sp, int color, boolean bold) {
+        TextView t = new TextView(host);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(ThemeManager.MEDIUM_TYPEFACE);
+        return t;
+    }
+
+    private TextView panelButton(String s, ThemeManager.ThemePalette p, View.OnClickListener l) {
+        TextView b = new TextView(host);
+        b.setText(s);
+        b.setTextSize(12f);
+        b.setSingleLine(true);
+        b.setGravity(Gravity.CENTER);
+        b.setTextColor(p.accent);
+        b.setBackground(ThemeManager.createSecondaryButtonDrawable(host, p, 8f));
+        b.setPadding(dp(12), dp(8), dp(12), dp(8));
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    private TextView panelSection(String s, ThemeManager.ThemePalette p) {
+        TextView t = panelText(s, 12f, p.textMuted, true);
+        t.setPadding(0, dp(16), 0, dp(6));
+        return t;
+    }
+
+    private View panelRow(String title, String sub, ThemeManager.ThemePalette p, View.OnClickListener l) {
+        LinearLayout row = new LinearLayout(host);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setBackground(ThemeManager.createSecondaryButtonDrawable(host, p, 8f));
+        row.addView(panelText(title, 14f, p.text, false));
+        if (sub != null && !sub.isEmpty()) row.addView(panelText(sub, 11f, p.textDim, false));
+        row.setOnClickListener(l);
+        return row;
+    }
+
+    private static LinearLayout.LayoutParams rowLp(int top) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = top;
+        return lp;
+    }
+
+    /** 🧩：底部弹出「脚本管理」面板（脚本列表、本页菜单命令、扩展按钮、Pi 做的页面） */
+    private void showScriptsPanel() {
+        if (host == null || host.isFinishing()) return;
+        hideIme();
+        if (scriptsPanel != null && scriptsPanel.isShowing()) scriptsPanel.dismiss();
+        final Tab tab = active;
+        final String url = currentUrl();
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+
+        LinearLayout layout = new LinearLayout(host);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18), dp(14), dp(18), dp(18));
+
+        LinearLayout head = new LinearLayout(host);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = panelText("🧩 脚本管理", 16f, p.text, true);
+        head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView reloadBtn = panelButton("↻ 刷新本页", p, v -> {
+            if (scriptsPanel != null) scriptsPanel.dismiss();
+            reload();
+        });
+        reloadBtn.setVisibility(View.GONE);
+        head.addView(reloadBtn);
+        layout.addView(head);
+
+        final java.util.Set<String> hitIds = matchingIds(url);
+        TextView count = panelText(injectableUrl(url) && !isLauncher(url)
+                ? "当前页面匹配 " + hitIds.size() + " 个脚本" : "当前页面不运行用户脚本", 12f, p.accent, false);
+        count.setPadding(0, dp(4), 0, dp(10));
+        layout.addView(count);
+
+        LinearLayout actions = new LinearLayout(host);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.addView(panelButton("＋ 新建", p, v -> showScriptEditor(null, newScriptTemplate(url))));
+        TextView fromUrl = panelButton("从网址安装", p, v -> askInstallUrl());
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.leftMargin = dp(8);
+        actions.addView(fromUrl, alp);
+        LinearLayout.LayoutParams alp2 = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp2.leftMargin = dp(8);
+        actions.addView(panelButton("检查更新", p, v -> checkUpdates(null)), alp2);
+        layout.addView(actions);
+
+        // 本页菜单命令
+        JSONArray menus = menuCommands(tab);
+        if (menus.length() > 0) {
+            layout.addView(panelSection("本页菜单命令", p));
+            for (int i = 0; i < menus.length(); i++) {
+                JSONObject m = menus.optJSONObject(i);
+                if (m == null) continue;
+                final String sid = m.optString("script"), cid = m.optString("cmd");
+                layout.addView(panelRow("▶ " + m.optString("caption"), m.optString("scriptName"), p, v -> {
+                    if (scriptsPanel != null) scriptsPanel.dismiss();
+                    runMenuCommand(tab, sid, cid);
+                }), rowLp(dp(6)));
+            }
+        }
+
+        // 用户脚本
+        layout.addView(panelSection("用户脚本", p));
+        List<UserScriptManager.Script> all = new ArrayList<>();
+        try {
+            List<UserScriptManager.Script> l = scripts().list();
+            if (l != null) all.addAll(l);
+        } catch (Throwable e) {
+            layout.addView(panelText("读取脚本失败：" + e.getMessage(), 12f, p.textDim, false));
+        }
+        if (all.isEmpty()) {
+            layout.addView(panelText("还没有脚本：点「＋ 新建」，打开 .user.js 链接，或跟 Pi 说「写个脚本…」", 12f, p.textDim, false));
+        }
+        for (UserScriptManager.Script s : all) {
+            if (s == null || s.id == null) continue;
+            LinearLayout row = new LinearLayout(host);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(8), dp(6), dp(8));
+            row.setBackground(ThemeManager.createSecondaryButtonDrawable(host, p, 8f));
+            LinearLayout info = new LinearLayout(host);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.addView(panelText(s.name == null || s.name.isEmpty() ? s.id : s.name, 14f, s.enabled ? p.text : p.textDim, false));
+            String sub = "v" + (s.version == null || s.version.isEmpty() ? "?" : s.version);
+            if (hitIds.contains(s.id)) sub += "  ·  ● 本页生效";
+            TextView subTv = panelText(sub, 11f, hitIds.contains(s.id) ? p.accent : p.textDim, false);
+            info.addView(subTv);
+            row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            android.widget.Switch sw = new android.widget.Switch(host);
+            sw.setChecked(s.enabled);
+            sw.setOnCheckedChangeListener((b, on) -> {
+                final String sid = s.id;
+                new Thread(() -> {
+                    boolean ok;
+                    try {
+                        ok = scripts().setEnabled(sid, on);
+                    } catch (Throwable e) {
+                        ok = false;
+                    }
+                    final boolean done = ok;
+                    MAIN.post(() -> {
+                        if (!done) {
+                            Toast.makeText(ctx, "切换失败", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        Toast.makeText(ctx, (on ? "已启用" : "已停用") + "，刷新页面后生效", Toast.LENGTH_SHORT).show();
+                        reloadBtn.setVisibility(View.VISIBLE);
+                    });
+                }, "pimet-us-toggle").start();
+            });
+            row.addView(sw);
+            row.setOnClickListener(v -> showScriptDetail(s.id));
+            layout.addView(row, rowLp(dp(6)));
+        }
+
+        // 扩展按钮（config.json）
+        layout.addView(panelSection("扩展按钮", p));
+        JSONArray btns = config.optJSONArray("buttons");
+        int n = 0;
+        if (btns != null) {
+            for (int i = 0; i < btns.length(); i++) {
+                final JSONObject b = btns.optJSONObject(i);
+                if (b == null) continue;
+                layout.addView(panelRow(buttonLabel(b, true), null, p, v -> {
+                    if (scriptsPanel != null) scriptsPanel.dismiss();
+                    runCustomButton(b);
+                }), rowLp(dp(6)));
+                n++;
+            }
+        }
+        if (n == 0) layout.addView(panelText("还没有扩展按钮：跟 Pi 说「给 Pi 浏览器加一个…」", 12f, p.textDim, false));
+        layout.addView(panelRow("🏠 Pi 做的页面", null, p, v -> {
+            if (scriptsPanel != null) scriptsPanel.dismiss();
+            goHome();
+        }), rowLp(dp(6)));
+
+        ScrollView sv = new ScrollView(host);
+        sv.addView(layout);
+        FrameLayout wrap = new FrameLayout(host);
+        wrap.setBackground(ThemeManager.createCardDrawable(host, p, 14f));
+        wrap.addView(sv);
+
+        AlertDialog d = new AlertDialog.Builder(host).setView(wrap).create();
+        scriptsPanel = d;
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawableResource(android.R.color.transparent);
+            w.setGravity(Gravity.BOTTOM);
+        }
+        d.show();
+        if (w != null) w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private void refreshScriptsPanelIfOpen() {
+        if (scriptsPanel != null && scriptsPanel.isShowing()) showScriptsPanel();
+    }
+
+    private static String newScriptTemplate(String url) {
+        String match = "*://*/*";
+        try {
+            String h = Uri.parse(url).getHost();
+            if (h != null && !h.isEmpty() && (url.startsWith("http://") || url.startsWith("https://"))) match = "*://" + h + "/*";
+        } catch (Throwable ignored) {}
+        return "// ==UserScript==\n"
+                + "// @name         新脚本\n"
+                + "// @namespace    pimet\n"
+                + "// @version      0.1\n"
+                + "// @description  \n"
+                + "// @match        " + match + "\n"
+                + "// @grant        none\n"
+                + "// @run-at       document-idle\n"
+                + "// ==/UserScript==\n"
+                + "\n"
+                + "(function () {\n"
+                + "    'use strict';\n"
+                + "    \n"
+                + "})();\n";
+    }
+
+    private void askInstallUrl() {
+        if (host == null) return;
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+        EditText et = new EditText(host);
+        et.setSingleLine(true);
+        et.setHint("https://…/xxx.user.js");
+        et.setTextColor(p.text);
+        et.setHintTextColor(p.textDim);
+        FrameLayout f = new FrameLayout(host);
+        f.setPadding(dp(20), dp(8), dp(20), 0);
+        f.addView(et);
+        new AlertDialog.Builder(host).setTitle("从网址安装脚本").setView(f)
+                .setPositiveButton("读取", (d, w) -> {
+                    String u = et.getText().toString().trim();
+                    if (!(u.startsWith("http://") || u.startsWith("https://"))) {
+                        Toast.makeText(ctx, "请输入 http(s) 网址", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    lastInstallUrl = null;
+                    promptInstallFromUrl(u);
+                })
+                .setNegativeButton("取消", null).show();
+    }
+
+    /** 检查更新：id == null 表示全部 */
+    private void checkUpdates(String onlyId) {
+        Toast.makeText(ctx, "正在检查更新…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            List<UserScriptManager.Script> todo = new ArrayList<>();
+            try {
+                if (onlyId != null) {
+                    UserScriptManager.Script s = scripts().get(onlyId);
+                    if (s != null) todo.add(s);
+                } else {
+                    todo.addAll(scripts().list());
+                }
+            } catch (Throwable ignored) {}
+            final List<String> names = new ArrayList<>();
+            final List<String> codes = new ArrayList<>();
+            final List<String> urls = new ArrayList<>();
+            int failed = 0;
+            for (UserScriptManager.Script s : todo) {
+                try {
+                    String code = scripts().checkUpdate(s.id);
+                    if (code != null) {
+                        names.add((s.name == null ? s.id : s.name) + "（v" + (s.version == null ? "?" : s.version) + " → v" + verOf(code) + "）");
+                        codes.add(code);
+                        urls.add(s.installUrl);
+                    }
+                } catch (Throwable e) {
+                    failed++;
+                }
+            }
+            final int fails = failed;
+            MAIN.post(() -> {
+                if (host == null || host.isFinishing()) return;
+                if (codes.isEmpty()) {
+                    Toast.makeText(ctx, fails > 0 ? "没有可用更新（" + fails + " 个检查失败）" : "都是最新版本", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                new AlertDialog.Builder(host).setTitle(codes.size() + " 个脚本有更新")
+                        .setMessage(TextUtils.join("\n", names))
+                        .setPositiveButton("全部更新", (d, w) -> new Thread(() -> {
+                            int ok = 0;
+                            for (int i = 0; i < codes.size(); i++) {
+                                try {
+                                    scripts().install(codes.get(i), urls.get(i));
+                                    ok++;
+                                } catch (Throwable ignored) {}
+                            }
+                            final int okN = ok;
+                            MAIN.post(() -> {
+                                Toast.makeText(ctx, "已更新 " + okN + " 个脚本，刷新页面后生效", Toast.LENGTH_LONG).show();
+                                refreshScriptsPanelIfOpen();
+                            });
+                        }, "pimet-us-update").start())
+                        .setNegativeButton("取消", null).show();
+            });
+        }, "pimet-us-check").start();
+    }
+
+    private static String verOf(String code) {
+        try {
+            UserScriptManager.Script s = UserScriptManager.parse(code);
+            return s != null && s.version != null ? s.version : "?";
+        } catch (Throwable e) {
+            return "?";
+        }
+    }
+
+    /** 脚本详情：描述、匹配规则、编辑源码、存储值、菜单命令、检查更新、删除 */
+    private void showScriptDetail(String id) {
+        if (host == null || host.isFinishing()) return;
+        UserScriptManager.Script s;
+        try {
+            s = scripts().get(id);
+        } catch (Throwable e) {
+            s = null;
+        }
+        if (s == null) {
+            Toast.makeText(ctx, "脚本不存在", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final UserScriptManager.Script sc = s;
+        StringBuilder sb = new StringBuilder();
+        sb.append("版本：").append(s.version == null || s.version.isEmpty() ? "?" : s.version).append(s.enabled ? "  ·  已启用" : "  ·  已停用");
+        if (s.author != null && !s.author.isEmpty()) sb.append("\n作者：").append(s.author);
+        if (s.namespace != null && !s.namespace.isEmpty()) sb.append("\n命名空间：").append(s.namespace);
+        sb.append("\n运行时机：").append(s.runAt == null || s.runAt.isEmpty() ? "document-idle" : s.runAt);
+        if (s.description != null && !s.description.isEmpty()) sb.append("\n\n").append(s.description);
+        if (s.matches != null && !s.matches.isEmpty()) sb.append("\n\n@match：\n").append(joinList(s.matches));
+        if (s.includes != null && !s.includes.isEmpty()) sb.append("\n\n@include：\n").append(joinList(s.includes));
+        if (s.excludes != null && !s.excludes.isEmpty()) sb.append("\n\n@exclude：\n").append(joinList(s.excludes));
+        sb.append("\n\n@grant：\n").append(joinList(s.grants));
+        if (s.connects != null && !s.connects.isEmpty()) sb.append("\n\n@connect：\n").append(joinList(s.connects));
+        if (s.installUrl != null && !s.installUrl.isEmpty()) sb.append("\n\n来源：").append(s.installUrl);
+        JSONArray menus = menuCommands(active);
+        final List<String> cmdIds = new ArrayList<>();
+        final List<String> cmdCaps = new ArrayList<>();
+        for (int i = 0; i < menus.length(); i++) {
+            JSONObject m = menus.optJSONObject(i);
+            if (m != null && id.equals(m.optString("script"))) {
+                cmdIds.add(m.optString("cmd"));
+                cmdCaps.add(m.optString("caption"));
+            }
+        }
+        if (!cmdIds.isEmpty()) sb.append("\n\n本页菜单命令：\n").append(TextUtils.join("\n", cmdCaps));
+
+        final String[] items = new String[]{"✏️ 编辑源码", "🗄 查看存储值", cmdIds.isEmpty() ? "☰ 菜单命令（本页没有）" : "☰ 执行菜单命令", "⟳ 检查更新"};
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+        LinearLayout box = new LinearLayout(host);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView info = panelText(sb.toString(), 12f, p.text, false);
+        info.setTextIsSelectable(true);
+        box.addView(info);
+        final AlertDialog[] dlg = new AlertDialog[1];
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            box.addView(panelRow(items[i], null, p, v -> {
+                switch (idx) {
+                    case 0:
+                        if (dlg[0] != null) dlg[0].dismiss();
+                        showScriptEditor(sc, sc.code);
+                        break;
+                    case 1:
+                        if (dlg[0] != null) dlg[0].dismiss();
+                        showScriptValues(sc);
+                        break;
+                    case 2:
+                        if (cmdIds.isEmpty()) return;
+                        new AlertDialog.Builder(host).setTitle("菜单命令")
+                                .setItems(cmdCaps.toArray(new String[0]), (d, w) -> {
+                                    if (dlg[0] != null) dlg[0].dismiss();
+                                    if (scriptsPanel != null) scriptsPanel.dismiss();
+                                    runMenuCommand(active, sc.id, cmdIds.get(w));
+                                }).show();
+                        break;
+                    case 3:
+                        checkUpdates(sc.id);
+                        break;
+                    default:
+                        break;
+                }
+            }), rowLp(dp(6)));
+        }
+        ScrollView sv = new ScrollView(host);
+        sv.addView(box);
+        dlg[0] = new AlertDialog.Builder(host).setTitle(s.name == null || s.name.isEmpty() ? s.id : s.name).setView(sv)
+                .setNegativeButton("删除", (d, w) -> confirmRemoveScript(sc))
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private void confirmRemoveScript(UserScriptManager.Script s) {
+        if (host == null) return;
+        new AlertDialog.Builder(host).setTitle("删除脚本？")
+                .setMessage("「" + (s.name == null ? s.id : s.name) + "」的源码和存储的数据都会被删除。")
+                .setPositiveButton("删除", (d, w) -> new Thread(() -> {
+                    boolean ok;
+                    try {
+                        ok = scripts().remove(s.id);
+                    } catch (Throwable e) {
+                        ok = false;
+                    }
+                    final boolean done = ok;
+                    MAIN.post(() -> {
+                        Toast.makeText(ctx, done ? "已删除，刷新页面后生效" : "删除失败", Toast.LENGTH_SHORT).show();
+                        refreshScriptsPanelIfOpen();
+                    });
+                }, "pimet-us-remove").start())
+                .setNegativeButton("取消", null).show();
+    }
+
+    /** 全屏源码编辑：s == null 表示新建；保存 = install(code, 原 installUrl)，按 namespace+name 覆盖同一脚本 */
+    private void showScriptEditor(UserScriptManager.Script s, String code) {
+        if (host == null || host.isFinishing()) return;
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+        android.app.Dialog d = new android.app.Dialog(host, android.R.style.Theme_DeviceDefault_NoActionBar);
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(p.bg);
+        LinearLayout top = new LinearLayout(host);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView cancel = panelButton("取消", p, v -> d.dismiss());
+        top.addView(cancel);
+        TextView tt = panelText(s == null ? "新建脚本" : "编辑：" + (s.name == null ? s.id : s.name), 15f, p.text, true);
+        tt.setSingleLine(true);
+        tt.setEllipsize(TextUtils.TruncateAt.END);
+        tt.setGravity(Gravity.CENTER);
+        top.addView(tt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        EditText et = new EditText(host);
+        TextView save = panelButton("保存", p, v -> {
+            String c = et.getText().toString();
+            if (!c.contains("==UserScript==")) {
+                Toast.makeText(ctx, "缺少有效的 ==UserScript== 头", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            final String inst = s != null ? s.installUrl : null;
+            new Thread(() -> {
+                try {
+                    UserScriptManager.Script r = scripts().install(c, inst);
+                    MAIN.post(() -> {
+                        d.dismiss();
+                        Toast.makeText(ctx, "已保存" + (r != null && r.name != null ? "：" + r.name : "") + "，刷新页面后生效", Toast.LENGTH_SHORT).show();
+                        refreshScriptsPanelIfOpen();
+                    });
+                } catch (Throwable e) {
+                    MAIN.post(() -> Toast.makeText(ctx, "保存失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+                }
+            }, "pimet-us-save").start();
+        });
+        top.addView(save);
+        col.addView(top);
+        et.setText(code == null ? "" : code);
+        et.setTypeface(android.graphics.Typeface.MONOSPACE);
+        et.setTextSize(12f);
+        et.setTextColor(p.text);
+        et.setGravity(Gravity.TOP | Gravity.START);
+        et.setHorizontallyScrolling(true);
+        et.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        et.setBackground(null);
+        et.setPadding(dp(12), dp(8), dp(12), dp(8));
+        col.addView(et, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        d.setContentView(col);
+        d.show();
+    }
+
+    private void showCodeViewer(String name, String code, Runnable back) {
+        if (host == null) return;
+        TextView tv = new TextView(host);
+        tv.setText(code);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextSize(11f);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(16), dp(8), dp(16), dp(8));
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(host);
+        hs.addView(tv);
+        ScrollView sv = new ScrollView(host);
+        sv.addView(hs);
+        new AlertDialog.Builder(host).setTitle(name == null ? "源码" : name).setView(sv)
+                .setPositiveButton("返回", (d, w) -> { if (back != null) back.run(); })
+                .show();
+    }
+
+    private void showScriptValues(UserScriptManager.Script s) {
+        if (host == null) return;
+        new Thread(() -> {
+            JSONObject vals;
+            try {
+                vals = scripts().getValues(s.id);
+            } catch (Throwable e) {
+                vals = null;
+            }
+            final JSONObject v = vals == null ? new JSONObject() : vals;
+            MAIN.post(() -> {
+                if (host == null || host.isFinishing()) return;
+                String text;
+                try {
+                    text = v.length() == 0 ? "（没有存储值）" : v.toString(2);
+                } catch (Throwable e) {
+                    text = v.toString();
+                }
+                TextView tv = new TextView(host);
+                tv.setText(text);
+                tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+                tv.setTextSize(11f);
+                tv.setTextIsSelectable(true);
+                tv.setPadding(dp(16), dp(8), dp(16), dp(8));
+                ScrollView sv = new ScrollView(host);
+                sv.addView(tv);
+                AlertDialog.Builder b = new AlertDialog.Builder(host).setTitle("存储值：" + (s.name == null ? s.id : s.name)).setView(sv)
+                        .setPositiveButton("关闭", null);
+                if (v.length() > 0) {
+                    b.setNegativeButton("清空", (d, w) -> new Thread(() -> {
+                        java.util.Iterator<String> it = v.keys();
+                        List<String> keys = new ArrayList<>();
+                        while (it.hasNext()) keys.add(it.next());
+                        for (String k : keys) {
+                            try { scripts().deleteValue(s.id, k); } catch (Throwable ignored) {}
+                        }
+                        MAIN.post(() -> Toast.makeText(ctx, "已清空，刷新页面后生效", Toast.LENGTH_SHORT).show());
+                    }, "pimet-us-clear").start());
+                }
+                b.show();
+            });
+        }, "pimet-us-values").start();
+    }
+
+    // ------------------------------------------------------------------ 给 BrowserAgent：浏览器设置（主线程调用）
+
+    /** 当前 config.json（副本） */
+    JSONObject getConfig() {
+        reloadConfigIfChanged();
+        try {
+            return new JSONObject(config.toString());
+        } catch (Throwable e) {
+            return new JSONObject();
+        }
+    }
+
+    /** 合并写入 config.json（对象递归合并，值为 null 表示删除该键）并立即生效 */
+    void setConfig(JSONObject patch) {
+        if (patch == null) return;
+        File f = new File(appsDir, "config.json");
+        try {
+            JSONObject cur = f.isFile() ? new JSONObject(readFile(f)) : new JSONObject();
+            mergeJson(cur, patch);
+            File tmp = new File(appsDir, ".config.json.tmp");
+            try (FileOutputStream o = new FileOutputStream(tmp)) {
+                o.write(cur.toString(2).getBytes(StandardCharsets.UTF_8));
+            }
+            if (!tmp.renameTo(f)) {
+                writeIfChanged(f, cur.toString(2));
+                tmp.delete();
+            }
+        } catch (Throwable e) {
+            throw new RuntimeException("写入 config.json 失败: " + e.getMessage(), e);
+        }
+        reloadConfigNow();
+        refreshScriptsPanelIfOpen();
+    }
+
+    private static void mergeJson(JSONObject dst, JSONObject patch) throws Exception {
+        java.util.Iterator<String> it = patch.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            Object v = patch.opt(k);
+            if (v == null || v == JSONObject.NULL) {
+                dst.remove(k);
+            } else if (v instanceof JSONObject && dst.opt(k) instanceof JSONObject) {
+                mergeJson(dst.getJSONObject(k), (JSONObject) v);
+            } else {
+                dst.put(k, v);
+            }
+        }
+    }
+
+    private String customUa() {
+        String ua = prefs().getString("custom_ua", "");
+        return ua == null || ua.isEmpty() ? null : ua;
+    }
+
+    /** 自定义 UA（所有标签，持久保存）；null / 空 = 恢复默认 */
+    void setUserAgent(String uaOrNull) {
+        String ua = uaOrNull == null ? "" : uaOrNull.trim();
+        prefs().edit().putString("custom_ua", ua).apply();
+        for (Tab t : tabs) {
+            if (t.web == null) continue;
+            t.desktop = false;
+            t.web.getSettings().setUserAgentString(ua.isEmpty() ? null : ua);
+            applyZoom(t);
+            t.web.reload();
+        }
+    }
+
+    /** 给 BrowserAgent 的 status：default | desktop | custom */
+    String userAgentMode() {
+        Tab t = active;
+        if (t != null && t.desktop) return "desktop";
+        return customUa() != null ? "custom" : "default";
+    }
+
+    /** 桌面版网站（所有标签） */
+    void setDesktopMode(boolean on) {
+        if (on) prefs().edit().putString("custom_ua", "").apply();
+        for (Tab t : new ArrayList<>(tabs)) {
+            if (t.web == null || t.desktop == on) continue;
+            toggleDesktop(t, false);
+        }
+    }
+
+    /** 网页缩放百分比（网站页面，和 ⋮ → 页面缩放 同一个设置） */
+    void setZoom(int percent) {
+        saveZoom(null, "https://zoom.invalid/", percent, null);
+    }
+
+    /** 给 BrowserAgent 的 status：当前网页缩放百分比 */
+    int zoomPercent() {
+        return WebPinchZoom.clamp(prefs().getInt("page_zoom", 100));
+    }
+
+    /** 清除浏览数据：cookies | cache | storage | all */
+    void clearData(String what) {
+        String w = what == null ? "all" : what.trim().toLowerCase(java.util.Locale.ROOT);
+        boolean all = w.equals("all");
+        if (all || w.equals("cookies")) {
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.removeAllCookies(null);
+            cm.flush();
+        }
+        if (all || w.equals("cache")) {
+            for (Tab t : tabs) if (t.web != null) t.web.clearCache(true);
+        }
+        if (all || w.equals("storage")) {
+            android.webkit.WebStorage.getInstance().deleteAllData();
+        }
+    }
+
+    String getCookies(String url) {
+        String c = android.webkit.CookieManager.getInstance().getCookie(url);
+        return c == null ? "" : c;
+    }
+
+    /** cookie 为 Set-Cookie 格式（如 "a=1; Path=/; Max-Age=3600"） */
+    void setCookie(String url, String cookie) {
+        android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+        cm.setCookie(url, cookie);
+        cm.flush();
     }
 
     // ------------------------------------------------------------------ 应用列表
