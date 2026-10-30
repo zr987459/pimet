@@ -30,12 +30,18 @@ const MUTATING = new Set(["click", "tap", "type", "fill", "select", "press", "ke
 const TARGETED = new Set(["click", "tap", "type", "fill", "select", "hover", "scroll_into_view", "scroll"]);
 /** beta.23 新动作名 → 旧宿主上的同义动作（旧宿主回「未知操作」时自动改用） */
 const LEGACY: Record<string, string> = { tab_new: "new_tab", tab_switch: "switch_tab", tab_close: "close_tab" };
+/** 自定义浏览器 ui.json 相关动作（beta.24 合同第 3 节） */
+const UI_ACTIONS = [
+  "ui_get", "ui_schema", "ui_set", "ui_patch", "ui_remove", "ui_reset", "ui_backups", "ui_restore",
+  "panel_write", "panel_open", "panel_delete", "panels", "action_run", "site_set", "site_get", "rule_add", "rule_remove", "rules",
+];
 /** 油猴脚本 / 浏览器设置类动作（beta.22 合同第 3 节）：不带快照，结果按数据字段原样展示 */
 const MANAGE = new Set([
   "scripts", "script_get", "script_install", "script_enable", "script_remove", "script_update", "script_values",
   "menu_commands", "menu_run", "console", "config_get", "config_set", "ua", "desktop", "zoom", "cookies", "clear_data",
   "find", "wait_for", "inject",
   "containers", "container_keep", "history", "history_delete", "history_clear", "tab_new", "tab_switch", "tab_close",
+  ...UI_ACTIONS,
 ]);
 /** 可能要联网下载的动作：客户端多等一会 */
 const SLOW = new Set(["script_install", "script_update"]);
@@ -113,6 +119,35 @@ function adaptParams(action: string, p: Record<string, any>): Record<string, any
         const d = maybeJson(q.delete);
         q.delete = Array.isArray(d) ? d : String(q.delete).split(/[,，\s]+/).filter(Boolean);
       }
+      break;
+    case "ui_set":
+      // value 可以是任意 JSON 值；对象/数组写成字符串时自动解析，普通字符串（如颜色 "#FF0000"）原样保留
+      q.value = maybeJson(q.value);
+      break;
+    case "ui_patch":
+      q.patch = maybeJson(q.patch);
+      break;
+    case "action_run":
+      // 工具参数名 action 已被占用（动作名），action 对象用 ui_action 传；宿主读 ui_action
+      q.ui_action = maybeJson(q.ui_action);
+      break;
+    case "site_set":
+      q.settings = maybeJson(q.settings);
+      break;
+    case "rule_add":
+    case "rule_remove":
+      q.rule = maybeJson(q.rule);
+      if (typeof q.index === "string" && /^\d+$/.test(q.index)) q.index = Number(q.index);
+      break;
+    case "panel_write":
+      if ((q.html === undefined || q.html === "") && typeof q.html_file === "string" && q.html_file) {
+        try {
+          q.html = fs.readFileSync(q.html_file, "utf-8");
+        } catch (e: any) {
+          throw new BrowserError(`读不到 html_file ${q.html_file}：${e?.message ?? e}`);
+        }
+      }
+      delete q.html_file;
       break;
     case "config_set":
       q.patch = maybeJson(q.patch);
@@ -405,6 +440,9 @@ async function call1(action: string, params: Record<string, any>, signal?: Abort
   } catch (e) {
     throw new BrowserError(`宿主返回无法解析：${r.body.slice(0, 300)}`);
   }
+  if (j.success !== false && j.ok === false && Array.isArray(j.errors) && j.errors.length) {
+    throw new BrowserError(`校验失败，未写入：\n- ${j.errors.map((x: any) => (typeof x === "string" ? x : compact(x))).join("\n- ")}`);
+  }
   if (j.success === false) {
     const e = hostError(hostErrText(action, j));
     (e as any).url = j.url;
@@ -545,6 +583,9 @@ function argSummary(action: string, p: Record<string, any>): string {
     case "click": case "hover": case "scroll_into_view": return clip(p.target !== undefined ? targetStr(p.target) : p.ref ?? p.text, 40);
     case "fill": return `${targetStr(p.target ?? p.ref)} 文字${String(p.text ?? p.value ?? "").length}字${p.submit ? " +提交" : ""}`;
     case "batch": return `${Array.isArray(p.steps) ? p.steps.length : 0} 步`;
+    case "ui_get": case "ui_set": case "ui_remove": case "ui_reset": return String(p.pointer ?? "");
+    case "panel_write": case "panel_open": case "panel_delete": return String(p.id ?? "");
+    case "action_run": return clip(compact(p.ui_action), 60);
     case "tab_new": return `${clip(p.url ?? "", 50)} 容器=${p.container ?? "new"}`;
     case "type": return `${p.ref ?? ""} 文字${String(p.text ?? "").length}字${p.submit ? " +提交" : ""}`;
     case "select": return `${p.ref ?? ""} = ${clip(p.value, 30)}`;
@@ -876,6 +917,21 @@ function makeB(st: RunState, tab?: string): any {
       const j = await go("scripts", {});
       return j.scripts ?? j.result ?? [];
     },
+    /** 自定义浏览器（ui.json）：b.ui.get("/theme") / b.ui.set("/theme/accent", "#E91E63") / b.ui.patch({...}) …；写入失败（校验不通过）会抛错 */
+    ui: {
+      get: async (pointer?: string) => { const j = await go("ui_get", pointer ? { pointer } : {}); return j.value ?? j.config ?? j.result; },
+      schema: async () => await go("ui_schema", {}),
+      set: async (pointer: string, value: any) => await go("ui_set", { pointer, value }),
+      patch: async (patch: any) => await go("ui_patch", { patch }),
+      remove: async (pointer: string) => await go("ui_remove", { pointer }),
+      reset: async (pointer?: string) => await go("ui_reset", pointer ? { pointer } : {}),
+      backups: async () => { const j = await go("ui_backups", {}); return j.backups ?? j.result ?? []; },
+      restore: async (name: string) => await go("ui_restore", { name }),
+    },
+    /** 立即执行一个 action（{type:"builtin",id:"reload"} 等），先试再写进配置 */
+    async runAction(action: any) {
+      return await go("action_run", { ui_action: action });
+    },
     /** 在当前页注入 JS；persist {name, match} 时安装成用户脚本 */
     async inject(js: string, persist?: { name: string; match: string | string[] }) {
       const j = await go("inject", persist ? { js, persist } : { js });
@@ -1057,7 +1113,12 @@ export default function (pi: ExtensionAPI) {
       "【标签/容器/历史】tab_new(url,container:new|same|Default|容器名,background) | tabs | tab_switch(tab) | tab_close(tab) | containers | container_keep(name,keep) | history(q,limit,offset) | history_delete(url) | history_clear(since_ms)。" +
       "需要用户的登录态时用 container:\"same\"（沿用用户当前标签的容器）或用户指定的容器。\n" +
       "【油猴脚本】scripts | script_get(id) | script_install(code 或 url) | script_enable(id,on) | script_remove(id) | script_update(id?) | script_values(id,set?,delete?) | menu_commands | menu_run(id,cmd) | inject(script,persist?)；调试用 console、find、wait_for。\n" +
-      "【自定义浏览器】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?,container?) | clear_data(what)。script_remove、clear_data、history_clear 前先征得用户同意。\n" +
+      "【自定义浏览器 ui.json】外观、工具栏、菜单、悬浮球、主页/新标签页、搜索引擎、长按菜单、手势、站点规则、拦截/重定向、面板都在 ui.json，改完立即生效。" +
+      "先 ui_schema（字段说明 + 内置按钮 id）/ ui_get(pointer?) 看现状再改；小改 ui_set(pointer,value)（如 /theme/accent、/toolbar/-），多处改 ui_patch(patch)（合并补丁），删 ui_remove(pointer)，恢复默认 ui_reset(pointer?)；" +
+      "改坏了 ui_backups → ui_restore(name)（每次写入前自动备份）。校验失败会返回错误且不写入。" +
+      "自定义功能优先组合 action（builtin/open/js/script_menu/panel/askpi/seq），可先 action_run(ui_action) 试；复杂界面写成面板 panel_write(id,title,icon,html,where)（HTML+JS，可调 PiMetUI.runAction）| panel_open | panel_delete | panels。" +
+      "站点：site_set(pattern,settings) | site_get(url)；规则：rule_add(kind:block|redirect, rule) | rule_remove(kind, index 或 rule) | rules。详见 pimet-browser 技能「自定义浏览器」。\n" +
+      "【旧设置】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?,container?) | clear_data(what)。script_remove、clear_data、history_clear、ui_reset 前先征得用户同意。\n" +
       "不传 tab 时在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show / tab_switch 打断用户。" +
       "返回「用户已叫停」或「用户正在操作标签」（user_takeover）时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
     parameters: Type.Object({
@@ -1066,7 +1127,8 @@ export default function (pi: ExtensionAPI) {
           "run | batch | tools | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
           " | tab_new | tabs | tab_switch | tab_close | containers | container_keep | history | history_delete | history_clear" +
           " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
-          " | config_get | config_set | ua | desktop | zoom | cookies | clear_data",
+          " | config_get | config_set | ua | desktop | zoom | cookies | clear_data" +
+          " | ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panels | panel_write | panel_open | panel_delete | action_run | site_set | site_get | rule_add | rule_remove | rules",
       }),
       code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果；script_install 时是完整用户脚本源码（含 ==UserScript== 头）" })),
       tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tab_new / tabs 给出的 id（如 t3）；tab_switch / tab_close 的目标标签" })),
@@ -1084,7 +1146,7 @@ export default function (pi: ExtensionAPI) {
       scope: Type.Optional(Type.String({ description: "snapshot 范围：full（整页，默认）| viewport（只要当前屏，最省）" })),
       container: Type.Optional(Type.String({ description: "tab_new：new（新容器，默认，独立登录态）| same（沿用当前标签的容器）| Default（共享容器）| 容器名；cookies：哪个容器（默认当前标签的）" })),
       background: Type.Optional(Type.Boolean({ description: "tab_new 在后台打开，不切走用户当前标签，默认 true" })),
-      name: Type.Optional(Type.String({ description: "container_keep 的容器名（containers 列出）" })),
+      name: Type.Optional(Type.String({ description: "container_keep 的容器名（containers 列出）；ui_restore 的备份名（ui_backups 列出）" })),
       keep: Type.Optional(Type.Boolean({ description: "container_keep：true = 关闭标签后保留容器数据" })),
       q: Type.Optional(Type.String({ description: "history 搜索词（网址或标题包含，不区分大小写）" })),
       limit: Type.Optional(Type.Number({ description: "history 返回条数" })),
@@ -1096,7 +1158,31 @@ export default function (pi: ExtensionAPI) {
       text: Type.Optional(Type.String({ description: "type 要输入的文字；click 时按包含的文字查找元素；wait / wait_for 时等待出现的文字；find 要查找的文字" })),
       clear: Type.Optional(Type.Boolean({ description: "type 前清空原内容，默认 true；console 时读完清空日志" })),
       submit: Type.Optional(Type.Boolean({ description: "type 后提交表单 / 回车" })),
-      value: Type.Optional(Type.String({ description: "fill 要输入的文字；select 的选项值或文字" })),
+      value: Type.Optional(Type.Unknown({ description: "fill 要输入的文字；select 的选项值或文字；ui_set 要写入的值（任意 JSON：字符串、数字、布尔、对象、数组）" })),
+      pointer: Type.Optional(Type.String({ description: "ui_get / ui_set / ui_remove / ui_reset 的 JSON Pointer，如 /theme/accent、/toolbar/2；/toolbar/- 表示追加到数组末尾；ui_get / ui_reset 不填 = 整份" })),
+      ui_action: Type.Optional(
+        Type.Union([Type.Object({}, { additionalProperties: true }), Type.String()], {
+          description: "action_run 要执行的 action，如 {\"type\":\"builtin\",\"id\":\"reload\"} {\"type\":\"askpi\",\"prompt\":\"总结这个页面：{url}\"} {\"type\":\"seq\",\"steps\":[...]}",
+        })
+      ),
+      title: Type.Optional(Type.String({ description: "panel_write 面板标题" })),
+      icon: Type.Optional(Type.String({ description: "panel_write 面板图标（emoji）" })),
+      html: Type.Optional(Type.String({ description: "panel_write 面板的完整 HTML（可用 window.PiMetUI：runAction(json) openUrl(url) close() getConfig() currentPage()）" })),
+      html_file: Type.Optional(Type.String({ description: "panel_write：从这个本地文件读取 HTML（代替 html，适合较长的面板）" })),
+      where: Type.Optional(Type.String({ description: "panel_write 面板入口位置：menu | toolbar | ball | none" })),
+      pattern: Type.Optional(Type.String({ description: "site_set 的站点匹配，如 *.example.com" })),
+      settings: Type.Optional(
+        Type.Union([Type.Object({}, { additionalProperties: true }), Type.String()], {
+          description: "site_set 的设置 {ua:\"desktop|mobile|字符串\", zoom, js, images, darkMode, css, container}",
+        })
+      ),
+      kind: Type.Optional(Type.String({ description: "rule_add / rule_remove 的规则类型：block | redirect" })),
+      rule: Type.Optional(
+        Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })], {
+          description: "rule_add / rule_remove：block 规则字符串（如 ||ads.example.com^、*://*/track*）；redirect 规则 {from: Java 正则, to: 替换（$1…）}",
+        })
+      ),
+      index: Type.Optional(Type.Number({ description: "rule_remove：按序号删除（rules 列出，从 0 开始）" })),
       key: Type.Optional(Type.String({ description: "press 的按键" })),
       direction: Type.Optional(Type.String({ description: "scroll 方向 up/down/left/right，默认 down" })),
       amount: Type.Optional(Type.Number({ description: "scroll 滚动的屏数，默认 0.8" })),
@@ -1107,7 +1193,7 @@ export default function (pi: ExtensionAPI) {
       snapshot: Type.Optional(Type.Boolean({ description: "单步操作后是否返回快照，默认 true" })),
       max_chars: Type.Optional(Type.Number({ description: "快照最大字符数，snapshot 默认 12000（超出时折叠长列表），变更操作后附带的快照默认 2500" })),
       timeout: Type.Optional(Type.Number({ description: "单步：等待加载 / wait / eval 的超时毫秒，默认 20000，最大 120000；run：整段代码的超时秒数，默认 120，最大 600" })),
-      id: Type.Optional(Type.String({ description: "用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
+      id: Type.Optional(Type.String({ description: "panel_write / panel_open / panel_delete 的面板 id；用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
       on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版 / false 手机版" })),
       set: Type.Optional(
         Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })], {
@@ -1119,7 +1205,7 @@ export default function (pi: ExtensionAPI) {
       max: Type.Optional(Type.Number({ description: "console 返回最近多少条，默认 100" })),
       patch: Type.Optional(
         Type.Union([Type.Object({}, { additionalProperties: true }), Type.String()], {
-          description: "config_set：合并进 config.json 的字段，如 {\"theme\":{...}} {\"buttons\":[...]} {\"home\":\"...\"} {\"showButtonBar\":true}；buttons 会整体替换，先 config_get 再改",
+          description: "ui_patch：合并进 ui.json 的补丁（RFC 7386，null 表示删除该字段；数组整体替换）；config_set：合并进 config.json 的字段，如 {\"theme\":{...}} {\"buttons\":[...]} {\"home\":\"...\"} {\"showButtonBar\":true}；buttons 会整体替换，先 config_get 再改",
         })
       ),
       ua: Type.Optional(Type.String({ description: "ua：自定义 User-Agent 字符串；空字符串或 default = 恢复默认" })),

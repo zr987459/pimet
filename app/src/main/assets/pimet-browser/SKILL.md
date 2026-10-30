@@ -1,6 +1,6 @@
 ---
 name: pimet-browser
-description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：在自己的容器标签里工作，语义快照 + @ref，多步用 batch 或 run 一次完成，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于查/清浏览历史、管理容器（独立登录态）。也用于写/安装/调试油猴（Tampermonkey）用户脚本（GM API、菜单命令、console），改工具栏按钮、配色、首页、UA、桌面模式、缩放、Cookie，制作网页小工具。
+description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：在自己的容器标签里工作，语义快照 + @ref，多步用 batch 或 run 一次完成，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于查/清浏览历史、管理容器（独立登录态），以及通过 ui.json 自定义浏览器的一切（主题、工具栏、菜单、悬浮球、主页、搜索引擎、站点规则、广告拦截、重定向、自定义面板）。也用于写/安装/调试油猴（Tampermonkey）用户脚本（GM API、菜单命令、console），改工具栏按钮、配色、首页、UA、桌面模式、缩放、Cookie，制作网页小工具。
 ---
 
 # Pi 浏览器
@@ -361,7 +361,79 @@ document.body.appendChild(btn);
 
 注意：自动签到、自动点击类脚本只对用户自己的账号、按用户要求做；不要写绕过验证码、支付确认或网站风控的脚本。
 
-### 自定义浏览器（设置类 action）
+### 自定义浏览器（ui.json）
+
+浏览器的外观、工具栏、菜单、悬浮球、主页/新标签页、搜索引擎、长按菜单、手势、站点规则、拦截/重定向、自定义面板，全部由 `/root/pimet-browser/ui.json` 描述。用 `browser` 的 `ui_*` 动作读写，**写入后立即生效**（热重载：不丢标签、不重载网页），不用重装 App。缺省的字段用内置默认值，不认识的字段会原样保留。
+
+**工作方式**
+
+1. 先看：`ui_schema`（字段说明 + 全部内置按钮 id 及能放的位置），`ui_get`（整份配置）或 `ui_get {pointer: "/toolbar"}`（某一项）。
+2. 再改：一处用 `ui_set {pointer, value}`；多处一起改用 `ui_patch {patch}`（RFC 7386 合并补丁：对象逐层合并、`null` 删除字段、**数组整体替换**——改数组要么先 `ui_get` 再整组写回，要么用 `ui_set` 针对某个下标或 `/-` 追加）；删除用 `ui_remove {pointer}`；恢复默认用 `ui_reset {pointer?}`（不填 = 整份，先征得用户同意）。
+3. 写入前会校验（未知内置 id、颜色格式、正则写错等），**有错就返回错误、不写入**，按错误改了再写。
+4. 改坏了 / 用户不满意：`ui_backups` 列出自动备份（每次写入前一份，保留 20 份），`ui_restore {name}` 回滚。用户也可以在菜单「⚙ 自定义」里直接编辑、恢复默认、从备份恢复。
+5. 改完告诉用户改了什么、在哪里看到。
+
+JSON Pointer：`/theme/accent`、`/toolbar/2`（第 3 个按钮，从 0 开始）、`/toolbar/-`（追加到末尾）、`/sites/*.example.com`（键里的 `/` 写成 `~1`，`~` 写成 `~0`）。
+
+**配置结构**
+
+| 字段 | 内容 |
+|---|---|
+| `theme` | `mode`（auto/light/dark）、`accent` 主题色、`toolbarBg` / `toolbarFg`、`toolbarPosition`（top/bottom）、`fontScale`、`tabStyle`（bar/list）、`css`（注入所有页面的 CSS） |
+| `home` | `homepage`（主页网址）、`newTab`（homepage / blank / `panel:<id>` / 网址） |
+| `search` | `default` 默认引擎 id、`engines`（`{id,name,url}`，url 里 `%s` 是关键词）、`suggest` |
+| `toolbar` | 按钮数组，顺序即显示顺序：内置 `{"id":"back"}`，或自定义 `{"id":"my1","icon":"🧪","label":"测试","action":{…}}`；不想要的按钮直接从数组里去掉 |
+| `menu` | ⋮ 菜单项，格式同上，`{"type":"divider"}` 是分隔线 |
+| `ball` | 悬浮球：`enabled`、`snapEdge`（是否吸附屏幕边缘）、`items`（展开后的按钮）、`size`、`opacity` |
+| `longPress` | 长按 `link` / `image` / `text` 时弹出的菜单项数组 |
+| `gestures` | `swipeLeft` / `swipeRight` / `doubleTapToolbar` → action |
+| `sites` | `{"*.example.com": {ua: desktop/mobile/字符串, zoom, js, images, darkMode, css, container}}`，按网址通配匹配 |
+| `rules` | `block`（`||ads.example.com^`、`*://*/track*`）、`redirect`（`{from: Java 正则, to: 替换，$1 $2…}`） |
+| `panels` | 自定义面板 `{id,title,icon,file,where}`，用 `panel_write` 管理，不用手写 |
+| `defaults` | `container`（新标签默认 new / Default）、`desktopMode`、`downloadDir` |
+
+内置 id：back forward reload stop home url tabs newtab menu history scripts cookies containers desktop zoom find share fullscreen translate theme askpi terminal external downloads settings close（以 `ui_schema` 返回的为准，它还会说明每个能放在哪）。
+
+**action**（自定义按钮、菜单、悬浮球、长按、手势都用它）
+
+| type | 例子 | 作用 |
+|---|---|---|
+| `builtin` | `{"type":"builtin","id":"reload"}` | 执行内置功能 |
+| `open` | `{"type":"open","url":"https://…","newTab":true,"container":"same"}` | 打开网址 |
+| `js` | `{"type":"js","code":"document.body.style.zoom=1.2"}` | 在当前页执行 JS |
+| `script_menu` | `{"type":"script_menu","script":"<脚本id>","cmd":"<命令id>"}` | 运行油猴脚本的菜单命令 |
+| `panel` | `{"type":"panel","id":"notes"}` | 打开自定义面板 |
+| `askpi` | `{"type":"askpi","prompt":"总结这个页面：{url}"}` | 把问题发给 Pi，可用 `{url}` `{title}` `{selection}` 占位 |
+| `seq` | `{"type":"seq","steps":[{…},{…}]}` | 依次执行多个 action |
+
+自定义功能**优先组合 action**；先用 `action_run {ui_action: {…}}` 试一下效果，满意再写进配置。界面复杂（列表、表单、多按钮）时写成面板。
+
+**面板**：`panel_write {id, title, icon, html, where}`（`where`：menu / toolbar / ball / none；HTML 较长时可先写到文件再用 `html_file` 传路径），`panel_open {id}`、`panel_delete {id}`、`panels`。面板是浮层里的网页，可用 `window.PiMetUI`：`runAction(json)`、`openUrl(url)`、`close()`、`getConfig()`、`currentPage()`（返回 `{url,title}`）。数据可存 `localStorage`。
+
+**站点与规则**：`site_set {pattern, settings}`、`site_get {url}`（看某网址最终生效的设置）；`rule_add {kind: "block"|"redirect", rule}`、`rule_remove {kind, index 或 rule}`、`rules`。
+
+**常见示例**
+
+- 工具栏放到底部：`ui_set {pointer: "/theme/toolbarPosition", value: "bottom"}`
+- 加一个「总结本页」按钮：`ui_set {pointer: "/toolbar/-", value: {"id":"sum","icon":"📝","label":"总结本页","action":{"type":"askpi","prompt":"总结这个页面：{title} {url}"}}}`
+- 给某站开桌面模式：`site_set {pattern: "*.zhihu.com", settings: {"ua": "desktop", "zoom": 90}}`
+- 拦截广告域名：`rule_add {kind: "block", rule: "||ads.example.com^"}`
+- reddit 重定向到旧版：`rule_add {kind: "redirect", rule: {"from": "^https?://(www\\.)?reddit\\.com/(.*)", "to": "https://old.reddit.com/$2"}}`
+- 悬浮球加按钮、关掉吸附：`ui_patch {patch: {"ball": {"snapEdge": false}}}`，再 `ui_set {pointer: "/ball/items/-", value: {"id": "askpi"}}`
+- 深色主题 + 换主题色：`ui_patch {patch: {"theme": {"mode": "dark", "accent": "#E91E63"}}}`
+- 笔记面板（放在菜单里）：
+
+```json
+{"action": "panel_write", "id": "notes", "title": "笔记", "icon": "📝", "where": "menu",
+ "html": "<!doctype html><meta name=viewport content='width=device-width'><style>body{font:15px sans-serif;margin:12px}textarea{width:100%;height:60vh}</style><textarea id=t></textarea><button id=add>记下当前网页</button> <button onclick='PiMetUI.close()'>关闭</button><script>var t=document.getElementById('t');t.value=localStorage.notes||'';t.oninput=function(){localStorage.notes=t.value};document.getElementById('add').onclick=function(){var p=PiMetUI.currentPage();if(typeof p==='string')p=JSON.parse(p);t.value+='\\n'+p.title+' '+p.url;t.oninput()}</script>"}
+```
+
+在 run 里也能用：`await b.ui.get("/theme")`、`await b.ui.set(pointer, value)`、`await b.ui.patch({...})`、`await b.ui.backups()`、`await b.ui.restore(name)`、`await b.runAction({...})`。
+
+### 旧设置类 action（config.json）
+
+新功能请用上面的 ui.json；下面这些动作仍可用。
+
 
 | action | 参数 | 作用 |
 |---|---|---|
