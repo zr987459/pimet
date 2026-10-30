@@ -17,6 +17,7 @@ import android.view.PixelCopy;
 import android.view.Window;
 import android.webkit.WebView;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -24,8 +25,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -200,7 +205,8 @@ public final class BrowserAgent {
         String reqId = req.optString("req_id", "").trim();
         if (reqId.isEmpty()) reqId = "h" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
         // wait 的 ms 不占 timeout（与 TS 侧客户端超时 = timeout + ms + 30s 对齐）
-        long extra = action.equals("wait") && req.optString("text", "").isEmpty() ? clamp(req.optInt("ms", 1000), 0, 60000) : 0;
+        long extra = action.equals("wait") && req.optString("text", "").isEmpty() ? clamp(req.optInt("ms", 1000), 0, 60000)
+                : action.equals("wait_for") ? clamp(req.optInt("timeout_ms", 10000), 0, 30000) : 0;
         Req r = new Req(reqId, timeout, extra);
         r.tabSpec = req.optString("tab", "");
         if (PRE_CANCELLED.remove(reqId) != null) r.cancelled = true;
@@ -335,6 +341,9 @@ public final class BrowserAgent {
             default:
                 break;
         }
+        // ---- 用户脚本 / 浏览器设置（窗口级，不占标签锁）
+        JSONObject ext = doWindowExtra(win, action, req);
+        if (ext != null) return ext;
 
         // ---- 页面操作：先找到标签，再按标签加锁
         final String tabSpec = req.optString("tab", "");
@@ -534,10 +543,93 @@ public final class BrowserAgent {
                 if (b64 == null) return err("截图失败（窗口不可见？）");
                 return out.put("url", tab.url).put("image", b64).put("mime", "image/jpeg");
             }
-            case "status":
+            case "status": {
                 result = "url: " + tab.url;
                 wantSnapshot = false;
+                try {
+                    UserScriptManager m = mgr(win);
+                    out.put("scripts", m.list().size());
+                    out.put("scripts_matching", matchingIds(m, tab.url).size());
+                } catch (AbortException a) {
+                    throw a;
+                } catch (Exception e) {
+                    out.put("scripts", -1);
+                }
+                String uaNow = onMain(() -> tab.web == null ? "" : tab.web.getSettings().getUserAgentString(), 3000);
+                String mode = sUaOverride != null ? "custom" : tab.desktop ? "desktop" : "mobile";
+                out.put("ua_mode", mode).put("user_agent", uaNow == null ? "" : uaNow);
+                if (sZoom > 0) out.put("zoom", sZoom);
+                result += "；用户脚本 " + out.optInt("scripts") + " 个（当前页生效 " + out.optInt("scripts_matching") + " 个）；UA " + mode
+                        + (sZoom > 0 ? "；缩放 " + sZoom + "%" : "");
                 break;
+            }
+            case "menu_commands": {
+                JSONArray a = onMain(() -> win.menuCommands(tab), 3000);
+                if (a == null) a = new JSONArray();
+                return out.put("commands", a).put("url", tab.url)
+                        .put("result", a.length() == 0 ? "当前页没有用户脚本注册的菜单命令" : "当前页有 " + a.length() + " 个菜单命令，用 menu_run{script,cmd} 执行");
+            }
+            case "menu_run": {
+                final String sid = req.optString("script", "").trim();
+                final String cid = req.optString("cmd", "").trim();
+                if (sid.isEmpty() || cid.isEmpty()) return err("menu_run 需要 script 和 cmd（用 menu_commands 查看）");
+                checkUser(tab);
+                int seq = tab.navSeq;
+                onMain(() -> { win.runMenuCommand(tab, sid, cid); return null; }, 5000);
+                result = "已执行菜单命令 " + cid + "（脚本 " + sid + "）";
+                settle(tab, seq, out);
+                break;
+            }
+            case "console":
+                return console(win, tab, req, out);
+            case "find": {
+                String text = req.optString("text", "");
+                if (text.isEmpty()) return err("find 需要 text");
+                JSONObject r = evalJson(tab, FIND_JS + "(" + JSONObject.quote(text) + ")", 5000);
+                int n = r.optInt("n", 0);
+                out.put("count", n).put("url", tab.url);
+                if (r.has("samples")) out.put("samples", r.optJSONArray("samples"));
+                return out.put("result", n == 0 ? "页面里没有找到「" + text + "」" : "页面里找到 " + n + " 处「" + text + "」");
+            }
+            case "wait_for": {
+                String sel = req.optString("selector", "");
+                String text = req.optString("text", "");
+                if (sel.isEmpty() && text.isEmpty()) return err("wait_for 需要 selector 或 text");
+                boolean visible = req.optBoolean("visible", false);
+                long tmo = clamp(req.optInt("timeout_ms", 10000), 0, 30000);
+                long t0 = SystemClock.uptimeMillis();
+                long end = t0 + Math.min(tmo, softLeft());
+                boolean found = false;
+                while (true) {
+                    checkStop();
+                    if (!sel.isEmpty()) {
+                        String raw = evalRawSafe(tab, WAIT_SEL_JS + "(" + JSONObject.quote(sel) + ")", 3000);
+                        int v = -2;
+                        try { v = raw == null ? -2 : Integer.parseInt(raw.trim()); } catch (Throwable ignored) {}
+                        if (v == -1) return err("选择器写法不对：" + sel);
+                        if (v == 2 || (v == 1 && !visible)) { found = true; break; }
+                    } else {
+                        JSONObject r;
+                        try {
+                            r = evalAgent(tab, "A.hasText(" + JSONObject.quote(text) + ")", 3000);
+                        } catch (AbortException a) {
+                            throw a;
+                        } catch (Exception e) {
+                            r = new JSONObject();
+                        }
+                        if (r.optBoolean("v")) { found = true; break; }
+                    }
+                    if (SystemClock.uptimeMillis() >= end) break;
+                    sleep(300);
+                }
+                String what = sel.isEmpty() ? "「" + text + "」" : "元素 " + sel;
+                out.put("found", found).put("waited_ms", (int) (SystemClock.uptimeMillis() - t0));
+                result = found ? "页面已出现" + what : "等待超时（" + tmo + "ms），页面没有出现" + what;
+                wantSnapshot = req.optBoolean("snapshot", false);
+                break;
+            }
+            case "inject":
+                return inject(win, tab, req, out);
             default:
                 return err("未知操作 " + action);
         }
@@ -1118,6 +1210,394 @@ public final class BrowserAgent {
         out.recycle();
         return Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
     }
+
+    // ------------------------------------------------------------------ 用户脚本 / 浏览器设置（docs/userscripts.md 第 3 节）
+
+    /** 最近一次通过 ua 设置的自定义 UA（null = 未自定义）、最近一次 zoom 设置的百分比（0 = 未设置），供 status 显示 */
+    private static volatile String sUaOverride;
+    private static volatile int sZoom;
+    /** console clear 的水位：标签 → {清空时刻 ms, 清空时最后一条的 JSON} */
+    private static final Map<FloatingApps.Tab, Object[]> CONSOLE_MARK = new WeakHashMap<>();
+
+    private static UserScriptManager mgr(FloatingApps win) throws Exception {
+        UserScriptManager m = onMain(win::scripts, 3000);
+        if (m == null) throw new IllegalStateException("用户脚本管理器不可用");
+        return m;
+    }
+
+    private static Set<String> matchingIds(UserScriptManager m, String url) {
+        Set<String> ids = new HashSet<>();
+        if (url == null || url.isEmpty()) return ids;
+        List<UserScriptManager.Script> l = m.matching(url, null);
+        if (l != null) for (UserScriptManager.Script s : l) ids.add(s.id);
+        return ids;
+    }
+
+    private static String nz(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static JSONArray arr(List<String> l) {
+        JSONArray a = new JSONArray();
+        if (l != null) for (String x : l) a.put(x);
+        return a;
+    }
+
+    private static JSONObject scriptBrief(UserScriptManager.Script s, Set<String> cur) throws Exception {
+        return new JSONObject().put("id", s.id).put("name", nz(s.name)).put("version", nz(s.version)).put("enabled", s.enabled)
+                .put("matchesCurrent", cur != null && cur.contains(s.id))
+                .put("runAt", s.runAt == null || s.runAt.isEmpty() ? "document-idle" : s.runAt);
+    }
+
+    private static JSONObject scriptFull(UserScriptManager.Script s, Set<String> cur) throws Exception {
+        JSONObject o = scriptBrief(s, cur);
+        o.put("namespace", nz(s.namespace)).put("description", nz(s.description)).put("author", nz(s.author))
+                .put("matches", arr(s.matches)).put("includes", arr(s.includes)).put("excludes", arr(s.excludes))
+                .put("grants", arr(s.grants)).put("requires", arr(s.requires)).put("connects", arr(s.connects))
+                .put("resources", s.resources == null ? new JSONObject() : new JSONObject(s.resources))
+                .put("noframes", s.noframes).put("installUrl", nz(s.installUrl)).put("updateUrl", nz(s.updateUrl))
+                .put("mtime", s.mtime).put("code", nz(s.code));
+        return o;
+    }
+
+    /** 不加标签锁地看一眼请求指向的标签（只读 url 用） */
+    private static FloatingApps.Tab peekTab(FloatingApps win, JSONObject req) throws Exception {
+        final String spec = req.optString("tab", "");
+        synchronized (WINDOW_LOCK) {
+            return onMain(() -> win.agentTab(spec), 5000);
+        }
+    }
+
+    private static String peekUrl(FloatingApps win, JSONObject req) {
+        try {
+            FloatingApps.Tab t = peekTab(win, req);
+            return t == null ? "" : nz(t.url);
+        } catch (AbortException a) {
+            throw a;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** JSON 值 → setValue 需要的 JSON 文本 */
+    private static String jsonText(Object v) {
+        if (v == null || v == JSONObject.NULL) return "null";
+        if (v instanceof String) return JSONObject.quote((String) v);
+        return v.toString();
+    }
+
+    /** 窗口级 action；不是这里处理的返回 null */
+    private static JSONObject doWindowExtra(FloatingApps win, String action, JSONObject req) throws Exception {
+        switch (action) {
+            case "scripts": {
+                UserScriptManager m = mgr(win);
+                Set<String> cur = matchingIds(m, peekUrl(win, req));
+                JSONArray a = new JSONArray();
+                List<UserScriptManager.Script> l = m.list();
+                int on = 0;
+                if (l != null) for (UserScriptManager.Script s : l) {
+                    a.put(scriptBrief(s, cur));
+                    if (s.enabled) on++;
+                }
+                return ok().put("scripts", a).put("result", "共 " + a.length() + " 个用户脚本，启用 " + on + " 个，当前页生效 " + cur.size() + " 个");
+            }
+            case "script_get": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("script_get 需要 id（用 scripts 查看）");
+                UserScriptManager m = mgr(win);
+                UserScriptManager.Script s = m.get(id);
+                if (s == null) return err("没有脚本 " + id + "，用 scripts 查看");
+                return ok().put("script", scriptFull(s, matchingIds(m, peekUrl(win, req))));
+            }
+            case "script_install": {
+                String code = req.optString("code", "");
+                String url = req.optString("url", "").trim();
+                if (code.isEmpty() == url.isEmpty()) return err("script_install 需要 code 或 url（二选一）");
+                UserScriptManager m = mgr(win);
+                UserScriptManager.Script s = code.isEmpty() ? m.installFromUrl(normalize(url)) : m.install(code, null);
+                if (s == null) return err("安装失败");
+                return ok().put("script", scriptBrief(s, matchingIds(m, peekUrl(win, req))))
+                        .put("result", "已安装脚本「" + nz(s.name) + "」（id " + s.id + "），刷新页面后生效");
+            }
+            case "script_enable": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("script_enable 需要 id");
+                boolean on = req.optBoolean("on", true);
+                if (!mgr(win).setEnabled(id, on)) return err("没有脚本 " + id + "，用 scripts 查看");
+                return ok().put("id", id).put("enabled", on).put("result", "已" + (on ? "启用" : "停用") + "脚本 " + id + "，刷新页面后生效");
+            }
+            case "script_remove": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("script_remove 需要 id");
+                if (!mgr(win).remove(id)) return err("没有脚本 " + id + "，用 scripts 查看");
+                return ok().put("id", id).put("result", "已删除脚本 " + id + "（含存储的值），刷新页面后生效");
+            }
+            case "script_update":
+                return scriptUpdate(win, req);
+            case "script_values": {
+                String id = req.optString("id", "").trim();
+                if (id.isEmpty()) return err("script_values 需要 id");
+                UserScriptManager m = mgr(win);
+                if (m.get(id) == null) return err("没有脚本 " + id + "，用 scripts 查看");
+                int changed = 0;
+                JSONObject set = req.optJSONObject("set");
+                if (set != null) {
+                    for (Iterator<String> it = set.keys(); it.hasNext(); ) {
+                        String k = it.next();
+                        m.setValue(id, k, jsonText(set.opt(k)));
+                        changed++;
+                    }
+                }
+                JSONArray del = req.optJSONArray("delete");
+                if (del != null) {
+                    for (int i = 0; i < del.length(); i++) {
+                        String k = del.optString(i, "");
+                        if (k.isEmpty()) continue;
+                        m.deleteValue(id, k);
+                        changed++;
+                    }
+                }
+                JSONObject vals = m.getValues(id);
+                return ok().put("id", id).put("values", vals == null ? new JSONObject() : vals)
+                        .put("result", changed == 0 ? "脚本 " + id + " 的存储值" : "已修改 " + changed + " 项（页面里的 GM_getValue 快照在刷新后更新）");
+            }
+            case "config_get": {
+                JSONObject c = onMain(win::getConfig, 3000);
+                return ok().put("config", c == null ? new JSONObject() : c);
+            }
+            case "config_set": {
+                final JSONObject patch = req.optJSONObject("patch");
+                if (patch == null || patch.length() == 0) return err("config_set 需要 patch（JSON 对象，如 {\"theme\":\"dark\"}）");
+                onMain(() -> { win.setConfig(patch); return null; }, 5000);
+                JSONObject c = onMain(win::getConfig, 3000);
+                return ok().put("config", c == null ? new JSONObject() : c).put("result", "已合并写入 config.json 并重新加载（" + patch.length() + " 项）");
+            }
+            case "ua": {
+                String v = req.isNull("ua") ? "" : req.optString("ua", "").trim();
+                final String ua = v.isEmpty() ? null : v;
+                onMain(() -> { win.setUserAgent(ua); return null; }, 5000);
+                sUaOverride = ua;
+                return ok().put("ua", ua == null ? JSONObject.NULL : ua).put("result", ua == null ? "已恢复默认 UA" : "已设置自定义 UA，刷新页面后生效");
+            }
+            case "desktop": {
+                final boolean on = req.optBoolean("on", true);
+                onMain(() -> { win.setDesktopMode(on); return null; }, 5000);
+                if (on) sUaOverride = null;
+                return ok().put("desktop", on).put("result", on ? "已切换为桌面版网站" : "已切换为移动版网站");
+            }
+            case "zoom": {
+                if (!req.has("percent")) return err("zoom 需要 percent（25–300）");
+                final int pct = clamp(req.optInt("percent", 100), 25, 300);
+                onMain(() -> { win.setZoom(pct); return null; }, 5000);
+                sZoom = pct;
+                return ok().put("zoom", pct).put("result", "已把页面缩放设为 " + pct + "%");
+            }
+            case "cookies": {
+                String u = normalize(req.optString("url", ""));
+                if (u.isEmpty()) u = peekUrl(win, req);
+                if (u.isEmpty() || u.startsWith("about:")) return err("cookies 需要 url");
+                final String url = u;
+                int n = 0;
+                Object set = req.opt("set");
+                List<String> list = new ArrayList<>();
+                if (set instanceof JSONArray) {
+                    JSONArray a = (JSONArray) set;
+                    for (int i = 0; i < a.length(); i++) if (!a.optString(i, "").isEmpty()) list.add(a.optString(i));
+                } else if (set instanceof String && !((String) set).isEmpty()) {
+                    list.add((String) set);
+                }
+                for (final String c : list) {
+                    onMain(() -> { win.setCookie(url, c); return null; }, 3000);
+                    n++;
+                }
+                String got = onMain(() -> win.getCookies(url), 3000);
+                return ok().put("url", url).put("cookies", nz(got))
+                        .put("result", (n > 0 ? "已写入 " + n + " 条 cookie；" : "") + (got == null || got.isEmpty() ? "该网址没有 cookie" : "该网址的 cookie 如上"));
+            }
+            case "clear_data": {
+                final String what = req.optString("what", "").trim().toLowerCase();
+                if (!what.equals("cookies") && !what.equals("cache") && !what.equals("storage") && !what.equals("all")) {
+                    return err("clear_data 的 what 只能是 cookies / cache / storage / all");
+                }
+                onMain(() -> { win.clearData(what); return null; }, 10000);
+                return ok().put("result", "已清除 " + what);
+            }
+            default:
+                return null;
+        }
+    }
+
+    /** id 为空 = 检查全部；有新版本就覆盖安装（网络操作，在当前后台线程执行） */
+    private static JSONObject scriptUpdate(FloatingApps win, JSONObject req) throws Exception {
+        UserScriptManager m = mgr(win);
+        String id = req.optString("id", "").trim();
+        List<UserScriptManager.Script> targets = new ArrayList<>();
+        if (!id.isEmpty()) {
+            UserScriptManager.Script s = m.get(id);
+            if (s == null) return err("没有脚本 " + id + "，用 scripts 查看");
+            targets.add(s);
+        } else {
+            List<UserScriptManager.Script> l = m.list();
+            if (l != null) targets.addAll(l);
+        }
+        JSONArray updated = new JSONArray();
+        JSONArray failed = new JSONArray();
+        int checked = 0;
+        for (UserScriptManager.Script s : targets) {
+            checkStop();
+            if (id.isEmpty() && nz(s.updateUrl).isEmpty() && nz(s.downloadUrl).isEmpty() && nz(s.installUrl).isEmpty()) continue;
+            checked++;
+            try {
+                String code = m.checkUpdate(s.id);
+                if (code == null) continue;
+                UserScriptManager.Script n = m.install(code, s.installUrl);
+                updated.put(new JSONObject().put("id", n == null ? s.id : n.id).put("name", nz(s.name))
+                        .put("from", nz(s.version)).put("to", n == null ? "" : nz(n.version)));
+            } catch (AbortException a) {
+                throw a;
+            } catch (Throwable t) {
+                failed.put(new JSONObject().put("id", s.id).put("error", friendly(t)));
+            }
+        }
+        String res = "检查了 " + checked + " 个脚本，更新 " + updated.length() + " 个" + (failed.length() > 0 ? "，失败 " + failed.length() + " 个" : "")
+                + (updated.length() > 0 ? "，刷新页面后生效" : "");
+        return ok().put("updated", updated).put("failed", failed).put("checked", checked).put("result", res);
+    }
+
+    private static long entryTime(Object o) {
+        if (!(o instanceof JSONObject)) return 0;
+        JSONObject e = (JSONObject) o;
+        return e.optLong("t", e.optLong("time", e.optLong("ts", 0)));
+    }
+
+    private static JSONObject console(FloatingApps win, FloatingApps.Tab tab, JSONObject req, JSONObject out) throws Exception {
+        int max = clamp(req.optInt("max", 100), 1, 300);
+        boolean clear = req.optBoolean("clear", false);
+        JSONArray all = onMain(() -> win.consoleLogs(tab, 300), 3000);
+        if (all == null) all = new JSONArray();
+        Object[] mk;
+        synchronized (CONSOLE_MARK) {
+            mk = CONSOLE_MARK.get(tab);
+        }
+        int from = 0;
+        long minT = 0;
+        if (mk != null) {
+            boolean timed = all.length() > 0 && entryTime(all.opt(0)) > 0;
+            if (timed) {
+                minT = (Long) mk[0];
+            } else if (mk[1] != null) {
+                for (int i = all.length() - 1; i >= 0; i--) {
+                    if (mk[1].equals(String.valueOf(all.opt(i)))) { from = i + 1; break; }
+                }
+            }
+        }
+        List<Object> kept = new ArrayList<>();
+        for (int i = from; i < all.length(); i++) {
+            Object o = all.opt(i);
+            if (minT > 0 && entryTime(o) <= minT) continue;
+            kept.add(o);
+        }
+        JSONArray logs = new JSONArray();
+        int errors = 0;
+        for (int i = Math.max(0, kept.size() - max); i < kept.size(); i++) {
+            Object o = kept.get(i);
+            logs.put(o);
+            if (o instanceof JSONObject) {
+                String lv = ((JSONObject) o).optString("level", ((JSONObject) o).optString("type", "")).toLowerCase();
+                if (lv.equals("error")) errors++;
+            }
+        }
+        if (clear) {
+            synchronized (CONSOLE_MARK) {
+                CONSOLE_MARK.put(tab, new Object[]{System.currentTimeMillis(), all.length() == 0 ? null : String.valueOf(all.opt(all.length() - 1))});
+            }
+        }
+        return out.put("logs", logs).put("url", tab.url)
+                .put("result", (logs.length() == 0 ? "控制台没有新日志" : "控制台日志 " + logs.length() + " 条（其中错误 " + errors + " 条）")
+                        + (clear ? "；已清空（之后只返回新日志）" : ""));
+    }
+
+    /** inject{js, fn?, persist?:{name,match}}：不带 persist 直接在页面执行；带 persist 生成用户脚本并安装，当前页匹配就立即注入一次 */
+    private static JSONObject inject(FloatingApps win, FloatingApps.Tab tab, JSONObject req, JSONObject out) throws Exception {
+        String js = req.optString("js", "");
+        if (js.isEmpty()) return err("inject 需要 js");
+        JSONObject persist = req.optJSONObject("persist");
+        if (persist == null) {
+            checkUser(tab);
+            String[] v = evalAsync(tab, js, req.optBoolean("fn", false), Math.max(1000, softLeft()));
+            if (v[0] != null) return err(v[0]).put("url", tab.url);
+            return out.put("url", tab.url).put("result", v[1]);
+        }
+        String host = "";
+        try {
+            host = nz(android.net.Uri.parse(nz(tab.url)).getHost());
+        } catch (Throwable ignored) {}
+        List<String> matches = new ArrayList<>();
+        Object mo = persist.opt("match");
+        if (mo instanceof JSONArray) {
+            JSONArray a = (JSONArray) mo;
+            for (int i = 0; i < a.length(); i++) if (!a.optString(i, "").trim().isEmpty()) matches.add(a.optString(i).trim());
+        } else if (mo instanceof String && !((String) mo).trim().isEmpty()) {
+            matches.add(((String) mo).trim());
+        }
+        if (matches.isEmpty()) {
+            if (host.isEmpty()) return err("persist 需要 match（如 *://*.example.com/*），当前页没有可用的域名");
+            matches.add("*://" + host + "/*");
+        }
+        String name = persist.optString("name", "").trim();
+        if (name.isEmpty()) name = "Pi 脚本 " + (host.isEmpty() ? matches.get(0) : host);
+        StringBuilder sb = new StringBuilder();
+        sb.append("// ==UserScript==\n");
+        sb.append("// @name         ").append(name.replace("\n", " ").replace("\r", " ")).append("\n");
+        sb.append("// @namespace    pimet-agent\n");
+        sb.append("// @version      ").append(persist.optString("version", "1.0").trim()).append("\n");
+        sb.append("// @description  由 Pi 通过 browser inject 生成\n");
+        for (String mt : matches) sb.append("// @match        ").append(mt.replace("\n", " ").replace("\r", " ")).append("\n");
+        String runAt = persist.optString("run_at", persist.optString("runAt", "document-idle")).trim();
+        sb.append("// @run-at       ").append(runAt.isEmpty() ? "document-idle" : runAt).append("\n");
+        sb.append("// @grant        none\n");
+        sb.append("// ==/UserScript==\n\n");
+        sb.append(js).append("\n");
+        UserScriptManager m = mgr(win);
+        UserScriptManager.Script s = m.install(sb.toString(), null);
+        if (s == null) return err("安装脚本失败");
+        boolean ran = false;
+        if (matchingIds(m, tab.url).contains(s.id)) {
+            checkUser(tab);
+            String code = m.buildInjection(s, tab.id);
+            if (code != null && !code.isEmpty()) {
+                evalRawSafe(tab, code, 5000);
+                ran = true;
+            }
+        }
+        return out.put("url", tab.url).put("script", scriptBrief(s, matchingIds(m, tab.url)))
+                .put("result", "已安装为用户脚本「" + nz(s.name) + "」（id " + s.id + "，匹配 " + joinSp(matches) + "）"
+                        + (ran ? "，并已在当前页执行一次" : "，当前页不匹配，打开匹配的网页时生效"));
+    }
+
+    private static String joinSp(List<String> l) {
+        StringBuilder b = new StringBuilder();
+        for (String x : l) b.append(b.length() == 0 ? "" : " ").append(x);
+        return b.toString();
+    }
+
+    /** 执行返回 JSON 字符串的表达式，结果解析成对象（失败返回空对象） */
+    private static JSONObject evalJson(FloatingApps.Tab tab, String expr, long timeoutMs) throws Exception {
+        Object v = parseRaw(evalRaw(tab, "(function(){try{return JSON.stringify(" + expr + ")}catch(e){return JSON.stringify({error:String(e)})}})()", timeoutMs));
+        if (!(v instanceof String)) return new JSONObject();
+        Object o = new JSONTokener((String) v).nextValue();
+        return o instanceof JSONObject ? (JSONObject) o : new JSONObject();
+    }
+
+    /** 页面内查找（忽略大小写，含同源 iframe）：{n, samples:[最多 5 段上下文]} */
+    private static final String FIND_JS = "(function(q){q=String(q).toLowerCase();var n=0,S=[];"
+            + "function cnt(d){try{var raw=(d.body&&d.body.innerText)||'';var t=raw.toLowerCase();var i=0;"
+            + "while(q&&(i=t.indexOf(q,i))>=0){n++;if(S.length<5)S.push(raw.substring(Math.max(0,i-30),Math.min(raw.length,i+q.length+30)).replace(/\\s+/g,' '));i+=q.length;}"
+            + "var fs=d.querySelectorAll('iframe');for(var k=0;k<fs.length;k++){try{if(fs[k].contentDocument)cnt(fs[k].contentDocument)}catch(e){}}}catch(e){}}"
+            + "cnt(document);return {n:n,samples:S}})";
+    /** wait_for 选择器：2 = 存在且可见，1 = 存在但不可见，0 = 不存在，-1 = 选择器无效 */
+    private static final String WAIT_SEL_JS = "(function(s){var e;try{e=document.querySelector(s)}catch(x){return -1}if(!e)return 0;"
+            + "try{var r=e.getBoundingClientRect(),st=getComputedStyle(e);return (r.width>0||r.height>0)&&st.visibility!=='hidden'&&st.display!=='none'?2:1}catch(x){return 1}})";
 
     // ------------------------------------------------------------------ 工具
 
