@@ -556,11 +556,13 @@ public final class BrowserAgent {
                     out.put("scripts", -1);
                 }
                 String uaNow = onMain(() -> tab.web == null ? "" : tab.web.getSettings().getUserAgentString(), 3000);
-                String mode = sUaOverride != null ? "custom" : tab.desktop ? "desktop" : "mobile";
-                out.put("ua_mode", mode).put("user_agent", uaNow == null ? "" : uaNow);
-                if (sZoom > 0) out.put("zoom", sZoom);
+                String mode = onMain(win::userAgentMode, 3000);
+                if (mode == null) mode = "default";
+                Integer zoomNow = onMain(win::zoomPercent, 3000);
+                int zoom = zoomNow == null ? 100 : zoomNow;
+                out.put("ua_mode", mode).put("user_agent", uaNow == null ? "" : uaNow).put("zoom", zoom);
                 result += "；用户脚本 " + out.optInt("scripts") + " 个（当前页生效 " + out.optInt("scripts_matching") + " 个）；UA " + mode
-                        + (sZoom > 0 ? "；缩放 " + sZoom + "%" : "");
+                        + "；缩放 " + zoom + "%";
                 break;
             }
             case "menu_commands": {
@@ -1213,11 +1215,6 @@ public final class BrowserAgent {
 
     // ------------------------------------------------------------------ 用户脚本 / 浏览器设置（docs/userscripts.md 第 3 节）
 
-    /** 最近一次通过 ua 设置的自定义 UA（null = 未自定义）、最近一次 zoom 设置的百分比（0 = 未设置），供 status 显示 */
-    private static volatile String sUaOverride;
-    private static volatile int sZoom;
-    /** console clear 的水位：标签 → {清空时刻 ms, 清空时最后一条的 JSON} */
-    private static final Map<FloatingApps.Tab, Object[]> CONSOLE_MARK = new WeakHashMap<>();
 
     private static UserScriptManager mgr(FloatingApps win) throws Exception {
         UserScriptManager m = onMain(win::scripts, 3000);
@@ -1376,20 +1373,17 @@ public final class BrowserAgent {
                 String v = req.isNull("ua") ? "" : req.optString("ua", "").trim();
                 final String ua = v.isEmpty() ? null : v;
                 onMain(() -> { win.setUserAgent(ua); return null; }, 5000);
-                sUaOverride = ua;
                 return ok().put("ua", ua == null ? JSONObject.NULL : ua).put("result", ua == null ? "已恢复默认 UA" : "已设置自定义 UA，刷新页面后生效");
             }
             case "desktop": {
                 final boolean on = req.optBoolean("on", true);
                 onMain(() -> { win.setDesktopMode(on); return null; }, 5000);
-                if (on) sUaOverride = null;
                 return ok().put("desktop", on).put("result", on ? "已切换为桌面版网站" : "已切换为移动版网站");
             }
             case "zoom": {
                 if (!req.has("percent")) return err("zoom 需要 percent（25–300）");
                 final int pct = clamp(req.optInt("percent", 100), 25, 300);
                 onMain(() -> { win.setZoom(pct); return null; }, 5000);
-                sZoom = pct;
                 return ok().put("zoom", pct).put("result", "已把页面缩放设为 " + pct + "%");
             }
             case "cookies": {
@@ -1464,54 +1458,18 @@ public final class BrowserAgent {
         return ok().put("updated", updated).put("failed", failed).put("checked", checked).put("result", res);
     }
 
-    private static long entryTime(Object o) {
-        if (!(o instanceof JSONObject)) return 0;
-        JSONObject e = (JSONObject) o;
-        return e.optLong("t", e.optLong("time", e.optLong("ts", 0)));
-    }
-
     private static JSONObject console(FloatingApps win, FloatingApps.Tab tab, JSONObject req, JSONObject out) throws Exception {
         int max = clamp(req.optInt("max", 100), 1, 300);
         boolean clear = req.optBoolean("clear", false);
-        JSONArray all = onMain(() -> win.consoleLogs(tab, 300), 3000);
-        if (all == null) all = new JSONArray();
-        Object[] mk;
-        synchronized (CONSOLE_MARK) {
-            mk = CONSOLE_MARK.get(tab);
-        }
-        int from = 0;
-        long minT = 0;
-        if (mk != null) {
-            boolean timed = all.length() > 0 && entryTime(all.opt(0)) > 0;
-            if (timed) {
-                minT = (Long) mk[0];
-            } else if (mk[1] != null) {
-                for (int i = all.length() - 1; i >= 0; i--) {
-                    if (mk[1].equals(String.valueOf(all.opt(i)))) { from = i + 1; break; }
-                }
-            }
-        }
-        List<Object> kept = new ArrayList<>();
-        for (int i = from; i < all.length(); i++) {
-            Object o = all.opt(i);
-            if (minT > 0 && entryTime(o) <= minT) continue;
-            kept.add(o);
-        }
-        JSONArray logs = new JSONArray();
+        JSONArray logs = onMain(() -> win.consoleLogs(tab, max), 3000);
+        if (logs == null) logs = new JSONArray();
         int errors = 0;
-        for (int i = Math.max(0, kept.size() - max); i < kept.size(); i++) {
-            Object o = kept.get(i);
-            logs.put(o);
-            if (o instanceof JSONObject) {
-                String lv = ((JSONObject) o).optString("level", ((JSONObject) o).optString("type", "")).toLowerCase();
-                if (lv.equals("error")) errors++;
-            }
+        for (int i = 0; i < logs.length(); i++) {
+            JSONObject o = logs.optJSONObject(i);
+            if (o != null && "error".equalsIgnoreCase(o.optString("level", ""))) errors++;
         }
-        if (clear) {
-            synchronized (CONSOLE_MARK) {
-                CONSOLE_MARK.put(tab, new Object[]{System.currentTimeMillis(), all.length() == 0 ? null : String.valueOf(all.opt(all.length() - 1))});
-            }
-        }
+        // 读完再清空（M2 的 clearConsoleLogs），之后只会看到新日志
+        if (clear) onMain(() -> { win.clearConsoleLogs(tab); return null; }, 3000);
         return out.put("logs", logs).put("url", tab.url)
                 .put("result", (logs.length() == 0 ? "控制台没有新日志" : "控制台日志 " + logs.length() + " 条（其中错误 " + errors + " 条）")
                         + (clear ? "；已清空（之后只返回新日志）" : ""));
@@ -1566,6 +1524,7 @@ public final class BrowserAgent {
             checkUser(tab);
             String code = m.buildInjection(s, tab.id);
             if (code != null && !code.isEmpty()) {
+                tab.injectedIds.add(s.id); // 否则 PiMetGM 会拒绝这次注入里的 GM 调用
                 evalRawSafe(tab, code, 5000);
                 ran = true;
             }

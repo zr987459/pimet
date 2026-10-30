@@ -2555,7 +2555,7 @@ public final class FloatingApps {
 
         @JavascriptInterface
         public void unregisterMenu(String id, String cmdId) {
-            if (id == null || cmdId == null) return;
+            if (ok(id) == null || cmdId == null) return;
             synchronized (tab.menus) {
                 java.util.LinkedHashMap<String, String> m = tab.menus.get(id);
                 if (m != null) {
@@ -2598,6 +2598,15 @@ public final class FloatingApps {
 
     /** @connect 检查：未声明则允许（并记一条提示）；声明了则 host 必须命中（* / self / 域名及其子域 / IP） */
     private static boolean connectAllowed(Tab t, UserScriptManager.Script s, String host, String pageUrl) {
+        if (isLocalHost(host)) {
+            // 本机/局域网（含 127.0.0.1:30143 等 PiMet 自己的端口）：必须在 @connect 里显式写出这个主机，* 和未声明都不算
+            if (s.connects != null) {
+                for (String c : s.connects) {
+                    if (c != null && c.trim().equalsIgnoreCase(host)) return true;
+                }
+            }
+            return false;
+        }
         if (s.connects == null || s.connects.isEmpty()) {
             addConsole(t, "warn", "[PiMet] 脚本 " + s.name + " 未声明 @connect，已允许请求 " + host, "pimet", 0);
             return true;
@@ -2616,6 +2625,22 @@ public final class FloatingApps {
             if (c.equals("self") && host.equals(pageHost.toLowerCase(java.util.Locale.ROOT))) return true;
             if (c.startsWith("*.")) c = c.substring(2);
             if (host.equals(c) || host.endsWith("." + c)) return true;
+        }
+        return false;
+    }
+
+    /** localhost / 环回 / 内网 / 链路本地地址（只看字面，不做 DNS） */
+    static boolean isLocalHost(String host) {
+        if (host == null) return true;
+        String h = host.trim().toLowerCase(java.util.Locale.ROOT);
+        if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length() - 1);
+        if (h.isEmpty() || h.equals("localhost") || h.endsWith(".localhost") || h.equals("0.0.0.0") || h.equals("::") || h.equals("::1")) return true;
+        if (h.startsWith("127.") || h.startsWith("10.") || h.startsWith("192.168.") || h.startsWith("169.254.")) return true;
+        if (h.contains(":") && (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))) return true;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^172\\.(\\d+)\\.").matcher(h);
+        if (m.find()) {
+            int b = Integer.parseInt(m.group(1));
+            if (b >= 16 && b <= 31) return true;
         }
         return false;
     }
@@ -2688,6 +2713,13 @@ public final class FloatingApps {
                     url = new java.net.URL(url, loc);
                     c.disconnect();
                     c = null;
+                    String rp = url.getProtocol();
+                    if (!"http".equals(rp) && !"https".equals(rp)) throw new IllegalArgumentException("重定向到不支持的协议：" + url);
+                    if (!connectAllowed(t, s, url.getHost(), pageUrl)) {
+                        addConsole(t, "error", "[PiMet] 脚本 " + s.name + " 的请求重定向被 @connect 拦截：" + url.getHost(), "pimet", 0);
+                        res.put("error", "@connect 不允许访问 " + url.getHost());
+                        return res;
+                    }
                     if (code == 303 || ((code == 301 || code == 302) && method.equals("POST"))) {
                         method = "GET";
                         body = null;
