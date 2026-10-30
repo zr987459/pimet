@@ -26,6 +26,87 @@ const MAX_SHOTS = 3;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 /** 变更类动作：单步时默认只回 interactive 快照 */
 const MUTATING = new Set(["click", "tap", "type", "fill", "select", "press", "key", "scroll", "back", "forward", "reload"]);
+/** 油猴脚本 / 浏览器设置类动作（beta.22 合同第 3 节）：不带快照，结果按数据字段原样展示 */
+const MANAGE = new Set([
+  "scripts", "script_get", "script_install", "script_enable", "script_remove", "script_update", "script_values",
+  "menu_commands", "menu_run", "console", "config_get", "config_set", "ua", "desktop", "zoom", "cookies", "clear_data",
+  "find", "wait_for", "inject",
+]);
+/** 可能要联网下载的动作：客户端多等一会 */
+const SLOW = new Set(["script_install", "script_update"]);
+
+/** 允许模型把对象参数写成 JSON 字符串 */
+function maybeJson(v: any): any {
+  if (typeof v !== "string") return v;
+  const t = v.trim();
+  if (!/^[\[{]/.test(t)) return v;
+  try {
+    return JSON.parse(t);
+  } catch (e) {
+    return v;
+  }
+}
+
+/**
+ * 把工具参数翻译成宿主（BrowserAgent）合同里的参数名：
+ * - inject：schema 里用 script 写代码（js 在 schema 里是 click 的布尔开关），发给宿主时改名为 js；
+ * - menu_run：脚本 id 可写 id 或 script，命令写 cmd；
+ * - ua：""/default/reset/null 表示恢复默认（发 null）；
+ * - wait_for：没给 timeout_ms 时用 timeout，且不超过 30000；
+ * - script_values / config_set / inject.persist：对象参数允许是 JSON 字符串。
+ */
+function adaptParams(action: string, p: Record<string, any>): Record<string, any> {
+  const q: Record<string, any> = { ...p };
+  switch (action) {
+    case "inject":
+      if (typeof q.js !== "string") q.js = q.script ?? q.code ?? "";
+      delete q.script;
+      delete q.code;
+      if (q.persist !== undefined) q.persist = maybeJson(q.persist);
+      break;
+    case "menu_run":
+      if (q.script === undefined && q.id !== undefined) q.script = q.id;
+      if (q.cmd === undefined && q.value !== undefined) q.cmd = q.value;
+      break;
+    case "script_values":
+      if (q.set !== undefined) q.set = maybeJson(q.set);
+      if (typeof q.delete === "string") {
+        const d = maybeJson(q.delete);
+        q.delete = Array.isArray(d) ? d : String(q.delete).split(/[,，\s]+/).filter(Boolean);
+      }
+      break;
+    case "config_set":
+      q.patch = maybeJson(q.patch);
+      break;
+    case "ua":
+      if (q.ua === undefined || q.ua === null || /^(|null|default|reset|默认)$/i.test(String(q.ua).trim())) q.ua = null;
+      break;
+    case "wait_for": {
+      let ms = Number(q.timeout_ms);
+      if (!ms) ms = Number(q.timeout) || 15000;
+      q.timeout_ms = Math.max(0, Math.min(ms, 30000));
+      q.timeout = q.timeout_ms + 5000; // 宿主整体超时要比等待时间长
+      break;
+    }
+  }
+  if (MANAGE.has(action)) q.snapshot = false;
+  return q;
+}
+
+/** 客户端等宿主的时间（毫秒） */
+function clientTimeout(action: string, p: Record<string, any>): number {
+  const t = Math.min(Number(p.timeout) || 20000, 120000);
+  let extra = 0;
+  if (action === "wait") extra = Math.min(Number(p.ms) || 0, 60000);
+  if (action === "wait_for") extra = Math.min(Number(p.timeout_ms) || 0, 30000);
+  if (SLOW.has(action)) extra = Math.max(extra, 90000);
+  return t + extra + 30000;
+}
+
+/** 旧宿主不认识新动作时给出提示 */
+function unknownHint(action: string, msg: string): string {
+  return MANAGE.has(action) && /未知操作/.test(msg) ? `${msg}（当前 PiMet 版本还不支持 ${action}，需要 1.9.0-beta.22 及以上）` : msg;
+}
 
 function readToken(): string {
   try {
@@ -217,9 +298,8 @@ function hostError(msg: string): BrowserError {
 
 async function call(action: string, params: Record<string, any>, signal?: AbortSignal, clientMs?: number): Promise<any> {
   if (signal?.aborted) throw new BrowserError("已中止");
-  const t = Math.min(Number(params.timeout) || 20000, 120000);
-  const extra = action === "wait" ? Math.min(Number(params.ms) || 0, 60000) : 0;
-  const r = await postBridge({ ...params, action: "browser", browser_action: action }, clientMs ?? t + extra + 30000, signal);
+  const p = adaptParams(action, params);
+  const r = await postBridge({ ...p, action: "browser", browser_action: action }, clientMs ?? clientTimeout(action, p), signal);
   if (!r.ok) {
     if (signal?.aborted || r.aborted) throw new BrowserError("已中止");
     if (r.timedOut) throw new BrowserError(`等待宿主响应超时（${action}），已发送取消`);
@@ -232,7 +312,7 @@ async function call(action: string, params: Record<string, any>, signal?: AbortS
     throw new BrowserError(`宿主返回无法解析：${r.body.slice(0, 300)}`);
   }
   if (j.success === false) {
-    const e = hostError(String(j.error ?? "操作失败"));
+    const e = hostError(unknownHint(action, String(j.error ?? "操作失败")));
     (e as any).url = j.url;
     throw e;
   }
@@ -577,6 +657,28 @@ function makeB(st: RunState, tab?: string): any {
     async call(action: string, params: Record<string, any> = {}) {
       return await go(action, params);
     },
+    // ---- 油猴脚本 / 调试（宿主 1.9.0-beta.22+）
+    /** 页面内查找文字，返回匹配数 */
+    async find(text: string) {
+      const j = await go("find", { text: String(text) });
+      const n = j.count ?? j.matches ?? j.found;
+      return typeof n === "number" ? n : Number(String(j.result ?? "").match(/\d+/)?.[0] ?? 0);
+    },
+    /** 页面 console 日志和 JS 错误（最近 max 条） */
+    async console(max: number = 100, opts: { clear?: boolean } = {}) {
+      const j = await go("console", { max, ...opts });
+      return j.logs ?? j.console ?? j.result ?? [];
+    },
+    /** 用户脚本列表 */
+    async scripts() {
+      const j = await go("scripts", {});
+      return j.scripts ?? j.result ?? [];
+    },
+    /** 在当前页注入 JS；persist {name, match} 时安装成用户脚本 */
+    async inject(js: string, persist?: { name: string; match: string | string[] }) {
+      const j = await go("inject", persist ? { js, persist } : { js });
+      return j.result ?? "";
+    },
   };
   b.type = b.fill;
   b.eval = b.js;
@@ -674,9 +776,27 @@ async function runCode(code: string, timeoutSec: number, tab: string | undefined
 
 // ------------------------------------------------------------------ 单步结果
 
-function formatStep(j: any): { text: string; image?: { data: string; mimeType: string } } {
+const PLAIN_KEYS = new Set(["success", "result", "url", "title", "tab", "snapshot", "image", "mime", "req_id", "loaded", "http_status", "load_error"]);
+
+/** 管理类动作：把宿主返回的数据字段原样列出（字段名以宿主为准，不做假设） */
+function dataFields(j: any): string {
+  const out: string[] = [];
+  for (const k of Object.keys(j || {})) {
+    if (PLAIN_KEYS.has(k)) continue;
+    const v = j[k];
+    if (typeof v === "string") out.push(v.includes("\n") || v.length > 120 ? `${k}:\n${v}` : `${k}: ${v}`);
+    else out.push(`${k}: ${show(v)}`);
+  }
+  return out.join("\n");
+}
+
+function formatStep(j: any, action = ""): { text: string; image?: { data: string; mimeType: string } } {
   const parts: string[] = [];
   if (j.result !== undefined) parts.push(String(j.result));
+  if (MANAGE.has(action) || action === "status") {
+    const d = dataFields(j);
+    if (d) parts.push(d);
+  }
   const hints = hostHints(j);
   if (hints.length) parts.push(hints.join("\n"));
   if (j.snapshot !== undefined) parts.push(String(j.snapshot));
@@ -695,35 +815,68 @@ export default function (pi: ExtensionAPI) {
       "操控 PiMet 手机上的「Pi 浏览器」（真实 Android WebView，用户能看到并随时接手）。用于需要真正打开网页的任务：动态页面、登录后的网站、填表、点按钮、看本地页面。" +
       "用法细节、常见坑和出错时怎么读轨迹见 pimet-browser 技能，第一次用前先读它。\n" +
       "【多步优先 action=run】code 是 async 函数体，用 b 操作：b.open b.snapshot b.click b.fill b.select b.press b.scroll b.back b.wait b.waitFor(选择器或函数) " +
-      "b.js(fn, ...args)（提取数据首选，fn 在页面里运行，参数经 JSON 传入）b.screenshot b.log b.tool('站点/工具名',args) b.tab('user') b.newTab(url)；return 结果。出错会给出错位置、当前网址和最后几步轨迹。\n" +
+      "b.js(fn, ...args)（提取数据首选，fn 在页面里运行，参数经 JSON 传入）b.screenshot b.log b.tool('站点/工具名',args) b.tab('user') b.newTab(url) b.find b.console b.scripts b.inject b.call(action,参数)；return 结果。出错会给出错位置、当前网址和最后几步轨迹。\n" +
       "【网站任务先 action=tools】看 sites/ 下的现成工具和 notes.md；成功后沉淀工具和经验。\n" +
       "【单步探索】open | snapshot(mode=interactive 省 token) | click(ref/text) | type(ref,text) | select | press | scroll | back | forward | reload | wait | eval | screenshot | status | tabs | new_tab | switch_tab | close_tab | downloads | show | hide | home | close | reload_ui。ref 如 e3，来自快照。\n" +
+        "【油猴脚本】scripts | script_get(id) | script_install(code 或 url) | script_enable(id,on) | script_remove(id) | script_update(id?) | script_values(id,set?,delete?) | menu_commands | menu_run(id,cmd) | inject(script,persist?)；调试用 console、find、wait_for。\n" +
+        "【自定义浏览器】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?) | clear_data(what)。写脚本和改配置前先读 pimet-browser 技能的「油猴脚本」「自定义浏览器」章节；script_remove、clear_data 前先征得用户同意。\n" +
       "默认在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show 打断用户。" +
       "返回「用户已叫停」或「用户正在操作标签」（user_takeover）时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
     parameters: Type.Object({
       action: Type.String({
         description:
-          "run | tools | open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | tabs | new_tab | switch_tab | close_tab | downloads",
+          "run | tools | open | snapshot | click | type | select | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | tabs | new_tab | switch_tab | close_tab | downloads" +
+          " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
+          " | config_get | config_set | ua | desktop | zoom | cookies | clear_data",
       }),
-      code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果" })),
+      code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果；script_install 时是完整用户脚本源码（含 ==UserScript== 头）" })),
       tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tabs 列出的 id（如 t3）" })),
       site: Type.Optional(Type.String({ description: "tools 时只看某个站点，并附上它的 notes.md" })),
-      url: Type.Optional(Type.String({ description: "open / new_tab 的网址或搜索词" })),
+      url: Type.Optional(Type.String({ description: "open / new_tab 的网址或搜索词；script_install 的脚本网址（.user.js）；cookies 的网址" })),
       ref: Type.Optional(Type.String({ description: "元素编号，如 e12（来自快照）" })),
-      text: Type.Optional(Type.String({ description: "type 要输入的文字；click 时按包含的文字查找元素；wait 时等待出现的文字" })),
-      clear: Type.Optional(Type.Boolean({ description: "type 前清空原内容，默认 true" })),
+      text: Type.Optional(Type.String({ description: "type 要输入的文字；click 时按包含的文字查找元素；wait / wait_for 时等待出现的文字；find 要查找的文字" })),
+      clear: Type.Optional(Type.Boolean({ description: "type 前清空原内容，默认 true；console 时读完清空日志" })),
       submit: Type.Optional(Type.Boolean({ description: "type 后提交表单 / 回车" })),
       value: Type.Optional(Type.String({ description: "select 的选项值或文字" })),
       key: Type.Optional(Type.String({ description: "press 的按键" })),
       direction: Type.Optional(Type.String({ description: "scroll 方向 up/down/left/right，默认 down" })),
       amount: Type.Optional(Type.Number({ description: "scroll 滚动的屏数，默认 0.8" })),
-      script: Type.Optional(Type.String({ description: "eval 执行的 JS：表达式或带 return 的语句体，可用 await" })),
+      script: Type.Optional(Type.String({ description: "eval 执行的 JS：表达式或带 return 的语句体，可用 await；inject 要注入当前页的 JS" })),
       ms: Type.Optional(Type.Number({ description: "wait 的毫秒数" })),
       js: Type.Optional(Type.Boolean({ description: "click 时用 JS 点击而不是模拟真实触摸（被遮挡或真实点击无效时用）" })),
       mode: Type.Optional(Type.String({ description: "快照模式：full（含页面文字）| interactive（只要可交互元素）。open/snapshot 默认 full，点击输入等变更操作默认 interactive" })),
       snapshot: Type.Optional(Type.Boolean({ description: "单步操作后是否返回快照，默认 true" })),
       max_chars: Type.Optional(Type.Number({ description: "快照最大字符数，open/snapshot 默认 6000，变更操作默认 2500" })),
       timeout: Type.Optional(Type.Number({ description: "单步：等待加载 / wait / eval 的超时毫秒，默认 20000，最大 120000；run：整段代码的超时秒数，默认 120，最大 600" })),
+      id: Type.Optional(Type.String({ description: "用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
+      on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版 / false 手机版" })),
+      set: Type.Optional(
+        Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })], {
+          description: "script_values：要写入的值 {键: 值}；cookies：要设置的 Cookie 字符串（如 \"a=1; path=/\"）",
+        })
+      ),
+      delete: Type.Optional(Type.Array(Type.String(), { description: "script_values：要删除的键" })),
+      cmd: Type.Optional(Type.String({ description: "menu_run 的菜单命令 id（menu_commands 列出）" })),
+      max: Type.Optional(Type.Number({ description: "console 返回最近多少条，默认 100" })),
+      patch: Type.Optional(
+        Type.Union([Type.Object({}, { additionalProperties: true }), Type.String()], {
+          description: "config_set：合并进 config.json 的字段，如 {\"theme\":{...}} {\"buttons\":[...]} {\"home\":\"...\"} {\"showButtonBar\":true}；buttons 会整体替换，先 config_get 再改",
+        })
+      ),
+      ua: Type.Optional(Type.String({ description: "ua：自定义 User-Agent 字符串；空字符串或 default = 恢复默认" })),
+      percent: Type.Optional(Type.Number({ description: "zoom：页面缩放百分比，如 100、125" })),
+      what: Type.Optional(Type.String({ description: "clear_data：cookies | cache | storage | all" })),
+      selector: Type.Optional(Type.String({ description: "wait_for：等待出现的 CSS 选择器（与 text 二选一）" })),
+      timeout_ms: Type.Optional(Type.Number({ description: "wait_for 的超时毫秒，默认 15000，最大 30000" })),
+      persist: Type.Optional(
+        Type.Object(
+          {
+            name: Type.String({ description: "脚本名" }),
+            match: Type.Union([Type.String(), Type.Array(Type.String())], { description: "@match 规则，如 https://example.com/*" }),
+          },
+          { description: "inject：同时安装成用户脚本，以后匹配的页面自动运行" }
+        )
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const { action, ...rest } = params as Record<string, any>;
@@ -744,9 +897,10 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      const req: Record<string, any> = { ...rest };
-      delete req.code;
+      let req: Record<string, any> = { ...rest };
+      if (action !== "script_install" && action !== "inject") delete req.code;
       delete req.site;
+      req = adaptParams(String(action), req);
       if (MUTATING.has(String(action)) && req.snapshot !== false) {
         if (req.mode === undefined) req.mode = "interactive";
         if (req.max_chars === undefined) req.max_chars = 2500;
@@ -761,9 +915,7 @@ export default function (pi: ExtensionAPI) {
         }
         req.fn = true;
       }
-      const t = Math.min(Number(req.timeout) || 20000, 120000);
-      const extra = action === "wait" ? Math.min(Number(req.ms) || 0, 60000) : 0;
-      const r = await postBridge({ ...req, action: "browser", browser_action: action }, t + extra + 30000, signal);
+      const r = await postBridge({ ...req, action: "browser", browser_action: action }, clientTimeout(String(action), req), signal);
       if (!r.ok) {
         if (r.aborted || signal?.aborted) return fail("已中止（已通知宿主取消该操作）");
         if (r.timedOut) return fail(`等待宿主响应超时（${action}），已发送取消`);
@@ -775,14 +927,14 @@ export default function (pi: ExtensionAPI) {
       } catch (e) {
         return fail(`宿主返回无法解析：${r.body.slice(0, 300)}`);
       }
-      if (j.success === false) return fail(`失败: ${j.error ?? r.body}${j.url ? `\n网址: ${j.url}` : ""}`);
+      if (j.success === false) return fail(`失败: ${unknownHint(String(action), String(j.error ?? r.body))}${j.url ? `\n网址: ${j.url}` : ""}`);
       if (isEval) {
         const v = j.result;
         if (typeof v === "string" && (v.startsWith("脚本出错: ") || /^脚本超时（\d+ms）未返回/.test(v))) return fail(`失败: ${v}`);
         const d = decodeEnvelope(v);
         if (d.enveloped) j.result = show(d.value);
       }
-      const f = formatStep(j);
+      const f = formatStep(j, String(action));
       const content: any[] = [{ type: "text", text: truncate(f.text) }];
       if (f.image) content.push({ type: "image", data: f.image.data, mimeType: f.image.mimeType });
       return { content, details: { action, tab: j.tab ?? tab, ok: true } };

@@ -1,6 +1,6 @@
 ---
 name: pimet-browser
-description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：多步任务用 browser 的 run 代码模式，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于改工具栏按钮、配色、首页，写油猴风格用户脚本，制作网页小工具。
+description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定制它。操控网页（打开、搜索、提取、填表）时先读这里：多步任务用 browser 的 run 代码模式，做任务前先查 sites/ 里的站点工具和经验，成功后沉淀成工具。也用于写/安装/调试油猴（Tampermonkey）用户脚本（GM API、菜单命令、console），改工具栏按钮、配色、首页、UA、桌面模式、缩放、Cookie，制作网页小工具。
 ---
 
 # Pi 浏览器
@@ -47,6 +47,10 @@ description: 用 PiMet 手机上的「Pi 浏览器」完成网页任务，并定
 | `b.sleep(ms)` / `b.log(...)` | 等待 / 记录输出 |
 | `b.tool("站点/工具名", args)` | 调用站点工具 |
 | `b.tab("user")` / `await b.newTab(url)` | 换一个标签操作（见「标签页」） |
+| `b.find(文字)` | 页面内查找，返回匹配数 |
+| `b.console(max, {clear})` | 页面 console 日志和 JS 错误（调试用户脚本） |
+| `b.scripts()` / `b.inject(js, {name, match}?)` | 用户脚本列表 / 往当前页注入 JS（带第二个参数时同时安装成用户脚本） |
+| `b.call(action, 参数)` | 发送任意单步 action（参数与 browser 工具相同，如 `b.call("zoom", {percent: 125})`） |
 
 ref（`e12`）来自快照，页面变了要重新 `b.snapshot()`。在 run 里更稳的做法是：**用 `b.js(fn)` 按 CSS 选择器直接提取**，用 `b.fill`/`b.click` 处理需要真实输入的地方，用 `b.waitFor` 代替固定的 `b.sleep`。每个方法出错都会抛异常；没有捕获时 run 结束并返回出错位置、当前网址和轨迹。
 
@@ -152,7 +156,9 @@ notes.md 写法：短条目，每条是一个可执行的结论，例如「搜�
 ```
 /root/pimet-browser/
   config.json          工具栏按钮、配色、首页
-  scripts/*.js         用户脚本（油猴风格），按网址自动注入网页
+  scripts/<id>.user.js 用户脚本（油猴脚本），按网址自动注入网页；旧的 scripts/*.js 也兼容
+  scripts.json         脚本启停状态和安装来源（由 🧩 脚本管理 / script_* 动作维护，不要手改）
+  script-data/<id>.json  脚本用 GM_setValue 存的值
   pages/<id>/index.html  你做的页面/小工具（可多个，可用 window.pimet 原生接口）
   pages/<id>/app.json    可选：{"name":"记账本","icon":"💰","description":"一句话"}
   home.html            可选：自定义首页（不存在时显示内置首页 + pages 列表）
@@ -190,25 +196,143 @@ notes.md 写法：短条目，每条是一个可执行的结论，例如「搜�
 - `home`：首页地址，留空则用 `home.html` 或内置首页。
 - JSON 写错时用户会看到提示，原配置不生效。改之前先读出原文件，在原基础上修改，不要删掉用户已有的按钮。
 
-### 用户脚本 scripts/*.js
+### 油猴脚本（用户脚本）
 
-和油猴（Tampermonkey）脚本一样，用注释头声明匹配的网址，网页加载完成后注入：
+顶栏 🧩 是油猴式的脚本管理器：用户在里面看到每个脚本的开关、当前页是否生效、脚本注册的菜单命令，也能编辑、删除、检查更新。打开以 `.user.js` 结尾的网址会弹出安装确认。你用 `browser` 的下面这些 action 做同样的事：
+
+| action | 参数 | 作用 |
+|---|---|---|
+| `scripts` | | 列出脚本：id、名称、版本、是否启用、是否匹配当前页、run-at |
+| `script_get` | `id` | 读脚本源码和信息 |
+| `script_install` | `code` 或 `url` | 安装/覆盖（同 `@namespace`+`@name` 视为同一脚本，覆盖更新） |
+| `script_enable` | `id`, `on` | 启用 / 停用（刷新页面后生效） |
+| `script_remove` | `id` | 删除脚本及其存储的值（**先征得用户同意**） |
+| `script_update` | `id`（不填=全部） | 按 `@updateURL`/`@downloadURL`/安装地址检查新版本并更新（比较 `@version`） |
+| `script_values` | `id`, `set?`, `delete?` | 查看 / 写入 / 删除脚本的 GM 存储值 |
+| `menu_commands` / `menu_run` | `id`, `cmd` | 列出当前页脚本注册的菜单命令 / 执行一个 |
+| `inject` | `script`, `persist?` | 往当前页临时注入 JS；带 `persist: {name, match}` 时同时安装成用户脚本 |
+| `console` | `max?`, `clear?` | 当前页的 console 输出和 JS 报错（每页最多 300 条） |
+| `find` / `wait_for` | `text` / `selector` 或 `text`, `timeout_ms`（≤30000） | 页面内查找文字返回匹配数 / 等元素或文字出现 |
+
+**写脚本的流程**：先 `open` 目标网站，用 `snapshot`、`b.js` 摸清结构和选择器 → 用 `inject`（不带 persist）在当前页试跑 → `console` 看报错 → 满意后 `script_install`（`code` 传完整源码）→ `reload` 页面，再 `console` + `snapshot` 验证 → 告诉用户脚本名和在 🧩 里怎么开关。改已有脚本：`script_get` 取源码，改完 `script_install` 覆盖，记得把 `@version` 调高。
+
+模板：
 
 ```js
 // ==UserScript==
-// @name   知乎去登录弹窗
-// @match  https://www.zhihu.com/*
-// @match  https://zhuanlan.zhihu.com/*
-// @exclude https://www.zhihu.com/signin*
+// @name         示例：页面加按钮
+// @namespace    pimet
+// @version      1.0.0
+// @description  一句话说明
+// @match        https://example.com/*
+// @exclude      https://example.com/login*
+// @run-at       document-idle
+// @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
-const kill = () => document.querySelectorAll('.Modal-wrapper').forEach(e => e.remove());
-kill(); new MutationObserver(kill).observe(document.body, { childList: true, subtree: true });
+(function () {
+  'use strict';
+  // 你的代码
+})();
 ```
 
-- `@match` / `@include`：`*` 匹配任意字符；用 `/.../` 包起来表示正则。`@exclude` 排除。没有 `@match` 的脚本不会注入。
-- 脚本运行在网页里（页面加载完成后），可以改样式、加按钮、删广告、自动填写、提取数据等。
-- 网页里的脚本**拿不到** `window.pimet`（防止网站借此控制手机）。需要原生能力时做成 pages 页面。
-- 文件名决定注入顺序。要停用脚本，把它改名成 `.js.off` 或删除。
+- **匹配**：`@match` 用 Chrome 匹配规则（`*://*.example.com/*`、`https://m.example.com/path/*`、`<all_urls>`）；`@include`/`@exclude` 支持通配 `*` 和 `/正则/`。没有任何 `@match`/`@include` 的脚本不会注入。
+- **`@run-at`**：`document-start`（页面脚本运行前，适合拦截/改写变量，此时 `document.body` 可能还不存在）、`document-end`（DOM 可用，图片等还在加载）、`document-idle`（默认，加载完成后）。
+- **GM API**（每个脚本独立作用域，`GM.*` 是 Promise 版）：`GM_getValue/GM_setValue/GM_deleteValue/GM_listValues`（持久存储，按脚本隔离）、`GM_addStyle(css)`、`GM_addElement(tag, attrs)`、`GM_xmlhttpRequest({method, url, headers, data, responseType, onload, onerror})`（跨域，由原生发请求；用 `@connect 域名` 声明要访问的域）、`GM_openInTab(url, background)`、`GM_setClipboard(text)`、`GM_notification(text, title)`、`GM_registerMenuCommand(名称, fn)`/`GM_unregisterMenuCommand`（出现在 🧩 面板的菜单命令组）、`GM_getResourceText/GM_getResourceURL`（配合 `@resource 名 网址`）、`GM_download(url, name)`、`GM_log`、`GM_info`、`unsafeWindow`。
+- **`@require 网址`**：首次注入前下载并缓存，之后离线可用。
+- 脚本里**拿不到** `window.pimet`（防止网站借此控制手机）；需要容器能力时做成 pages 页面，或用 `GM_registerMenuCommand` 配合 `askPi` 按钮。
+- `@noframes` 可写可不写，目前只注入主框架。
+- 单页应用（SPA）切换路由不会重新注入：脚本里用 `MutationObserver` 或监听 `popstate`/定时检查网址来处理。
+- 去广告、隐藏元素优先用 `GM_addStyle` 写 CSS（`display:none !important`），比删 DOM 稳定、不闪烁。
+
+常见示例：
+
+```js
+// ==UserScript==
+// @name     去广告：示例站
+// @namespace pimet
+// @version  1.0.0
+// @match    *://*.example.com/*
+// @run-at   document-start
+// @grant    GM_addStyle
+// ==/UserScript==
+GM_addStyle('.ad, [id^="ad-"], .banner-ad, iframe[src*="ads"] { display: none !important; }');
+```
+
+```js
+// ==UserScript==
+// @name     深色模式
+// @namespace pimet
+// @version  1.0.0
+// @match    https://example.com/*
+// @run-at   document-start
+// @grant    GM_addStyle
+// ==/UserScript==
+GM_addStyle('html { filter: invert(1) hue-rotate(180deg); background: #fff; } img, video, picture, canvas { filter: invert(1) hue-rotate(180deg); }');
+```
+
+```js
+// ==UserScript==
+// @name     自动签到：示例站（每天一次）
+// @namespace pimet
+// @version  1.0.0
+// @match    https://example.com/*
+// @grant    GM_getValue
+// @grant    GM_setValue
+// @grant    GM_notification
+// ==/UserScript==
+(async () => {
+  const today = new Date().toDateString();
+  if (GM_getValue('last') === today) return;
+  const btn = await new Promise((ok) => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      const b = [...document.querySelectorAll('button, a')].find((e) => /签到/.test(e.textContent));
+      if (b || Date.now() - t0 > 10000) { clearInterval(iv); ok(b); }
+    }, 500);
+  });
+  if (!btn) return;
+  btn.click();
+  GM_setValue('last', today);
+  GM_notification('已自动签到', '签到');
+})();
+```
+
+```js
+// ==UserScript==
+// @name     页面加按钮：复制标题和链接
+// @namespace pimet
+// @version  1.0.0
+// @match    *://*/*
+// @grant    GM_setClipboard
+// @grant    GM_registerMenuCommand
+// ==/UserScript==
+const copy = () => GM_setClipboard(document.title + '\n' + location.href);
+GM_registerMenuCommand('复制标题和链接', copy);
+const btn = document.createElement('button');
+btn.textContent = '📋';
+btn.style.cssText = 'position:fixed;right:12px;bottom:80px;z-index:2147483647;width:44px;height:44px;border-radius:22px;border:0;background:#1a73e8;color:#fff;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.3)';
+btn.onclick = copy;
+document.body.appendChild(btn);
+```
+
+注意：自动签到、自动点击类脚本只对用户自己的账号、按用户要求做；不要写绕过验证码、支付确认或网站风控的脚本。
+
+### 自定义浏览器（设置类 action）
+
+| action | 参数 | 作用 |
+|---|---|---|
+| `config_get` | | 读 config.json（theme / home / buttons / showButtonBar …） |
+| `config_set` | `patch` | 把字段合并写入 config.json 并立即生效；数组（如 `buttons`）整体替换，所以先 `config_get` 再在原基础上改 |
+| `ua` | `ua` | 设置自定义 User-Agent；`""` 或 `"default"` 恢复默认 |
+| `desktop` | `on` | 桌面版网页（true）/ 手机版（false） |
+| `zoom` | `percent` | 页面缩放，如 `125` |
+| `cookies` | `url`, `set?` | 读某网址的 Cookie / 设置一条（如 `"theme=dark; path=/"`） |
+| `clear_data` | `what` | 清除 `cookies` / `cache` / `storage` / `all`（会让用户退出登录，**先征得用户同意**） |
+
+`status` 还会返回脚本数量、当前 UA 模式和缩放。直接改 `/root/pimet-browser/config.json` 文件也行（改完调 `reload_ui`）；用 `config_set` 更省事，也不会写坏 JSON。
 
 ### 自定义页面 pages/<id>/
 

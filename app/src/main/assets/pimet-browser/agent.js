@@ -881,6 +881,37 @@
     return { ok: true, v: found };
   };
 
+  function countIn(t, text) {
+    if (!t || !text) return 0;
+    var n = 0, i = t.indexOf(text);
+    while (i >= 0 && n < 10000) { n++; i = t.indexOf(text, i + text.length); }
+    return n;
+  }
+
+  /** find 动作可用：页面（含同源 iframe 和 shadowRoot）里某段文字出现的次数（区分大小写） */
+  A.findText = function (text) {
+    text = String(text == null ? '' : text);
+    if (!text) return { ok: false, error: '缺少要查找的文字' };
+    var n = countIn(itext(document.body), text);
+    walkRoots(function (root, el, isStart) {
+      if (root === document || !isStart) return;
+      n += countIn(root.body ? itext(root.body) : root.textContent, text);
+    }, null);
+    return { ok: true, v: n };
+  };
+
+  /** wait_for 动作可用：CSS 选择器在页面（含同源 iframe 和 shadowRoot）里是否存在且可见 */
+  A.hasSelector = function (sel) {
+    var found = false, bad = null;
+    walkRoots(function (root, el, isStart) {
+      if (found || bad || !isStart || !root.querySelectorAll) return;
+      var list;
+      try { list = root.querySelectorAll(sel); } catch (e) { bad = '选择器不合法: ' + sel; return; }
+      if (arrFind(list, function (e) { return visible(e); })) found = true;
+    }, null);
+    return bad ? { ok: false, error: bad } : { ok: true, v: found };
+  };
+
   /** 供宿主判断 eval 的 script 是表达式还是语句体 */
   A.evalExpr = function (src) {
     try { new Function('return (' + src + '\n)'); return { ok: true, expr: true }; } catch (e) { return { ok: true, expr: false }; }
