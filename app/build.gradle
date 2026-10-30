@@ -10,8 +10,8 @@ android {
         applicationId "com.xm486.pimet"
         minSdk 26
         targetSdk 28
-        versionCode 114
-        versionName "1.9.0-beta.22"
+        versionCode 115
+        versionName "1.9.0-beta.23"
 
         vectorDrawables {
             useSupportLibrary true
@@ -67,6 +67,7 @@ dependencies {
 
     // Shizuku API 与 Provider 官方库
     // 悬浮终端：Termux 终端引擎（真 PTY + xterm 渲染），Apache-2.0
+    implementation 'androidx.webkit:webkit:1.12.1'
     implementation 'com.github.termux.termux-app:terminal-view:v0.118.0'
     implementation 'com.github.termux.termux-app:terminal-emulator:v0.118.0'
     implementation 'dev.rikka.shizuku:api:13.1.5'
