@@ -616,7 +616,8 @@ public final class BrowserAgent {
                     BrowserCustomizer cz = cust(win);
                     JSONObject cfg = cz.config();
                     JSONArray pa = cfg.optJSONArray("panels");
-                    out.put("ui_version", cfg.optInt("version", 1)).put("panels", pa == null ? 0 : pa.length());
+                    // ui_version = 配置修订号（每次成功写入/外部修改被接受 +1），方便 Pi 判断配置是否变了
+                    out.put("ui_version", cz.revision()).put("ui_schema_version", cfg.optInt("version", 1)).put("panels", pa == null ? 0 : pa.length());
                 } catch (AbortException a) {
                     throw a;
                 } catch (Exception e) {
@@ -1639,13 +1640,8 @@ public final class BrowserAgent {
                 File dir = backupDir(c);
                 File f = dir == null ? null : new File(dir, name.endsWith(".json") ? name : name + ".json");
                 if (f == null || !f.isFile()) return err("没有备份 " + name + "（用 ui_backups 查看）");
-                JSONObject snap;
-                try {
-                    snap = new JSONObject(new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8));
-                } catch (Exception e) {
-                    return err("备份文件损坏：" + friendly(e));
-                }
-                final JSONObject sn = snap;
+                // 交给 M1 按备份名读取（它校验文件名，且不会把内容恰好像 {name:..} 的备份误判）
+                final JSONObject sn = new JSONObject().put("name", f.getName());
                 return uiWrite("从备份 " + f.getName() + " 恢复", () -> c.restore(sn));
             }
             case "ui_reload":
@@ -1659,7 +1655,7 @@ public final class BrowserAgent {
             case "panel_write": {
                 String id = req.optString("id", "").trim();
                 String html = req.optString("html", "");
-                if (id.isEmpty() || !id.matches("[A-Za-z0-9._-]+") || id.startsWith(".")) return err("panel_write 需要 id（只允许 A-Z a-z 0-9 . _ -）");
+                if (!id.matches("[A-Za-z0-9_-]{1,64}")) return err("panel_write 需要 id（只允许 A-Z a-z 0-9 _ -，1~64 位）");
                 if (html.isEmpty()) return err("panel_write 需要 html");
                 String title = req.optString("title", id);
                 String icon = req.optString("icon", "🧩");
@@ -1685,10 +1681,16 @@ public final class BrowserAgent {
                 return gone ? ok().put("result", "已删除面板 " + id) : err("没有面板 " + id);
             }
             case "action_run": {
-                JSONObject act = req.optJSONObject("action");
-                if (act == null) return err("action_run 需要 action（如 {type:\"builtin\",id:\"reload\"}）");
+                // M4 用 ui_action 传（工具参数 action 已是动作名）；兼容直接给对象或 JSON 字符串
+                JSONObject act = req.optJSONObject("ui_action");
+                if (act == null && req.opt("ui_action") instanceof String) {
+                    try { act = new JSONObject(req.optString("ui_action")); } catch (Exception e) { return err("ui_action 不是有效 JSON：" + friendly(e)); }
+                }
+                if (act == null) act = req.optJSONObject("action");
+                if (act == null) return err("action_run 需要 ui_action（如 {type:\"builtin\",id:\"reload\"}）");
+                final JSONObject runAct = act;
                 if (act.optString("type", "").isEmpty()) return err("action 缺少 type（builtin/open/js/script_menu/panel/askpi/seq）");
-                onMain(() -> { win.runAction(act); return null; }, 8000);
+                onMain(() -> { win.runAction(runAct); return null; }, 8000);
                 return ok().put("result", "已执行 " + act.optString("type") + (act.has("id") ? " " + act.optString("id") : ""));
             }
             case "site_set": {

@@ -4996,7 +4996,9 @@ public final class FloatingApps {
         if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return null;
         try {
             String r = customizer().redirect(url);
-            return r != null && !r.isEmpty() && !r.equals(url) ? r : null;
+            // 只允许改写成 http(s)：不让规则把网页导到 file:// / javascript: / intent: 等
+            if (r == null || r.equals(url) || !(r.startsWith("http://") || r.startsWith("https://"))) return null;
+            return r;
         } catch (Throwable e) {
             return null;
         }
@@ -5296,6 +5298,14 @@ public final class FloatingApps {
                 return true;
             }
 
+            /** 面板只能加载 appsDir 下的本地文件：PiMetUI 会注入到所有 frame，远程 iframe / 脚本不能借它调接口 */
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
+                String u = req != null && req.getUrl() != null ? req.getUrl().toString() : "";
+                if (u.startsWith(base) && !u.contains("/../") || u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("about:")) return null;
+                return new android.webkit.WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", null, new java.io.ByteArrayInputStream(new byte[0]));
+            }
+
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 panelTrusted = url != null && url.startsWith(base);
@@ -5544,14 +5554,8 @@ public final class FloatingApps {
                 new AlertDialog.Builder(host).setTitle("配置有错误，未保存").setMessage(TextUtils.join("\n", errs)).setPositiveButton("好", null).show();
                 return;
             }
-            try {
-                customizer().restore(cfg);
-                Toast.makeText(ctx, "已保存，立即生效", Toast.LENGTH_SHORT).show();
-                d.dismiss();
-                reloadUi();
-            } catch (Throwable e) {
-                new AlertDialog.Builder(host).setTitle("保存失败").setMessage(String.valueOf(e.getMessage())).setPositiveButton("好", null).show();
-            }
+            final JSONObject toSave = cfg;
+            uiWriteAsync("已保存，立即生效", "保存失败", () -> customizer().restore(toSave), d::dismiss);
         };
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         blp.setMargins(0, 0, dp(6), 0);
@@ -5559,14 +5563,7 @@ public final class FloatingApps {
         row.addView(panelButton("恢复默认", p, v -> new AlertDialog.Builder(host).setTitle("恢复默认外观？")
                 .setMessage("ui.json 会恢复成默认值（会先自动备份）。")
                 .setPositiveButton("恢复", (dd, w) -> {
-                    try {
-                        customizer().reset(null);
-                        Toast.makeText(ctx, "已恢复默认", Toast.LENGTH_SHORT).show();
-                        d.dismiss();
-                        reloadUi();
-                    } catch (Throwable e) {
-                        Toast.makeText(ctx, "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-                    }
+                    uiWriteAsync("已恢复默认", "恢复失败", () -> customizer().reset(null), d::dismiss);
                 }).setNegativeButton("取消", null).show()), new LinearLayout.LayoutParams(blp));
         row.addView(panelButton("从备份恢复", p, v -> showUiBackups(d)), new LinearLayout.LayoutParams(blp));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -5578,6 +5575,28 @@ public final class FloatingApps {
         }
         d.show();
         if (w != null) w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private interface UiOp { void run() throws Exception; }
+
+    /** ui.json 写入（含自动备份）在后台线程做；成功后回主线程提示并热重载 */
+    private void uiWriteAsync(String okMsg, String failTitle, UiOp op, Runnable onOk) {
+        new Thread(() -> {
+            Throwable err = null;
+            try { op.run(); } catch (Throwable e) { err = e; }
+            final Throwable fe = err;
+            MAIN.post(() -> {
+                if (fe == null) {
+                    if (okMsg != null) Toast.makeText(ctx, okMsg, Toast.LENGTH_SHORT).show();
+                    if (onOk != null) onOk.run();
+                    reloadUi();
+                } else if (host != null && !host.isFinishing()) {
+                    new AlertDialog.Builder(host).setTitle(failTitle).setMessage(String.valueOf(fe.getMessage())).setPositiveButton("好", null).show();
+                } else {
+                    Toast.makeText(ctx, failTitle + "：" + fe.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
+        }, "pimet-ui-write").start();
     }
 
     /** ui.bak/<时间>.json，新的在前 */
@@ -5595,14 +5614,9 @@ public final class FloatingApps {
         for (int i = 0; i < fs.length; i++) labels[i] = f.format(new java.util.Date(fs[i].lastModified())) + "  " + fs[i].getName();
         new AlertDialog.Builder(host).setTitle("从备份恢复")
                 .setItems(labels, (d, w) -> {
-                    try {
-                        customizer().restore(new JSONObject(readFile(fs[w])));
-                        Toast.makeText(ctx, "已恢复备份", Toast.LENGTH_SHORT).show();
-                        if (parent != null) parent.dismiss();
-                        reloadUi();
-                    } catch (Throwable e) {
-                        Toast.makeText(ctx, "恢复失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-                    }
+                    final String bn = fs[w].getName();
+                    uiWriteAsync("已恢复备份", "恢复失败", () -> customizer().restore(new JSONObject().put("name", bn)),
+                            () -> { if (parent != null) parent.dismiss(); });
                 })
                 .setNegativeButton("取消", null).show();
     }
@@ -6036,12 +6050,14 @@ public final class FloatingApps {
     private void setBallEnabled(boolean on) {
         prefs().edit().putBoolean("ball_on", on).apply();
         if (uiHas("ball", "enabled")) {
-            try {
-                customizer().set("/ball/enabled", on);
-            } catch (Throwable e) {
-                Log.w(TAG, "set ball.enabled failed", e);
-            }
-            loadUiCfg();
+            final BrowserCustomizer cz = customizer();
+            new Thread(() -> {
+                try {
+                    cz.set("/ball/enabled", on);
+                } catch (Throwable e) {
+                    Log.w(TAG, "set ball.enabled failed", e);
+                }
+            }, "pimet-ui-write").start(); // 写盘不放主线程；写完 addListener 会触发热重载
         }
         ballWrap.setVisibility(on ? View.VISIBLE : View.GONE);
         if (on) {
