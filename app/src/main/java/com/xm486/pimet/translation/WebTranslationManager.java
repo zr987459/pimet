@@ -42,6 +42,20 @@ public class WebTranslationManager {
 
     private static final String TAG = "WebTranslationManager";
     public static final ExecutorService THREAD_POOL = Executors.newFixedThreadPool(4);
+    /** AI 引擎（自定义 API / Pi 的模型 / 智能混合）单独的线程池：最多 6 批同时请求 */
+    private static final ExecutorService AI_POOL = Executors.newFixedThreadPool(6);
+    static final int AI_BATCH_MAX_ITEMS = 40;
+    static final int AI_BATCH_MAX_CHARS = 2500;
+    private static final int AI_READ_TIMEOUT_MS = 45000;
+
+    /** (引擎+模型+原文) → 译文 的内存 LRU，同页刷新 / 重复文本直接命中 */
+    private static final int CACHE_MAX = 3000;
+    private static final Map<String, String> CACHE = new LinkedHashMap<String, String>(256, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+            return size() > CACHE_MAX;
+        }
+    };
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     public interface TranslationCallback {
@@ -57,7 +71,7 @@ public class WebTranslationManager {
     private static volatile long sPiModelBackoffUntil = 0L;
     private static volatile String sPiModelBackoffReason = "";
     private static final long PI_MODEL_BACKOFF_MS = 3 * 60 * 1000L;
-    private static final int PI_MODEL_READ_TIMEOUT_MS = 45000;
+    private static final int PI_MODEL_READ_TIMEOUT_MS = AI_READ_TIMEOUT_MS;
 
     /**
      * 批量翻译核心分发入口
@@ -68,19 +82,41 @@ public class WebTranslationManager {
             return;
         }
         final Context app = context.getApplicationContext() != null ? context.getApplicationContext() : context;
-        THREAD_POOL.execute(() -> {
-            String engine = PiMetConfig.getTransEngine(app);
+        final String engine = PiMetConfig.getTransEngine(app);
+        ExecutorService pool = PiMetConfig.TRANS_ENGINE_FREE.equals(engine) ? THREAD_POOL : AI_POOL;
+        pool.execute(() -> {
+            // 先查缓存：整批命中就不发请求，部分命中只发没命中的
+            String prefix = cachePrefix(app, engine);
+            List<String> results = new ArrayList<>(texts.size());
+            List<Integer> missIdx = new ArrayList<>();
+            List<String> missTexts = new ArrayList<>();
+            synchronized (CACHE) {
+                for (int i = 0; i < texts.size(); i++) {
+                    String hit = CACHE.get(prefix + texts.get(i));
+                    results.add(hit);
+                    if (hit == null) {
+                        missIdx.add(i);
+                        missTexts.add(texts.get(i));
+                    }
+                }
+            }
+            if (missTexts.isEmpty()) {
+                if (callback != null) MAIN_HANDLER.post(() -> callback.onSuccess(results));
+                return;
+            }
             try {
-                List<String> results = executeTranslation(app, engine, texts);
+                List<String> got = executeTranslation(app, engine, missTexts);
+                fill(results, missIdx, missTexts, got, prefix);
                 if (callback != null) MAIN_HANDLER.post(() -> callback.onSuccess(results));
             } catch (Throwable t) {
                 Log.w(TAG, "Translation error with engine: " + engine + ", message: " + t.getMessage());
                 String err = describe(t);
-                // 指定了 AI / 自定义引擎但失败：再用免配置通道兜底一次
+                // 指定了 AI / 自定义引擎但失败：再用免配置通道兜底一次（兜底结果不进缓存）
                 if (!PiMetConfig.TRANS_ENGINE_FREE.equals(engine) && !PiMetConfig.TRANS_ENGINE_AUTO.equals(engine)) {
                     try {
-                        List<String> fallback = translateWithFreeChannel(texts);
-                        if (callback != null) MAIN_HANDLER.post(() -> callback.onSuccess(fallback));
+                        List<String> fallback = translateWithFreeChannel(missTexts);
+                        fill(results, missIdx, missTexts, fallback, null);
+                        if (callback != null) MAIN_HANDLER.post(() -> callback.onSuccess(results));
                         return;
                     } catch (Throwable t2) {
                         err = err + "；极速通道也失败：" + describe(t2);
@@ -90,6 +126,44 @@ public class WebTranslationManager {
                 if (callback != null) MAIN_HANDLER.post(() -> callback.onError(errMsg));
             }
         });
+    }
+
+    private static void fill(List<String> results, List<Integer> idx, List<String> src, List<String> got, String prefix) {
+        for (int k = 0; k < idx.size(); k++) {
+            String orig = src.get(k);
+            String tr = got != null && k < got.size() && got.get(k) != null ? got.get(k) : orig;
+            results.set(idx.get(k), tr);
+            if (prefix != null && !TextUtils.isEmpty(tr) && !tr.equals(orig)) {
+                synchronized (CACHE) {
+                    CACHE.put(prefix + orig, tr);
+                }
+            }
+        }
+    }
+
+    /** 缓存键前缀：引擎 + 模型（后台线程调用：Pi 模型要读配置） */
+    private static String cachePrefix(Context context, String engine) {
+        String model = "";
+        try {
+            if (PiMetConfig.TRANS_ENGINE_CUSTOM.equals(engine)) {
+                model = PiMetConfig.getTransCustomBaseUrl(context) + "#" + PiMetConfig.getTransCustomModel(context);
+            } else if (PiMetConfig.TRANS_ENGINE_AI.equals(engine)) {
+                PiModelCatalog.PiModel m = PiModelCatalog.selected(context);
+                model = m == null ? "" : m.ref();
+            } else if (PiMetConfig.TRANS_ENGINE_AUTO.equals(engine)) {
+                PiModelCatalog.PiModel m = PiModelCatalog.selected(context);
+                model = (TextUtils.isEmpty(PiMetConfig.getTransCustomApiKey(context)) ? ""
+                        : PiMetConfig.getTransCustomBaseUrl(context) + "#" + PiMetConfig.getTransCustomModel(context))
+                        + "|" + (m == null ? "" : m.ref());
+            }
+        } catch (Throwable ignored) {}
+        return engine + "\u0001" + model + "\u0001";
+    }
+
+    /** 推理/思考模型（名字以 -high 结尾）提示 */
+    static String slowModelHint(String model) {
+        return model != null && model.toLowerCase(java.util.Locale.ROOT).endsWith("-high")
+                ? "；推理模型较慢，建议选 -low / flash 版本" : "";
     }
 
     /** 异常 → 一句给用户看的原因 */
@@ -465,7 +539,7 @@ public class WebTranslationManager {
 
         Map<String, String> headers = new LinkedHashMap<>();
         if (!TextUtils.isEmpty(apiKey)) headers.put("Authorization", "Bearer " + apiKey.trim());
-        return llmTranslateOnce(endpoint, headers, false, model, 18000, texts);
+        return llmTranslateOnce(endpoint, headers, false, model, AI_READ_TIMEOUT_MS, texts);
     }
 
     private static final String SYSTEM_PROMPT = "You are an accurate web page translation engine. Translate each string in the input JSON array into Simplified Chinese (zh-CN).\n" +
@@ -478,21 +552,54 @@ public class WebTranslationManager {
     private static List<String> llmTranslateOnce(String endpoint, Map<String, String> headers, boolean anthropic,
                                                  String model, int readTimeoutMs, List<String> texts) throws Exception {
         JSONArray inputArr = new JSONArray();
-        for (String t : texts) inputArr.put(t);
+        int chars = 0;
+        for (String t : texts) {
+            inputArr.put(t);
+            chars += t == null ? 0 : t.length();
+        }
+        // 输出预算按输入字数 ×3 估算；不开 thinking / reasoning（推理模型太慢）
+        int maxTokens = Math.max(anthropic ? 1024 : 512, Math.min(8192, chars * 3 + 64));
 
         JSONObject req = new JSONObject();
         req.put("model", model);
+        req.put("temperature", 0);
+        req.put("max_tokens", maxTokens);
         JSONArray messages = new JSONArray();
         if (anthropic) {
-            req.put("max_tokens", 4096);
             req.put("system", SYSTEM_PROMPT);
         } else {
-            req.put("temperature", 0.1);
             messages.put(new JSONObject().put("role", "system").put("content", SYSTEM_PROMPT));
         }
         messages.put(new JSONObject().put("role", "user").put("content", inputArr.toString()));
         req.put("messages", messages);
 
+        try {
+            return llmPost(endpoint, headers, anthropic, readTimeoutMs, req, texts);
+        } catch (HttpStatusException e) {
+            // 少数接口不认 temperature / max_tokens（如部分 OpenAI 新模型）：去掉这两个参数再试一次
+            String b = e.body == null ? "" : e.body.toLowerCase(java.util.Locale.ROOT);
+            if (!anthropic && e.code == 400 && (b.contains("max_tokens") || b.contains("temperature"))) {
+                req.remove("max_tokens");
+                req.remove("temperature");
+                return llmPost(endpoint, headers, false, readTimeoutMs, req, texts);
+            }
+            throw e;
+        }
+    }
+
+    private static final class HttpStatusException extends Exception {
+        final int code;
+        final String body;
+
+        HttpStatusException(int code, String body, String msg) {
+            super(msg);
+            this.code = code;
+            this.body = body;
+        }
+    }
+
+    private static List<String> llmPost(String endpoint, Map<String, String> headers, boolean anthropic,
+                                        int readTimeoutMs, JSONObject req, List<String> texts) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
         try {
             conn.setRequestMethod("POST");
@@ -514,7 +621,7 @@ public class WebTranslationManager {
                 try {
                     errBody = readStream(conn.getErrorStream());
                 } catch (Throwable ignored) {}
-                throw new Exception("HTTP " + code + " " + endpoint + "：" + (TextUtils.isEmpty(errBody) ? conn.getResponseMessage() : errBody));
+                throw new HttpStatusException(code, errBody, "HTTP " + code + " " + endpoint + "：" + (TextUtils.isEmpty(errBody) ? conn.getResponseMessage() : errBody));
             }
             String respStr = readStream(conn.getInputStream());
             JSONObject resp = new JSONObject(respStr);
@@ -570,6 +677,19 @@ public class WebTranslationManager {
         testTranslation(context, engine, baseUrl, apiKey, model, null, callback);
     }
 
+    private static String testHint(Context context, String engine, String model, String piModelRef) {
+        try {
+            if (PiMetConfig.TRANS_ENGINE_CUSTOM.equals(engine)) return slowModelHint(model);
+            if (PiMetConfig.TRANS_ENGINE_AI.equals(engine) || PiMetConfig.TRANS_ENGINE_AUTO.equals(engine)) {
+                PiModelCatalog.PiModel m = PiModelCatalog.find(context, piModelRef != null ? piModelRef : PiModelCatalog.savedRef(context));
+                String h = m == null ? "" : slowModelHint(m.id);
+                if (h.isEmpty() && PiMetConfig.TRANS_ENGINE_AUTO.equals(engine)) h = slowModelHint(PiMetConfig.getTransCustomModel(context));
+                return h;
+            }
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
     /** piModelRef：「Pi 的模型」引擎要测的 provider/model（null = 已保存的选择 / Pi 默认） */
     public static void testTranslation(Context context, String engine, String baseUrl, String apiKey, String model,
                                        String piModelRef, TestCallback callback) {
@@ -599,15 +719,16 @@ public class WebTranslationManager {
 
                 long latency = System.currentTimeMillis() - start;
                 String translated = (res != null && !res.isEmpty()) ? res.get(0) : "未得到有效译文";
+                final String okMsg = "连接测试成功" + testHint(context, engine, model, piModelRef);
 
                 MAIN_HANDLER.post(() -> {
                     if (callback != null) {
-                        callback.onResult(true, latency, sample, translated, "连接测试成功");
+                        callback.onResult(true, latency, sample, translated, okMsg);
                     }
                 });
             } catch (Throwable t) {
                 long latency = System.currentTimeMillis() - start;
-                final String err = t.getMessage() != null ? t.getMessage() : t.toString();
+                final String err = (t.getMessage() != null ? t.getMessage() : t.toString()) + testHint(context, engine, model, piModelRef);
                 MAIN_HANDLER.post(() -> {
                     if (callback != null) {
                         callback.onResult(false, latency, sample, "", "测试失败: " + err);
@@ -644,6 +765,9 @@ public class WebTranslationManager {
         String borderHex = String.format("#%06X", (0xFFFFFF & palette.border));
         String textHex = String.format("#%06X", (0xFFFFFF & palette.text));
         String accentHex = String.format("#%06X", (0xFFFFFF & palette.accent));
+        boolean aiEngine = !PiMetConfig.TRANS_ENGINE_FREE.equals(PiMetConfig.getTransEngine(context));
+        int batchMax = aiEngine ? AI_BATCH_MAX_ITEMS : 15;
+        int charMax = aiEngine ? AI_BATCH_MAX_CHARS : 100000;
 
         return "(function() {\n" +
                 "  var W = window;\n" +
@@ -652,7 +776,7 @@ public class WebTranslationManager {
                 "    var B = W.PiMetTranslator;\n" +
                 "    if (!B || typeof B.requestBatch !== 'function') return 'nobridge';\n" +
                 "    if (W.__pimet_is_translating && W.__pimet_is_translated) return 'busy';\n" +
-                "    if (W.__pimet_restore && W.__pimet_all_nodes && W.__pimet_all_nodes.length) { try { W.__pimet_restore(true); } catch (e0) {} }\n" +
+                "    if (W.__pimet_restore && ((W.__pimet_all_nodes && W.__pimet_all_nodes.length) || (W.__pimet_pending_els && W.__pimet_pending_els.length) || W.__pimet_io)) { try { W.__pimet_restore(true); } catch (e0) {} }\n" +
                 "    W.__pimet_is_translating = true;\n" +
                 "    W.__pimet_is_translated = true;\n" +
                 "    W.__pimet_mode = '" + mode + "';\n" +
@@ -661,7 +785,10 @@ public class WebTranslationManager {
                 "    W.__pimet_all_nodes = [];\n" +
                 "    W.__pimet_seq = W.__pimet_seq || 0;\n" +
                 "    W.__pimet_total = 0;\n" +
+                "    W.__pimet_sent = 0;\n" +
                 "    W.__pimet_done = 0;\n" +
+                "    W.__pimet_pending = 0;\n" +
+                "    W.__pimet_pending_els = [];\n" +
                 "    W.__pimet_failed = 0;\n" +
                 "    W.__pimet_last_error = '';\n" +
                 "\n" +
@@ -697,7 +824,7 @@ public class WebTranslationManager {
                 "      var walker = document.createTreeWalker(root || document.body, NodeFilter.SHOW_TEXT, {\n" +
                 "        acceptNode: function(node) {\n" +
                 "          if (!node || !node.nodeValue) return NodeFilter.FILTER_REJECT;\n" +
-                "          if (node.__pimet_orig !== undefined || node.__pimet_done) return NodeFilter.FILTER_REJECT;\n" +
+                "          if (node.__pimet_orig !== undefined || node.__pimet_done || node.__pimet_q) return NodeFilter.FILTER_REJECT;\n" +
                 "          var val = node.nodeValue.trim();\n" +
                 "          if (val.length < 2) return NodeFilter.FILTER_REJECT;\n" +
                 "          if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;\n" +
@@ -708,36 +835,125 @@ public class WebTranslationManager {
                 "      while (walker.nextNode()) nodes.push(walker.currentNode);\n" +
                 "      return nodes;\n" +
                 "    }\n" +
-                "    var BATCH_SIZE = 15;\n" +
-                "    function send(nodes) {\n" +
-                "      for (var i = 0; i < nodes.length; i += BATCH_SIZE) {\n" +
-                "        var chunk = nodes.slice(i, i + BATCH_SIZE);\n" +
-                "        var batchId = 'pbatch_' + (++W.__pimet_seq);\n" +
-                "        var texts = [];\n" +
-                "        for (var j = 0; j < chunk.length; j++) {\n" +
-                "          chunk[j].__pimet_orig = chunk[j].nodeValue;\n" +
-                "          texts.push(chunk[j].nodeValue.trim());\n" +
-                "          W.__pimet_all_nodes.push(chunk[j]);\n" +
-                "        }\n" +
-                "        W.__pimet_batches[batchId] = chunk;\n" +
-                "        W.PiMetTranslator.requestBatch(batchId, JSON.stringify(texts));\n" +
+                "    var BATCH_MAX = " + batchMax + ", CHAR_MAX = " + charMax + ";\n" +
+                "    function sendBatch(chunk) {\n" +
+                "      var batchId = 'pbatch_' + (++W.__pimet_seq);\n" +
+                "      var texts = [];\n" +
+                "      for (var j = 0; j < chunk.length; j++) {\n" +
+                "        chunk[j].__pimet_orig = chunk[j].nodeValue;\n" +
+                "        delete chunk[j].__pimet_q;\n" +
+                "        texts.push(chunk[j].nodeValue.trim());\n" +
+                "        W.__pimet_all_nodes.push(chunk[j]);\n" +
                 "      }\n" +
+                "      W.__pimet_batches[batchId] = chunk;\n" +
+                "      W.__pimet_sent += chunk.length;\n" +
+                "      W.__pimet_is_translating = true;\n" +
+                "      armWatchdog();\n" +
+                "      W.PiMetTranslator.requestBatch(batchId, JSON.stringify(texts));\n" +
+                "    }\n" +
+                "    function send(nodes) {\n" +
+                "      var chunk = [], chars = 0;\n" +
+                "      for (var i = 0; i < nodes.length; i++) {\n" +
+                "        var n = nodes[i];\n" +
+                "        if (!n || n.__pimet_orig !== undefined || n.__pimet_done || !n.nodeValue) continue;\n" +
+                "        var l = n.nodeValue.trim().length;\n" +
+                "        if (chunk.length && (chunk.length >= BATCH_MAX || chars + l > CHAR_MAX)) { sendBatch(chunk); chunk = []; chars = 0; }\n" +
+                "        chunk.push(n); chars += l;\n" +
+                "      }\n" +
+                "      if (chunk.length) sendBatch(chunk);\n" +
+                "      progress();\n" +
+                "    }\n" +
+                "    function nodeTop(n) {\n" +
+                "      var el = n.parentElement;\n" +
+                "      if (!el || !el.getBoundingClientRect) return null;\n" +
+                "      var r = el.getBoundingClientRect();\n" +
+                "      if (r.width === 0 && r.height === 0) return null;\n" +
+                "      return r;\n" +
+                "    }\n" +
+                "    function isNear(r) {\n" +
+                "      var h = W.innerHeight || document.documentElement.clientHeight || 800;\n" +
+                "      return r && r.bottom >= -h && r.top <= 2 * h;\n" +
+                "    }\n" +
+                "    var queue = [], qTimer = null;\n" +
+                "    function flushQueue() {\n" +
+                "      qTimer = null;\n" +
+                "      if (!W.__pimet_is_translated || !queue.length) return;\n" +
+                "      var q = queue; queue = [];\n" +
+                "      q.sort(function(a, b) { var ra = nodeTop(a), rb = nodeTop(b); return (ra ? ra.top : 1e9) - (rb ? rb.top : 1e9); });\n" +
+                "      send(q);\n" +
+                "    }\n" +
+                "    function enqueue(nodes) {\n" +
+                "      for (var i = 0; i < nodes.length; i++) { if (nodes[i].__pimet_q) { nodes[i].__pimet_q = false; W.__pimet_pending--; queue.push(nodes[i]); } }\n" +
+                "      if (!qTimer) qTimer = setTimeout(flushQueue, 120);\n" +
+                "    }\n" +
+                "    function onNear(el) {\n" +
+                "      var list = el.__pimet_pending; el.__pimet_pending = null;\n" +
+                "      if (W.__pimet_io) W.__pimet_io.unobserve(el);\n" +
+                "      if (list) enqueue(list);\n" +
+                "    }\n" +
+                "    if (!W.__pimet_io && W.IntersectionObserver) {\n" +
+                "      W.__pimet_io = new IntersectionObserver(function(entries) {\n" +
+                "        for (var i = 0; i < entries.length; i++) if (entries[i].isIntersecting) onNear(entries[i].target);\n" +
+                "      }, {rootMargin: '100% 0px 100% 0px'});\n" +
+                "    }\n" +
+                "    if (!W.__pimet_io && !W.__pimet_scroll_fn) {\n" +
+                "      var sTimer = null;\n" +
+                "      W.__pimet_scroll_fn = function() {\n" +
+                "        if (sTimer) return;\n" +
+                "        sTimer = setTimeout(function() {\n" +
+                "          sTimer = null;\n" +
+                "          var els = W.__pimet_pending_els || [], keep = [];\n" +
+                "          for (var i = 0; i < els.length; i++) { var el = els[i]; if (!el.__pimet_pending) continue; var r = el.getBoundingClientRect(); if (isNear(r) && (r.width || r.height)) onNear(el); else keep.push(el); }\n" +
+                "          W.__pimet_pending_els = keep;\n" +
+                "        }, 250);\n" +
+                "      };\n" +
+                "      W.addEventListener('scroll', W.__pimet_scroll_fn, {passive: true, capture: true});\n" +
+                "    }\n" +
+                "    function schedule(nodes) {\n" +
+                "      var near = [];\n" +
+                "      for (var i = 0; i < nodes.length; i++) {\n" +
+                "        var n = nodes[i], r = nodeTop(n);\n" +
+                "        if (isNear(r)) { near.push({n: n, t: r.top}); continue; }\n" +
+                "        var el = n.parentElement;\n" +
+                "        if (!el) continue;\n" +
+                "        n.__pimet_q = true;\n" +
+                "        W.__pimet_pending++;\n" +
+                "        if (!el.__pimet_pending) { el.__pimet_pending = []; W.__pimet_pending_els.push(el); if (W.__pimet_io) W.__pimet_io.observe(el); }\n" +
+                "        el.__pimet_pending.push(n);\n" +
+                "      }\n" +
+                "      near.sort(function(a, b) { return a.t - b.t; });\n" +
+                "      var arr = [];\n" +
+                "      for (var k = 0; k < near.length; k++) arr.push(near[k].n);\n" +
+                "      if (arr.length) send(arr); else progress();\n" +
+                "    }\n" +
+                "    function armWatchdog() {\n" +
+                "      if (W.__pimet_watchdog) clearTimeout(W.__pimet_watchdog);\n" +
+                "      W.__pimet_watchdog = setTimeout(function() {\n" +
+                "        W.__pimet_watchdog = null;\n" +
+                "        if (W.__pimet_is_translating && W.__pimet_done < W.__pimet_sent) {\n" +
+                "          capsule('翻译超时 (已翻 ' + (W.__pimet_done - W.__pimet_failed) + '/' + W.__pimet_total + ')，剩余部分仍在后台翻译', true);\n" +
+                "          try { W.PiMetTranslator.showToast('网页翻译超时：翻译服务响应太慢，可长按「译」换成极速通道'); } catch (e5) {}\n" +
+                "        }\n" +
+                "      }, 60000);\n" +
                 "    }\n" +
                 "    function progress() {\n" +
-                "      if (W.__pimet_done >= W.__pimet_total) {\n" +
+                "      var ok = W.__pimet_done - W.__pimet_failed;\n" +
+                "      if (W.__pimet_done >= W.__pimet_sent) {\n" +
                 "        W.__pimet_is_translating = false;\n" +
                 "        if (W.__pimet_watchdog) { clearTimeout(W.__pimet_watchdog); W.__pimet_watchdog = null; }\n" +
-                "        if (W.__pimet_failed >= W.__pimet_total && W.__pimet_total > 0) {\n" +
+                "        if (W.__pimet_sent > 0 && W.__pimet_failed >= W.__pimet_sent) {\n" +
                 "          capsule('翻译失败：' + (W.__pimet_last_error || '翻译服务无响应'), true);\n" +
-                "          W.__pimet_is_translated = false;\n" +
                 "          try { W.PiMetTranslator.onStateChanged(false, 0, W.__pimet_total); } catch (e1) {}\n" +
+                "        } else if (W.__pimet_pending > 0) {\n" +
+                "          capsule('已翻 ' + ok + '/' + W.__pimet_total + ' · 滚动继续' + (W.__pimet_failed ? ' · ' + W.__pimet_failed + ' 条失败' : ''), true);\n" +
+                "          try { W.PiMetTranslator.onStateChanged(true, W.__pimet_done, W.__pimet_total); } catch (e2) {}\n" +
                 "        } else {\n" +
-                "          capsule('翻译完成 (' + (W.__pimet_done - W.__pimet_failed) + '/' + W.__pimet_total + ')' + (W.__pimet_failed ? ' · ' + W.__pimet_failed + ' 条失败' : ''), true);\n" +
+                "          capsule('翻译完成 (已翻 ' + ok + '/' + W.__pimet_total + ')' + (W.__pimet_failed ? ' · ' + W.__pimet_failed + ' 条失败' : ''), true);\n" +
                 "          try { W.PiMetTranslator.onStateChanged(true, W.__pimet_done, W.__pimet_total); } catch (e2) {}\n" +
                 "        }\n" +
                 "        if (W.__pimet_live && W.__pimet_observer && W.__pimet_is_translated) W.__pimet_observer.observe(document.body, {childList: true, subtree: true});\n" +
                 "      } else {\n" +
-                "        capsule('翻译中 (' + W.__pimet_done + '/' + W.__pimet_total + ')', false);\n" +
+                "        capsule('翻译中 · 已翻 ' + ok + '/' + W.__pimet_total, false);\n" +
                 "      }\n" +
                 "    }\n" +
                 "\n" +
@@ -777,6 +993,12 @@ public class WebTranslationManager {
                 "      W.__pimet_is_translating = false;\n" +
                 "      W.__pimet_batches = {};\n" +
                 "      if (W.__pimet_observer) { W.__pimet_observer.disconnect(); W.__pimet_observer = null; }\n" +
+                "      if (W.__pimet_io) { W.__pimet_io.disconnect(); W.__pimet_io = null; }\n" +
+                "      if (W.__pimet_scroll_fn) { W.removeEventListener('scroll', W.__pimet_scroll_fn, {capture: true}); W.__pimet_scroll_fn = null; }\n" +
+                "      var pe = W.__pimet_pending_els || [];\n" +
+                "      for (var pi = 0; pi < pe.length; pi++) { var pl = pe[pi].__pimet_pending; if (pl) { for (var pj = 0; pj < pl.length; pj++) delete pl[pj].__pimet_q; } pe[pi].__pimet_pending = null; }\n" +
+                "      W.__pimet_pending_els = [];\n" +
+                "      W.__pimet_pending = 0;\n" +
                 "      if (W.__pimet_watchdog) { clearTimeout(W.__pimet_watchdog); W.__pimet_watchdog = null; }\n" +
                 "      var all = W.__pimet_all_nodes || [];\n" +
                 "      for (var m = 0; m < all.length; m++) {\n" +
@@ -801,32 +1023,21 @@ public class WebTranslationManager {
                 "      capsule('页面无需翻译或已是中文', true);\n" +
                 "      return 'none';\n" +
                 "    }\n" +
-                "    capsule('翻译中 (0/' + W.__pimet_total + ')', false);\n" +
-                "    send(candidates);\n" +
-                "\n" +
-                "    if (W.__pimet_watchdog) clearTimeout(W.__pimet_watchdog);\n" +
-                "    W.__pimet_watchdog = setTimeout(function() {\n" +
-                "      W.__pimet_watchdog = null;\n" +
-                "      if (W.__pimet_is_translating) {\n" +
-                "        W.__pimet_is_translating = false;\n" +
-                "        capsule('翻译超时 (' + (W.__pimet_done - W.__pimet_failed) + '/' + W.__pimet_total + ')，剩余部分仍在后台翻译', true);\n" +
-                "        try { W.PiMetTranslator.showToast('网页翻译超时：翻译服务响应太慢，可长按「译」换成极速通道'); } catch (e5) {}\n" +
-                "      }\n" +
-                "    }, 60000);\n" +
+                "    capsule('翻译中 · 已翻 0/' + W.__pimet_total, false);\n" +
+                "    schedule(candidates);\n" +
                 "\n" +
                 "    if (W.__pimet_live && !W.__pimet_observer && W.MutationObserver) {\n" +
                 "      var timer = null, liveRuns = 0;\n" +
                 "      W.__pimet_observer = new MutationObserver(function() {\n" +
-                "        if (W.__pimet_is_translating || !W.__pimet_is_translated || liveRuns >= 3) return;\n" +
+                "        if (W.__pimet_is_translating || !W.__pimet_is_translated || liveRuns >= 30) return;\n" +
                 "        clearTimeout(timer);\n" +
                 "        timer = setTimeout(function() {\n" +
-                "          if (W.__pimet_is_translating || !W.__pimet_is_translated || liveRuns >= 3) return;\n" +
+                "          if (W.__pimet_is_translating || !W.__pimet_is_translated || liveRuns >= 30) return;\n" +
                 "          var more = collectTextNodes(document.body);\n" +
                 "          if (more.length > 0) {\n" +
                 "            liveRuns++;\n" +
-                "            W.__pimet_is_translating = true;\n" +
                 "            W.__pimet_total += more.length;\n" +
-                "            send(more);\n" +
+                "            schedule(more);\n" +
                 "          }\n" +
                 "        }, 1200);\n" +
                 "      });\n" +
