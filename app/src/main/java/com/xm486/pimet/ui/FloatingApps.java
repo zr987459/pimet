@@ -713,6 +713,7 @@ public final class FloatingApps {
             urlField.setText("");
             showUrl(t, u);
         }
+        syncUrlPill();
         refreshTabs();
     }
 
@@ -1160,6 +1161,7 @@ public final class FloatingApps {
         if (host == null) return;
         String u = currentUrl();
         if (isLauncher(u) || u.isEmpty()) {
+            revealUrlPill();
             urlField.requestFocus();
             InputMethodManager imm = (InputMethodManager) vctx.getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.showSoftInput(urlField, 0);
@@ -2282,7 +2284,24 @@ public final class FloatingApps {
         return url != null && url.endsWith("/.launcher.html");
     }
 
+    /**
+     * 当前标签是内置主页（.launcher.html，页面中间已有搜索框）时隐藏工具栏地址栏，离开主页恢复。
+     * 用 INVISIBLE 保留占位，工具栏其他按钮不跳位置；正在编辑地址栏时不隐藏。
+     */
+    private void syncUrlPill() {
+        if (urlPill == null) return;
+        boolean onHome = active != null && isLauncher(active.url) && (urlField == null || !urlField.hasFocus());
+        int vis = onHome ? View.INVISIBLE : View.VISIBLE;
+        if (urlPill.getVisibility() != vis) urlPill.setVisibility(vis);
+    }
+
+    /** 要主动聚焦地址栏前先显示出来（主页上它是隐藏的，隐藏的 View 拿不到焦点） */
+    private void revealUrlPill() {
+        if (urlPill != null && urlPill.getVisibility() != View.VISIBLE) urlPill.setVisibility(View.VISIBLE);
+    }
+
     private void showUrl(Tab t, String url) {
+        if (t == active) syncUrlPill();
         if (t != active || urlField.hasFocus()) return;
         if (url == null || url.isEmpty() || isLauncher(url)) {
             siteIcon.setText("🔍");
@@ -4488,6 +4507,7 @@ public final class FloatingApps {
             if (bottom) column.addView(bar, blp);
             else column.addView(bar, 0, blp);
         }
+        syncUrlPill();
     }
 
     // ---- 悬浮球
@@ -4830,6 +4850,7 @@ public final class FloatingApps {
             case "home": goHome(t, true); break;
             case "url":
                 if (urlField.getParent() == null) { askUrl(); break; }
+                revealUrlPill();
                 urlField.requestFocus();
                 InputMethodManager imm = (InputMethodManager) vctx.getSystemService(Context.INPUT_METHOD_SERVICE);
                 if (imm != null) imm.showSoftInput(urlField, 0);
@@ -4944,6 +4965,11 @@ public final class FloatingApps {
 
     /** 地址栏输入不是网址时：按 search.default 引擎搜索（%s 替换为编码后的关键词） */
     private String searchUrl(String q) {
+        return searchTemplate().replace("%s", Uri.encode(q));
+    }
+
+    /** search.default 引擎的网址模板（含 %s）；找不到时退回 bing */
+    private String searchTemplate() {
         JSONObject s = uiObj("search");
         String def = s.optString("default", "bing");
         JSONArray es = s.optJSONArray("engines");
@@ -4956,7 +4982,7 @@ public final class FloatingApps {
             }
         }
         if (tpl == null || !tpl.contains("%s")) tpl = "https://www.bing.com/search?q=%s";
-        return tpl.replace("%s", Uri.encode(q));
+        return tpl;
     }
 
     // ---- 主页 / 新标签页
@@ -5663,6 +5689,8 @@ public final class FloatingApps {
         String recentId, recentTitle, recentUrl, piWeb;
         boolean dark;
         String page, fg, card, pill, accent, dim;
+        /** 主页搜索框用的引擎模板（ui.json search.default，含 %s） */
+        String searchTpl;
     }
 
     private HomeData homeData(Tab forTab) {
@@ -5686,6 +5714,7 @@ public final class FloatingApps {
         h.pill = hex(cPill);
         h.accent = hex(cAccent);
         h.dim = hex(cDim);
+        h.searchTpl = searchTemplate();
         return h;
     }
 
@@ -5765,7 +5794,7 @@ public final class FloatingApps {
                 + "if(/^[a-zA-Z][a-zA-Z0-9+.-]*:\\/\\//.test(s))location.href=s;"
                 + "else if(/^(localhost|127\\.0\\.0\\.1|\\d+\\.\\d+\\.\\d+\\.\\d+)(:\\d+)?(\\/.*)?$/.test(s))location.href='http://'+s;"
                 + "else if(s.indexOf(' ')<0&&s.indexOf('.')>0)location.href='https://'+s;"
-                + "else location.href='https://www.bing.com/search?q='+encodeURIComponent(s);};</script>"
+                + "else location.href=" + JSONObject.quote(h.searchTpl == null ? "https://www.bing.com/search?q=%s" : h.searchTpl) + ".split('%s').join(encodeURIComponent(s));};</script>"
                 + "</body></html>";
     }
 
