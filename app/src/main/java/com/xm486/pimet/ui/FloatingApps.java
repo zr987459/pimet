@@ -6044,7 +6044,15 @@ public final class FloatingApps {
         if (open) refreshBall();
         ballMenu.setVisibility(open ? View.VISIBLE : View.GONE);
         ballWrap.bringToFront();
-        MAIN.post(this::placeBall);
+        final float fromX = ballWrap.getX();
+        MAIN.post(() -> {
+            placeBall();
+            float toX = ballWrap.getX();
+            if (Math.abs(toX - fromX) > 1) {
+                ballWrap.setX(fromX);
+                ballWrap.animate().x(toX).setDuration(180).start();
+            }
+        });
     }
 
     private void setBallEnabled(boolean on) {
@@ -6076,6 +6084,16 @@ public final class FloatingApps {
             y = dp(80);
         }
         moveBall(x, y);
+        // 贴边半藏：菜单收起时只露出约 45%，点一下先滑出再展开
+        String side = prefs().getString("ball_side", "");
+        if (ballSnap() && !side.isEmpty() && (ballMenu == null || ballMenu.getVisibility() != View.VISIBLE)) {
+            ballWrap.setX(ballPeekX(side));
+        }
+    }
+
+    private float ballPeekX(String side) {
+        int bw = Math.max(ballWrap.getWidth(), dp(50));
+        return "L".equals(side) ? -bw * 0.55f : root.getWidth() - bw * 0.45f;
     }
 
     private void moveBall(float x, float y) {
@@ -6110,15 +6128,16 @@ public final class FloatingApps {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     if (moved && !ballSnap()) {
-                        prefs().edit().putFloat("ball_x", ballWrap.getX()).putFloat("ball_y", ballWrap.getY()).apply();
+                        prefs().edit().putFloat("ball_x", ballWrap.getX()).putFloat("ball_y", ballWrap.getY()).putString("ball_side", "").apply();
                     } else if (moved) {
-                        // 松手自动吸附到最近的左/右边缘
+                        // 松手吸附最近的左/右边缘并半藏（菜单展开时完整显示）
                         int bw = Math.max(ballWrap.getWidth(), dp(50));
-                        float side = dp(8);
-                        float tx = (ballWrap.getX() + bw / 2f < root.getWidth() / 2f) ? side : root.getWidth() - bw - side;
+                        String sd = (ballWrap.getX() + bw / 2f < root.getWidth() / 2f) ? "L" : "R";
+                        boolean menuOpen = ballMenu != null && ballMenu.getVisibility() == View.VISIBLE;
+                        float tx = menuOpen ? ("L".equals(sd) ? dp(8) : root.getWidth() - bw - dp(8)) : ballPeekX(sd);
                         final float ty = ballWrap.getY();
-                        ballWrap.animate().x(tx).setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
-                        prefs().edit().putFloat("ball_x", tx).putFloat("ball_y", ty).apply();
+                        ballWrap.animate().x(tx).setDuration(220).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+                        prefs().edit().putFloat("ball_x", "L".equals(sd) ? dp(8) : root.getWidth() - bw - dp(8)).putFloat("ball_y", ty).putString("ball_side", sd).apply();
                     } else if (ev.getActionMasked() == MotionEvent.ACTION_UP) {
                         toggleBallMenu();
                     }

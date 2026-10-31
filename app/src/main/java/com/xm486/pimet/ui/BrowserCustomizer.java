@@ -91,6 +91,13 @@ public final class BrowserCustomizer {
         b("downloads", "⬇", "下载", all);
         b("settings", "⚙", "自定义", all);
         b("close", "✖", "关闭浏览器", all);
+        b("workbench", "π", "回到 Pi 工作台", all);
+        b("piweb", "🤖", "Pi 工作台（新标签）", all);
+        b("bookmark", "⭐", "收藏本页", all);
+        b("bookmarks", "📑", "书签", all);
+        b("copy", "📋", "复制网址", all);
+        b("pistop", "⏸", "暂停/继续 Pi", all);
+        b("ball", "●", "悬浮球开关", "menu");
         ALIASES.put("refresh", "reload");
         ALIASES.put("forwards", "forward");
         ALIASES.put("new_tab", "newtab");
@@ -578,7 +585,7 @@ public final class BrowserCustomizer {
                             .put(engine("duckduckgo", "DuckDuckGo", "https://duckduckgo.com/?q=%s"))
                             .put(engine("sogou", "搜狗", "https://www.sogou.com/web?query=%s")))
                     .put("suggest", true));
-            d.put("toolbar", ids("back", "forward", "url", "tabs", "menu"));
+            d.put("toolbar", ids("home", "url", "scripts", "tabs", "menu"));
             JSONArray menu = ids("newtab", "history", "scripts", "cookies", "containers");
             menu.put(new JSONObject().put("type", "divider"));
             for (String s : new String[]{"desktop", "zoom", "find", "share", "translate", "theme", "downloads"}) menu.put(new JSONObject().put("id", s));
@@ -586,7 +593,7 @@ public final class BrowserCustomizer {
             for (String s : new String[]{"askpi", "terminal", "external", "settings"}) menu.put(new JSONObject().put("id", s));
             d.put("menu", menu);
             d.put("ball", new JSONObject().put("enabled", true).put("snapEdge", true)
-                    .put("items", ids("fullscreen", "reload", "translate", "askpi"))
+                    .put("items", ids("fullscreen", "reload", "translate", "theme", "workbench", "terminal", "external", "zoom", "askpi"))
                     .put("size", 44).put("opacity", 1.0));
             d.put("longPress", new JSONObject().put("link", new JSONArray()).put("image", new JSONArray()).put("text", new JSONArray()));
             d.put("gestures", new JSONObject());

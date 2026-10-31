@@ -3445,6 +3445,7 @@ public class MainActivity extends AppCompatActivity {
         } else {
             floatingMenuVertical.setVisibility(View.VISIBLE);
         }
+        floatingMenuContainer.post(this::snapFloatingBallToEdge);
     }
 
     private boolean isWebTranslated = false;
@@ -6972,7 +6973,11 @@ public class MainActivity extends AppCompatActivity {
         float margin = 8 * getResources().getDisplayMetrics().density;
         float curX = floatingMenuContainer.getLeft() + floatingMenuContainer.getTranslationX();
         float center = curX + floatingMenuContainer.getWidth() / 2f;
-        float targetX = center < parent.getWidth() / 2f ? margin : parent.getWidth() - floatingMenuContainer.getWidth() - margin;
+        boolean left = center < parent.getWidth() / 2f;
+        int cw = floatingMenuContainer.getWidth();
+        boolean menuOpen = floatingMenuVertical != null && floatingMenuVertical.getVisibility() == View.VISIBLE;
+        // 菜单收起时贴边半藏（露出约 45%），展开时完整显示
+        float targetX = menuOpen ? (left ? margin : parent.getWidth() - cw - margin) : (left ? -cw * 0.55f : parent.getWidth() - cw * 0.45f);
         floatingMenuContainer.animate().translationX(targetX - floatingMenuContainer.getLeft()).setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
     }
 }
