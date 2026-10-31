@@ -164,6 +164,9 @@ public class PiWebActivity extends AppCompatActivity {
                 ThemeManager.syncThemeToWebView(v, PiWebActivity.this);
                 com.xm486.pimet.ui.WebPinchZoom.apply(v, url);
                 com.xm486.pimet.ui.PiWebCompat.apply(v, url);
+                if (url != null && isExternalUrl(url)) {
+                    try { WebTranslationManager.maybeAutoTranslate(v, PiWebActivity.this, url); } catch (Throwable ignored) {}
+                }
                 if (url != null && !url.startsWith("about:") && !url.isEmpty()) {
                     currentUrl = url;
                     if (isExternalUrl(url)) {

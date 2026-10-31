@@ -1672,6 +1672,9 @@ public final class FloatingApps {
                 t.finishedSeq = t.navSeq;
                 if (t == active) updateProgress();
                 applyZoom(t);
+                if (!t.pi && !WebPinchZoom.isLocal(url)) {
+                    try { com.xm486.pimet.translation.WebTranslationManager.maybeAutoTranslate(view, ctx, url); } catch (Throwable ignored) {}
+                }
                 if (WebPinchZoom.isLocal(url)) {
                     // Pi-Web：主题同步、键盘误判修正（和工作台一致）
                     ThemeManager.syncThemeToWebView(view, ctx);
