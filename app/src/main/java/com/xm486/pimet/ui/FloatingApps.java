@@ -2287,20 +2287,87 @@ public final class FloatingApps {
         return url != null && url.endsWith("/.launcher.html");
     }
 
+    private boolean isHomeUrl(String u) {
+        if (u == null || u.isEmpty()) return true;
+        if (isLauncher(u)) return true;
+        String hp = uiHomepage();
+        if (hp != null && (u.equals(hp) || u.equals(resolveOpenUrl(hp)))) return true;
+        File custom = new File(appsDir, "home.html");
+        if (custom.isFile() && u.equals("file://" + custom.getAbsolutePath())) return true;
+        return false;
+    }
+
+    private boolean isBottomToolbar() {
+        return "bottom".equalsIgnoreCase(uiObj("theme").optString("toolbarPosition", "top"));
+    }
+
+    private Boolean lastBarHome = null;
+    private final java.util.IdentityHashMap<View, LinearLayout.LayoutParams> barOrigLp = new java.util.IdentityHashMap<>();
+
     /**
-     * 当前标签是内置主页（.launcher.html，页面中间已有搜索框）时隐藏工具栏地址栏，离开主页恢复。
-     * 用 INVISIBLE 保留占位，工具栏其他按钮不跳位置；正在编辑地址栏时不隐藏。
+     * 底栏双状态自适应：
+     * 1. 没网页状态（主页）：urlPill 彻底 GONE，底栏按钮 weight=1f 均匀铺满全屏，绝无空洞
+     * 2. 有网页状态：urlPill 撑满中间(weight=1f)，底栏按钮恢复固定紧凑宽度
      */
     private void syncUrlPill() {
-        if (urlPill == null) return;
-        boolean onHome = active != null && isLauncher(active.url) && (urlField == null || !urlField.hasFocus());
-        int vis = onHome ? View.INVISIBLE : View.VISIBLE;
-        if (urlPill.getVisibility() != vis) urlPill.setVisibility(vis);
+        if (urlPill == null || bar == null) return;
+        boolean onHome = active != null && isHomeUrl(active.url) && (urlField == null || !urlField.hasFocus());
+
+        if (!isBottomToolbar()) {
+            int vis = onHome ? View.INVISIBLE : View.VISIBLE;
+            if (urlPill.getVisibility() != vis) urlPill.setVisibility(vis);
+            return;
+        }
+
+        int want = onHome ? View.GONE : View.VISIBLE;
+        if (lastBarHome != null && lastBarHome.booleanValue() == onHome && urlPill.getVisibility() == want) {
+            return; // 幂等守卫
+        }
+        lastBarHome = onHome; // 先写守卫防焦点回调重入
+
+        if (onHome && urlField != null && urlField.hasFocus()) {
+            hideIme();
+        }
+
+        applyBarLayout(onHome);
+    }
+
+    private void applyBarLayout(boolean home) {
+        if (bar == null) return;
+        for (int i = 0; i < bar.getChildCount(); i++) {
+            View c = bar.getChildAt(i);
+            if (c == urlPill) continue;
+            LinearLayout.LayoutParams cur = (LinearLayout.LayoutParams) c.getLayoutParams();
+            if (cur == null) continue;
+            if (home) {
+                if (!barOrigLp.containsKey(c)) barOrigLp.put(c, new LinearLayout.LayoutParams(cur));
+                c.setLayoutParams(new LinearLayout.LayoutParams(0, cur.height, 1f));
+            } else {
+                LinearLayout.LayoutParams o = barOrigLp.remove(c);
+                if (o != null) c.setLayoutParams(o);
+            }
+        }
+        if (urlPill != null) {
+            urlPill.setVisibility(home ? View.GONE : View.VISIBLE);
+            LinearLayout.LayoutParams ulp = (LinearLayout.LayoutParams) urlPill.getLayoutParams();
+            if (ulp != null) {
+                ulp.width = 0;
+                ulp.weight = home ? 0f : 1f;
+                urlPill.setLayoutParams(ulp);
+            }
+        }
+        bar.requestLayout();
     }
 
     /** 要主动聚焦地址栏前先显示出来（主页上它是隐藏的，隐藏的 View 拿不到焦点） */
     private void revealUrlPill() {
-        if (urlPill != null && urlPill.getVisibility() != View.VISIBLE) urlPill.setVisibility(View.VISIBLE);
+        if (urlPill == null || bar == null) return;
+        if (isBottomToolbar()) {
+            lastBarHome = false;
+            applyBarLayout(false);
+        } else {
+            if (urlPill.getVisibility() != View.VISIBLE) urlPill.setVisibility(View.VISIBLE);
+        }
     }
 
     private void showUrl(Tab t, String url) {
@@ -4431,6 +4498,8 @@ public final class FloatingApps {
 
     /** 按配置重建工具栏（按钮顺序/隐藏/自定义按钮、上下位置、字体缩放） */
     private void renderToolbar() {
+        barOrigLp.clear();
+        lastBarHome = null;
         float fs = fontScale();
         bar.removeAllViews();
         boolean hasMenu = false;
@@ -4501,7 +4570,7 @@ public final class FloatingApps {
             bar.addView(v, lp);
         }
         // 位置：top | bottom
-        boolean bottom = "bottom".equalsIgnoreCase(uiObj("theme").optString("toolbarPosition", "top"));
+        boolean bottom = isBottomToolbar();
         int idx = column.indexOfChild(bar);
         int want = bottom ? column.getChildCount() - 1 : 0;
         if (idx >= 0 && idx != want) {
@@ -4510,6 +4579,7 @@ public final class FloatingApps {
             if (bottom) column.addView(bar, blp);
             else column.addView(bar, 0, blp);
         }
+        lastBarHome = null;
         syncUrlPill();
     }
 
