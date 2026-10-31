@@ -3,11 +3,15 @@ package com.xm486.pimet.translation;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Typeface;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebView;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -15,11 +19,15 @@ import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xm486.pimet.PiMetConfig;
 import com.xm486.pimet.ThemeManager;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 网页通用翻译配置面板 (WebTranslationDialog)
@@ -69,8 +77,8 @@ public class WebTranslationDialog {
 
         String curEngine = PiMetConfig.getTransEngine(context);
 
-        RadioButton rbAuto = createRadioButton(context, palette, "智能混合 (推荐 · 填了自定义 Key 先用它，否则极速通道，失败再用 Pi 的 AI)");
-        RadioButton rbAi = createRadioButton(context, palette, "宿主/Pi 已配置 AI (复用当前系统 DeepSeek/OpenAI)");
+        RadioButton rbAuto = createRadioButton(context, palette, "智能混合 (推荐 · 自定义 API → Pi 的模型 → 免费通道)");
+        RadioButton rbAi = createRadioButton(context, palette, "Pi 的模型 (直接用 Pi 里配好的 provider / 模型)");
         RadioButton rbFree = createRadioButton(context, palette, "免配置极速通道 (无需任何 Key · 毫秒级多线路)");
         RadioButton rbCustom = createRadioButton(context, palette, "自定义专属 API (OpenAI 兼容端点 / 自建模型)");
 
@@ -95,6 +103,110 @@ public class WebTranslationDialog {
         }
 
         root.addView(engineGroup);
+
+        // 1.5 「Pi 的模型」下拉：读 Pi 的 models.json / settings.json（后台线程读文件）
+        LinearLayout piModelContainer = new LinearLayout(context);
+        piModelContainer.setOrientation(LinearLayout.VERTICAL);
+        piModelContainer.setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10));
+        piModelContainer.setBackground(ThemeManager.createSunkenDrawable(context, palette, 10f));
+        piModelContainer.setVisibility(rbAi.isChecked() ? View.VISIBLE : View.GONE);
+
+        TextView piHintTv = new TextView(context);
+        piHintTv.setText("正在读取 Pi 的模型配置...");
+        piHintTv.setTextSize(12f);
+        piHintTv.setTextColor(palette.textMuted);
+        piModelContainer.addView(piHintTv);
+
+        final List<PiModelCatalog.PiModel> piModels = new ArrayList<>();
+        final List<String> piLabels = new ArrayList<>();
+        Spinner piSpinner = new Spinner(context);
+        ArrayAdapter<String> piAdapter = new ArrayAdapter<String>(context, android.R.layout.simple_spinner_item, piLabels) {
+            @Override
+            public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                View v = super.getView(position, convertView, parent);
+                if (v instanceof TextView) {
+                    ((TextView) v).setTextColor(palette.text);
+                    ((TextView) v).setTextSize(12.5f);
+                }
+                return v;
+            }
+
+            @Override
+            public View getDropDownView(int position, View convertView, android.view.ViewGroup parent) {
+                View v = super.getDropDownView(position, convertView, parent);
+                if (v instanceof TextView) {
+                    ((TextView) v).setTextColor(palette.text);
+                    ((TextView) v).setTextSize(12.5f);
+                    v.setBackgroundColor(palette.bgPanel);
+                    int p = dp(context, 10);
+                    v.setPadding(p, p, p, p);
+                }
+                return v;
+            }
+        };
+        piAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        piSpinner.setAdapter(piAdapter);
+        piSpinner.setVisibility(View.GONE);
+        piModelContainer.addView(piSpinner);
+
+        TextView piDetailTv = new TextView(context);
+        piDetailTv.setTextSize(11f);
+        piDetailTv.setTextColor(palette.textMuted);
+        piDetailTv.setPadding(0, dp(context, 4), 0, 0);
+        piModelContainer.addView(piDetailTv);
+
+        piSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position >= 0 && position < piModels.size()) piDetailTv.setText(piModels.get(position).detail());
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        root.addView(piModelContainer);
+
+        final Context appCtx = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        final Handler mainHandler = new Handler(Looper.getMainLooper());
+        WebTranslationManager.THREAD_POOL.execute(() -> {
+            List<PiModelCatalog.PiModel> list;
+            String saved;
+            try {
+                list = PiModelCatalog.load(appCtx);
+                saved = PiModelCatalog.savedRef(appCtx);
+            } catch (Throwable t) {
+                list = new ArrayList<>();
+                saved = "";
+            }
+            final List<PiModelCatalog.PiModel> fList = list;
+            final String fSaved = saved;
+            mainHandler.post(() -> {
+                piModels.clear();
+                piLabels.clear();
+                piModels.addAll(fList);
+                int sel = -1;
+                for (int i = 0; i < fList.size(); i++) {
+                    PiModelCatalog.PiModel m = fList.get(i);
+                    piLabels.add(m.label());
+                    if (!TextUtils.isEmpty(fSaved) && fSaved.equals(m.ref())) sel = i;
+                }
+                if (sel < 0) {
+                    for (int i = 0; i < fList.size(); i++) if (fList.get(i).isDefault) { sel = i; break; }
+                }
+                if (sel < 0 && !fList.isEmpty()) sel = 0;
+                piAdapter.notifyDataSetChanged();
+                if (fList.isEmpty()) {
+                    piHintTv.setText("没读到 Pi 的模型：请先在 Pi 里配置 provider（~/.pi/agent/models.json）或默认模型（settings.json）");
+                    piSpinner.setVisibility(View.GONE);
+                } else {
+                    piHintTv.setText("选择用来翻译的 Pi 模型：");
+                    piSpinner.setVisibility(View.VISIBLE);
+                    piSpinner.setSelection(sel);
+                    piDetailTv.setText(fList.get(sel).detail());
+                }
+            });
+        });
 
         // 2. 自定义 API 参数区域 (可折叠 / 条件显示)
         LinearLayout customApiContainer = new LinearLayout(context);
@@ -127,6 +239,7 @@ public class WebTranslationDialog {
         engineGroup.setOnCheckedChangeListener((group, checkedId) -> {
             boolean isCustom = (checkedId == rbCustom.getId());
             customApiContainer.setVisibility(isCustom ? View.VISIBLE : View.GONE);
+            piModelContainer.setVisibility(checkedId == rbAi.getId() ? View.VISIBLE : View.GONE);
         });
 
         // 3. 译文呈现模式
@@ -233,7 +346,9 @@ public class WebTranslationDialog {
             String testKey = etApiKey.getText().toString().trim();
             String testModel = etModel.getText().toString().trim();
 
-            WebTranslationManager.testTranslation(context, selectedEngine, testBaseUrl, testKey, testModel,
+            int piPos = piSpinner.getSelectedItemPosition();
+            String testPiRef = piPos >= 0 && piPos < piModels.size() ? piModels.get(piPos).ref() : null;
+            WebTranslationManager.testTranslation(context, selectedEngine, testBaseUrl, testKey, testModel, testPiRef,
                     (success, latencyMs, orig, trans, msg) -> {
                         btnTest.setEnabled(true);
                         if (success) {
@@ -263,6 +378,11 @@ public class WebTranslationDialog {
             else selectedEngine = PiMetConfig.TRANS_ENGINE_AUTO;
 
             PiMetConfig.setTransEngine(context, selectedEngine);
+            int savePos = piSpinner.getSelectedItemPosition();
+            if (savePos >= 0 && savePos < piModels.size()) {
+                PiModelCatalog.PiModel pm = piModels.get(savePos);
+                PiModelCatalog.saveSelection(context, pm.provider, pm.id);
+            }
             PiMetConfig.setTransCustomBaseUrl(context, etBaseUrl.getText().toString().trim());
             PiMetConfig.setTransCustomApiKey(context, etApiKey.getText().toString().trim());
             PiMetConfig.setTransCustomModel(context, etModel.getText().toString().trim());

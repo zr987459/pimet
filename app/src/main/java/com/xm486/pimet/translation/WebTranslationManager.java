@@ -22,7 +22,9 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -51,9 +53,11 @@ public class WebTranslationManager {
         void onResult(boolean success, long latencyMs, String original, String translated, String message);
     }
 
-    /** Pi 的 AI 刚失败过时，这段时间内智能模式不再先试它（避免每批都白等超时） */
-    private static volatile long sHostAiBackoffUntil = 0L;
-    private static final long HOST_AI_BACKOFF_MS = 10 * 60 * 1000L;
+    /** 智能模式下 Pi 的模型刚失败过：这段时间内跳过它（避免一页几十批每批都白等 45 秒） */
+    private static volatile long sPiModelBackoffUntil = 0L;
+    private static volatile String sPiModelBackoffReason = "";
+    private static final long PI_MODEL_BACKOFF_MS = 3 * 60 * 1000L;
+    private static final int PI_MODEL_READ_TIMEOUT_MS = 45000;
 
     /**
      * 批量翻译核心分发入口
@@ -100,30 +104,6 @@ public class WebTranslationManager {
         return m.length() > 160 ? m.substring(0, 160) + "…" : m;
     }
 
-    /** Pi（宿主）AI 配置换算成 OpenAI 兼容端点；Claude（Anthropic 接口）等不兼容时返回 null */
-    static String[] hostAiEndpoint(Context context) {
-        String key = PiMetConfig.getAiApiKey(context);
-        if (TextUtils.isEmpty(key)) return null;
-        String provider = PiMetConfig.getAiProvider(context);
-        String base = PiMetConfig.getAiBaseUrl(context);
-        String model = PiMetConfig.getAiModel(context);
-        boolean deepseekBase = TextUtils.isEmpty(base) || base.contains("api.deepseek.com");
-        if (PiMetConfig.PROVIDER_CLAUDE.equals(provider)) return null;
-        if (PiMetConfig.PROVIDER_OPENROUTER.equals(provider)) {
-            base = deepseekBase ? "https://openrouter.ai/api/v1" : base;
-        } else if (PiMetConfig.PROVIDER_OPENAI.equals(provider)) {
-            base = deepseekBase ? "https://api.openai.com/v1" : base;
-        } else if (PiMetConfig.PROVIDER_CUSTOM.equals(provider)) {
-            if (deepseekBase && !TextUtils.isEmpty(model) && !model.toLowerCase(java.util.Locale.ROOT).contains("deepseek")) return null;
-        } else if (TextUtils.isEmpty(base)) {
-            base = "https://api.deepseek.com";
-        }
-        if (model != null && model.contains("/") && !PiMetConfig.PROVIDER_OPENROUTER.equals(provider) && !PiMetConfig.PROVIDER_CUSTOM.equals(provider)) {
-            model = model.substring(model.lastIndexOf('/') + 1);
-        }
-        return new String[]{base, key, model};
-    }
-
     /**
      * 根据引擎策略执行翻译
      */
@@ -137,17 +117,15 @@ public class WebTranslationManager {
             if (TextUtils.isEmpty(apiKey) && TextUtils.isEmpty(baseUrl)) throw new Exception("自定义 API 未填写 Base URL / Key");
             return translateWithOpenAiCompatible(baseUrl, apiKey, model, texts);
         } else if (PiMetConfig.TRANS_ENGINE_AI.equals(engine)) {
-            String[] ep = hostAiEndpoint(context);
-            if (ep == null) {
-                if (TextUtils.isEmpty(PiMetConfig.getAiApiKey(context))) {
-                    return translateWithFreeChannel(texts); // 未配置 AI Key，自动回退到极速通道
-                }
-                throw new Exception("Pi 当前模型不是 OpenAI 兼容接口（如 Claude），无法用于网页翻译");
+            PiModelCatalog.PiModel m = PiModelCatalog.selected(context);
+            if (m == null) throw new Exception("没读到 Pi 的模型配置（~/.pi/agent/models.json、settings.json）");
+            try {
+                return translateWithPiModel(m, texts);
+            } catch (Throwable t) {
+                throw new Exception("Pi 模型 " + m.ref() + "：" + describe(t) + keyHint(m));
             }
-            return translateWithOpenAiCompatible(ep[0], ep[1], ep[2], texts);
         }
-        // 智能混合模式 (AUTO)：自定义 API（填了 Key）→ 免配置极速通道 → Pi 的 AI
-        // 以前优先用 Pi 的 AI：Pi 同步来的往往是 Claude / OpenRouter / 推理模型，端点不对或一批要几十秒，网页看起来就是“没翻译”
+        // 智能混合模式 (AUTO)：自定义 API（填了 Key）→ Pi 的模型（能读到）→ 免费通道；全部失败时把每一步原因一起报
         StringBuilder errs = new StringBuilder();
         String customKey = PiMetConfig.getTransCustomApiKey(context);
         if (!TextUtils.isEmpty(customKey)) {
@@ -158,22 +136,80 @@ public class WebTranslationManager {
                 errs.append("自定义 API：").append(describe(t));
             }
         }
+        PiModelCatalog.PiModel m = PiModelCatalog.selected(context);
+        if (m != null) {
+            if (System.currentTimeMillis() < sPiModelBackoffUntil) {
+                if (errs.length() > 0) errs.append("；");
+                errs.append("Pi 模型 ").append(m.ref()).append("：").append(sPiModelBackoffReason).append("（3 分钟内暂不重试）");
+            } else {
+                try {
+                    return translateWithPiModel(m, texts);
+                } catch (Throwable t) {
+                    String r = describe(t) + keyHint(m);
+                    sPiModelBackoffReason = r;
+                    sPiModelBackoffUntil = System.currentTimeMillis() + PI_MODEL_BACKOFF_MS;
+                    if (errs.length() > 0) errs.append("；");
+                    errs.append("Pi 模型 ").append(m.ref()).append("：").append(r);
+                }
+            }
+        }
         try {
             return translateWithFreeChannel(texts);
         } catch (Throwable t) {
             if (errs.length() > 0) errs.append("；");
-            errs.append(describe(t));
-        }
-        String[] ep = hostAiEndpoint(context);
-        if (ep != null && System.currentTimeMillis() >= sHostAiBackoffUntil) {
-            try {
-                return translateWithOpenAiCompatible(ep[0], ep[1], ep[2], texts);
-            } catch (Throwable t) {
-                sHostAiBackoffUntil = System.currentTimeMillis() + HOST_AI_BACKOFF_MS;
-                errs.append("；Pi 的 AI：").append(describe(t));
-            }
+            errs.append("免费通道：").append(describe(t));
         }
         throw new Exception(errs.toString());
+    }
+
+    private static String keyHint(PiModelCatalog.PiModel m) {
+        return m != null && m.keyMissing ? "（" + m.keySource + "）" : "";
+    }
+
+    /** 用 Pi 里配置的 provider/model 翻译：按 api 类型走 OpenAI Chat Completions 或 Anthropic Messages */
+    public static List<String> translateWithPiModel(PiModelCatalog.PiModel m, List<String> texts) throws Exception {
+        Map<String, String> headers = new LinkedHashMap<>();
+        String endpoint;
+        boolean anthropic = m.isAnthropic();
+        if (anthropic) {
+            endpoint = anthropicEndpoint(m.baseUrl);
+            if (!TextUtils.isEmpty(m.apiKey)) headers.put("x-api-key", m.apiKey.trim());
+            headers.put("anthropic-version", "2023-06-01");
+        } else {
+            endpoint = openAiEndpointWithV1(m.baseUrl);
+            if (!TextUtils.isEmpty(m.apiKey)) headers.put("Authorization", "Bearer " + m.apiKey.trim());
+        }
+        headers.putAll(m.headers);
+        try {
+            return llmTranslateOnce(endpoint, headers, anthropic, m.id, PI_MODEL_READ_TIMEOUT_MS, texts);
+        } catch (javax.net.ssl.SSLException e) {
+            if (endpoint.regionMatches(true, 0, "https://", 0, 8)) {
+                return llmTranslateOnce("http://" + endpoint.substring(8), headers, anthropic, m.id, PI_MODEL_READ_TIMEOUT_MS, texts);
+            }
+            throw e;
+        }
+    }
+
+    /** {baseUrl}/chat/completions；baseUrl 末尾没有版本段（/v1、/v4…）时补 /v1 */
+    static String openAiEndpointWithV1(String baseUrl) {
+        String b = trimSlash(baseUrl);
+        if (b.endsWith("/chat/completions")) return b;
+        if (!b.matches("(?i).*/v\\d+[a-z0-9]*$")) b = b + "/v1";
+        return b + "/chat/completions";
+    }
+
+    /** {baseUrl}/v1/messages；已带 /v1 不重复 */
+    static String anthropicEndpoint(String baseUrl) {
+        String b = trimSlash(baseUrl);
+        if (b.endsWith("/messages")) return b;
+        if (!b.endsWith("/v1")) b = b + "/v1";
+        return b + "/messages";
+    }
+
+    private static String trimSlash(String s) {
+        String b = s == null ? "" : s.trim();
+        while (b.endsWith("/")) b = b.substring(0, b.length() - 1);
+        return b;
     }
 
     /**
@@ -427,104 +463,102 @@ public class WebTranslationManager {
             model = "deepseek-chat";
         }
 
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (!TextUtils.isEmpty(apiKey)) headers.put("Authorization", "Bearer " + apiKey.trim());
+        return llmTranslateOnce(endpoint, headers, false, model, 18000, texts);
+    }
+
+    private static final String SYSTEM_PROMPT = "You are an accurate web page translation engine. Translate each string in the input JSON array into Simplified Chinese (zh-CN).\n" +
+            "Requirements:\n" +
+            "1. Maintain exact array length and element order.\n" +
+            "2. Preserve code tokens, URLs, numbers, HTML placeholders, and formatting symbols.\n" +
+            "3. Output ONLY a valid JSON array of strings without markdown code blocks (no ```json) and without any extra text.";
+
+    /** 发一次大模型翻译请求（OpenAI Chat Completions 或 Anthropic Messages），返回与 texts 等长的译文 */
+    private static List<String> llmTranslateOnce(String endpoint, Map<String, String> headers, boolean anthropic,
+                                                 String model, int readTimeoutMs, List<String> texts) throws Exception {
         JSONArray inputArr = new JSONArray();
-        for (String t : texts) {
-            inputArr.put(t);
-        }
+        for (String t : texts) inputArr.put(t);
 
-        JSONObject requestJson = new JSONObject();
-        requestJson.put("model", model);
-        requestJson.put("temperature", 0.1);
-
+        JSONObject req = new JSONObject();
+        req.put("model", model);
         JSONArray messages = new JSONArray();
-
-        JSONObject sysMsg = new JSONObject();
-        sysMsg.put("role", "system");
-        sysMsg.put("content", "You are an accurate web page translation engine. Translate each string in the input JSON array into Simplified Chinese (zh-CN).\n" +
-                "Requirements:\n" +
-                "1. Maintain exact array length and element order.\n" +
-                "2. Preserve code tokens, URLs, numbers, HTML placeholders, and formatting symbols.\n" +
-                "3. Output ONLY a valid JSON array of strings without markdown code blocks (no ```json) and without any extra text.");
-        messages.put(sysMsg);
-
-        JSONObject userMsg = new JSONObject();
-        userMsg.put("role", "user");
-        userMsg.put("content", inputArr.toString());
-        messages.put(userMsg);
-
-        requestJson.put("messages", messages);
-
-        URL url = new URL(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(12000);
-        conn.setReadTimeout(18000);
-        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-        if (!TextUtils.isEmpty(apiKey)) {
-            conn.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
+        if (anthropic) {
+            req.put("max_tokens", 4096);
+            req.put("system", SYSTEM_PROMPT);
+        } else {
+            req.put("temperature", 0.1);
+            messages.put(new JSONObject().put("role", "system").put("content", SYSTEM_PROMPT));
         }
-        conn.setDoOutput(true);
+        messages.put(new JSONObject().put("role", "user").put("content", inputArr.toString()));
+        req.put("messages", messages);
 
-        byte[] bodyBytes = requestJson.toString().getBytes(StandardCharsets.UTF_8);
-        OutputStream os = conn.getOutputStream();
-        os.write(bodyBytes);
-        os.flush();
-        os.close();
+        HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(readTimeoutMs);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            for (Map.Entry<String, String> h : headers.entrySet()) {
+                if (!TextUtils.isEmpty(h.getKey()) && h.getValue() != null) conn.setRequestProperty(h.getKey(), h.getValue());
+            }
+            conn.setDoOutput(true);
+            OutputStream os = conn.getOutputStream();
+            os.write(req.toString().getBytes(StandardCharsets.UTF_8));
+            os.flush();
+            os.close();
 
-        int code = conn.getResponseCode();
-        if (code != 200) {
-            String errBody = "";
-            try {
-                errBody = readStream(conn.getErrorStream());
-            } catch (Throwable ignored) {}
-            throw new Exception("HTTP " + code + ": " + (TextUtils.isEmpty(errBody) ? conn.getResponseMessage() : errBody));
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                String errBody = "";
+                try {
+                    errBody = readStream(conn.getErrorStream());
+                } catch (Throwable ignored) {}
+                throw new Exception("HTTP " + code + " " + endpoint + "：" + (TextUtils.isEmpty(errBody) ? conn.getResponseMessage() : errBody));
+            }
+            String respStr = readStream(conn.getInputStream());
+            JSONObject resp = new JSONObject(respStr);
+            String content;
+            if (anthropic) {
+                JSONArray parts = resp.optJSONArray("content");
+                if (parts == null || parts.length() == 0) throw new Exception("模型响应里没有 content");
+                content = null;
+                for (int i = 0; i < parts.length() && content == null; i++) {
+                    JSONObject part = parts.optJSONObject(i);
+                    if (part != null && "text".equals(part.optString("type", "text")) && part.has("text")) content = part.optString("text");
+                }
+                if (content == null) content = parts.getJSONObject(0).optString("text", "");
+            } else {
+                JSONArray choices = resp.optJSONArray("choices");
+                if (choices == null || choices.length() == 0) throw new Exception("模型响应里没有 choices");
+                JSONObject msgObj = choices.getJSONObject(0).optJSONObject("message");
+                if (msgObj == null || !msgObj.has("content")) throw new Exception("模型响应里没有 message.content");
+                content = msgObj.optString("content", "");
+            }
+            return parseModelArray(content, texts);
+        } finally {
+            conn.disconnect();
         }
+    }
 
-        String respStr = readStream(conn.getInputStream());
-        conn.disconnect();
-
-        JSONObject respJson = new JSONObject(respStr);
-        JSONArray choices = respJson.optJSONArray("choices");
-        if (choices == null || choices.length() == 0) {
-            throw new Exception("No choices in model response");
-        }
-
-        JSONObject firstChoice = choices.getJSONObject(0);
-        JSONObject msgObj = firstChoice.optJSONObject("message");
-        if (msgObj == null || !msgObj.has("content")) {
-            throw new Exception("No content in model message");
-        }
-
-        String content = msgObj.getString("content").trim();
-        // 清理 markdown 代码块包裹 (```json ... ```)
+    /** 从模型输出里取 JSON 字符串数组（容忍 ```json 包裹和前后多余文字） */
+    private static List<String> parseModelArray(String raw, List<String> texts) throws Exception {
+        String content = raw == null ? "" : raw.trim();
         if (content.startsWith("```")) {
             int firstNewline = content.indexOf('\n');
-            if (firstNewline != -1) {
-                content = content.substring(firstNewline + 1);
-            }
-            if (content.endsWith("```")) {
-                content = content.substring(0, content.length() - 3);
-            }
+            if (firstNewline != -1) content = content.substring(firstNewline + 1);
+            if (content.endsWith("```")) content = content.substring(0, content.length() - 3);
             content = content.trim();
         }
-
-        // 提取 JSON Array
         int startBracket = content.indexOf('[');
         int endBracket = content.lastIndexOf(']');
-        if (startBracket == -1 || endBracket == -1 || endBracket <= startBracket) {
-            throw new Exception("Model did not return a valid JSON array: " + content);
+        if (startBracket == -1 || endBracket <= startBracket) {
+            throw new Exception("模型没有返回 JSON 数组：" + (content.length() > 80 ? content.substring(0, 80) + "…" : content));
         }
-
-        String jsonArraySub = content.substring(startBracket, endBracket + 1);
-        JSONArray outArr = new JSONArray(jsonArraySub);
-
+        JSONArray outArr = new JSONArray(content.substring(startBracket, endBracket + 1));
         List<String> results = new ArrayList<>();
         for (int i = 0; i < texts.size(); i++) {
-            if (i < outArr.length()) {
-                results.add(outArr.optString(i, texts.get(i)));
-            } else {
-                results.add(texts.get(i));
-            }
+            results.add(i < outArr.length() ? outArr.optString(i, texts.get(i)) : texts.get(i));
         }
         return results;
     }
@@ -533,6 +567,12 @@ public class WebTranslationManager {
      * 测试翻译引擎连通性与延迟
      */
     public static void testTranslation(Context context, String engine, String baseUrl, String apiKey, String model, TestCallback callback) {
+        testTranslation(context, engine, baseUrl, apiKey, model, null, callback);
+    }
+
+    /** piModelRef：「Pi 的模型」引擎要测的 provider/model（null = 已保存的选择 / Pi 默认） */
+    public static void testTranslation(Context context, String engine, String baseUrl, String apiKey, String model,
+                                       String piModelRef, TestCallback callback) {
         THREAD_POOL.execute(() -> {
             long start = System.currentTimeMillis();
             final String sample = "Hello, welcome to PiMet universal web translation test!";
@@ -546,10 +586,13 @@ public class WebTranslationManager {
                 } else if (PiMetConfig.TRANS_ENGINE_CUSTOM.equals(engine)) {
                     res = translateWithOpenAiCompatible(baseUrl, apiKey, model, singleList);
                 } else if (PiMetConfig.TRANS_ENGINE_AI.equals(engine)) {
-                    String[] ep = hostAiEndpoint(context);
-                    if (ep == null) throw new Exception(TextUtils.isEmpty(PiMetConfig.getAiApiKey(context))
-                            ? "Pi 还没有配置 AI Key" : "Pi 当前模型不是 OpenAI 兼容接口（如 Claude），无法用于网页翻译");
-                    res = translateWithOpenAiCompatible(ep[0], ep[1], ep[2], singleList);
+                    PiModelCatalog.PiModel m = PiModelCatalog.find(context, piModelRef != null ? piModelRef : PiModelCatalog.savedRef(context));
+                    if (m == null) throw new Exception("没读到 Pi 的模型配置（~/.pi/agent/models.json、settings.json）");
+                    try {
+                        res = translateWithPiModel(m, singleList);
+                    } catch (Throwable t) {
+                        throw new Exception(m.ref() + "：" + describe(t) + keyHint(m));
+                    }
                 } else {
                     res = executeTranslation(context, engine, singleList);
                 }
