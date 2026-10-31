@@ -4849,7 +4849,8 @@ public final class FloatingApps {
             case "stop": if (t != null && t.web != null) t.web.stopLoading(); break;
             case "home": goHome(t, true); break;
             case "url":
-                if (urlField.getParent() == null) { askUrl(); break; }
+                // 工具栏里没有地址栏（ui.json 去掉了 url）时用对话框输入；urlField 本身总在 urlPill 里
+                if (urlPill.getParent() == null) { askUrl(); break; }
                 revealUrlPill();
                 urlField.requestFocus();
                 InputMethodManager imm = (InputMethodManager) vctx.getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -6064,8 +6065,38 @@ public final class FloatingApps {
     }
 
     private void collapseBall() {
-        if (ballMenu != null) ballMenu.setVisibility(View.GONE);
-        MAIN.post(this::placeBall);
+        if (ballMenu == null || ballWrap == null) return;
+        boolean wasOpen = ballMenu.getVisibility() == View.VISIBLE;
+        ballMenu.setVisibility(View.GONE);
+        if (!wasOpen) return;
+        final float fromX = ballWrap.getX();
+        afterBallLayout(() -> slideBallFrom(fromX));
+    }
+
+    /** 菜单显示/隐藏后等重新布局完再摆放（否则 moveBall 用旧高度夹 Y，靠底部时球会往上跳） */
+    private void afterBallLayout(Runnable r) {
+        if (ballWrap == null) return;
+        if (!ballWrap.isLayoutRequested()) {
+            MAIN.post(r);
+            return;
+        }
+        ballWrap.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override
+            public void onGlobalLayout() {
+                try { ballWrap.getViewTreeObserver().removeOnGlobalLayoutListener(this); } catch (Throwable ignored) {}
+                r.run();
+            }
+        });
+    }
+
+    /** 按当前菜单状态摆放后，从 fromX 滑过去（半藏 ↔ 完整显示） */
+    private void slideBallFrom(float fromX) {
+        placeBall();
+        float toX = ballWrap.getX();
+        if (Math.abs(toX - fromX) > 1) {
+            ballWrap.setX(fromX);
+            ballWrap.animate().x(toX).setDuration(180).start();
+        }
     }
 
     private void toggleBallMenu() {
@@ -6074,14 +6105,7 @@ public final class FloatingApps {
         ballMenu.setVisibility(open ? View.VISIBLE : View.GONE);
         ballWrap.bringToFront();
         final float fromX = ballWrap.getX();
-        MAIN.post(() -> {
-            placeBall();
-            float toX = ballWrap.getX();
-            if (Math.abs(toX - fromX) > 1) {
-                ballWrap.setX(fromX);
-                ballWrap.animate().x(toX).setDuration(180).start();
-            }
-        });
+        afterBallLayout(() -> slideBallFrom(fromX));
     }
 
     private void setBallEnabled(boolean on) {
@@ -6107,6 +6131,7 @@ public final class FloatingApps {
     /** 按保存的位置摆放悬浮球（默认同工作台：右上、距顶 80dp、距右 16dp），边界同工作台：顶 64dp、底 16dp、左右 8dp */
     private void placeBall() {
         if (ballWrap == null || root.getWidth() <= 0) return;
+        ballWrap.animate().cancel(); // 旋转/布局变化时停掉还在跑的滑动动画，免得它把位置改回旧值
         float x = prefs().getFloat("ball_x", -1f), y = prefs().getFloat("ball_y", -1f);
         if (x < 0 || y < 0) {
             x = root.getWidth() - dp(44) - dp(3) - dp(16);
@@ -6141,6 +6166,7 @@ public final class FloatingApps {
         public boolean onTouch(View v, MotionEvent ev) {
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    ballWrap.animate().cancel();
                     sx = ev.getRawX();
                     sy = ev.getRawY();
                     ox = ballWrap.getX();
@@ -6180,7 +6206,10 @@ public final class FloatingApps {
     // ---- 悬浮球功能
 
     private void toggleTranslate() {
-        if (web == null || host == null) return;
+        if (web == null || host == null) {
+            Toast.makeText(ctx, web == null ? "网页翻译失败：当前没有打开的网页" : "网页翻译失败：浏览器窗口还没准备好", Toast.LENGTH_SHORT).show();
+            return;
+        }
         try {
             com.xm486.pimet.translation.WebTranslationManager.toggleTranslation(web, host);
         } catch (Throwable t) {

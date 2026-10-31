@@ -3140,6 +3140,8 @@ public class MainActivity extends AppCompatActivity {
         floatingBall.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
+                    // 吸附/滑出动画还在跑时先停掉，否则拖动会被动画覆盖
+                    floatingMenuContainer.animate().cancel();
                     floatDownRawX = event.getRawX();
                     floatDownRawY = event.getRawY();
                     floatInitialX = floatingMenuContainer.getTranslationX();
@@ -3186,12 +3188,20 @@ public class MainActivity extends AppCompatActivity {
                     if (!isFloatDragging) {
                         if (event.getAction() == MotionEvent.ACTION_UP) toggleFloatingMenu();
                     } else {
-                        snapFloatingBallToEdge();
+                        snapFloatingBallToEdge(true);
                     }
                     return true;
             }
             return false;
         });
+
+        // 旋转 / 分屏改变尺寸后重新贴边并夹回屏幕内（Activity 自己处理 orientation，不会重建）
+        View floatParent = (View) floatingMenuContainer.getParent();
+        if (floatParent != null) {
+            floatParent.addOnLayoutChangeListener((pv, l, t, r, b, ol, ot, or, ob) -> {
+                if (r - l != or - ol || b - t != ob - ot) floatingMenuContainer.post(() -> snapFloatingBallToEdge(false));
+            });
+        }
 
         // 桌面宠物自由拖拽交互、奔跑手势、惯性甩动与弹射物理反弹
         if (floatingPetView != null) {
@@ -3364,7 +3374,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (btnFloatPetChat != null) {
             btnFloatPetChat.setOnClickListener(v -> {
-                floatingMenuVertical.setVisibility(View.GONE);
+                hideFloatingMenu();
                 togglePetChatCard(true);
             });
         }
@@ -3375,17 +3385,17 @@ public class MainActivity extends AppCompatActivity {
         btnFloatClose.setOnClickListener(v -> floatingMenuVertical.setVisibility(View.GONE));
         btnFloatFullscreen.setOnClickListener(v -> {
             toggleFullscreen(!isFullscreen);
-            floatingMenuVertical.setVisibility(View.GONE);
+            hideFloatingMenu();
         });
 
         if (btnFloatPetSwitch != null) {
             btnFloatPetSwitch.setOnClickListener(v -> {
-                floatingMenuVertical.setVisibility(View.GONE);
+                hideFloatingMenu();
                 showPetMenuDialog();
             });
         }
         btnFloatReload.setOnClickListener(v -> {
-            floatingMenuVertical.setVisibility(View.GONE);
+            hideFloatingMenu();
             if (isPiWebAlive) {
                 piWebWebView.reload();
             } else {
@@ -3402,7 +3412,7 @@ public class MainActivity extends AppCompatActivity {
         View btnFloatApps = findViewById(R.id.btnFloatApps);
         if (btnFloatApps != null) {
             btnFloatApps.setOnClickListener(v -> {
-                floatingMenuVertical.setVisibility(View.GONE);
+                hideFloatingMenu();
                 com.xm486.pimet.ui.FloatingApps.toggle(MainActivity.this);
             });
         }
@@ -3426,13 +3436,13 @@ public class MainActivity extends AppCompatActivity {
             cycleThemeQuick();
         });
         btnFloatBrowser.setOnClickListener(v -> {
-            floatingMenuVertical.setVisibility(View.GONE);
+            hideFloatingMenu();
             openExternalBrowser();
         });
         View btnFloatTerminal = findViewById(R.id.btnFloatTerminal);
         if (btnFloatTerminal != null) {
             btnFloatTerminal.setOnClickListener(v -> {
-                floatingMenuVertical.setVisibility(View.GONE);
+                hideFloatingMenu();
                 com.xm486.pimet.terminal.FloatingTerminal.toggle(MainActivity.this);
             });
         }
@@ -3445,7 +3455,32 @@ public class MainActivity extends AppCompatActivity {
         } else {
             floatingMenuVertical.setVisibility(View.VISIBLE);
         }
-        floatingMenuContainer.post(this::snapFloatingBallToEdge);
+        afterFloatingLayout(() -> snapFloatingBallToEdge(false));
+    }
+
+    /** 收起悬浮菜单并回到贴边半藏（菜单里各按钮、返回键都走这里） */
+    private void hideFloatingMenu() {
+        if (floatingMenuVertical == null) return;
+        boolean wasOpen = floatingMenuVertical.getVisibility() == View.VISIBLE;
+        floatingMenuVertical.setVisibility(View.GONE);
+        if (wasOpen) afterFloatingLayout(() -> snapFloatingBallToEdge(false));
+    }
+
+    /** 菜单显示/隐藏后要等重新布局完，宽高才是新的；否则用旧尺寸算半藏位置会偏 */
+    private void afterFloatingLayout(Runnable r) {
+        if (floatingMenuContainer == null) return;
+        if (!floatingMenuContainer.isLayoutRequested()) {
+            floatingMenuContainer.post(r);
+            return;
+        }
+        final android.view.ViewTreeObserver vto = floatingMenuContainer.getViewTreeObserver();
+        vto.addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override
+            public void onGlobalLayout() {
+                try { floatingMenuContainer.getViewTreeObserver().removeOnGlobalLayoutListener(this); } catch (Throwable ignored) {}
+                r.run();
+            }
+        });
     }
 
     private boolean isWebTranslated = false;
@@ -4877,7 +4912,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (floatingMenuVertical != null && floatingMenuVertical.getVisibility() == View.VISIBLE) {
-            floatingMenuVertical.setVisibility(View.GONE);
+            hideFloatingMenu();
             return;
         }
 
@@ -6965,19 +7000,34 @@ public class MainActivity extends AppCompatActivity {
         return holder;
     }
 
-    /** 松手后悬浮球自动吸附到最近的左/右屏幕边缘（保留 8dp 边距） */
-    private void snapFloatingBallToEdge() {
+    /** 悬浮球贴哪一边（null = 还没定，按当前位置算） */
+    private Boolean floatSnapLeft = null;
+
+    /**
+     * 悬浮球贴到左/右边缘：菜单收起时半藏（露出约 45%），展开时完整显示（保留 8dp 边距）；同时把 Y 夹回屏幕内。
+     * fromDrag=true 时按松手位置重新决定贴哪边，否则沿用上次的边（旋转后不会因为宽度变化跳到另一边）。
+     */
+    private void snapFloatingBallToEdge(boolean fromDrag) {
         if (floatingMenuContainer == null) return;
         View parent = (View) floatingMenuContainer.getParent();
-        if (parent == null) return;
-        float margin = 8 * getResources().getDisplayMetrics().density;
-        float curX = floatingMenuContainer.getLeft() + floatingMenuContainer.getTranslationX();
-        float center = curX + floatingMenuContainer.getWidth() / 2f;
-        boolean left = center < parent.getWidth() / 2f;
-        int cw = floatingMenuContainer.getWidth();
+        if (parent == null || parent.getWidth() <= 0) return;
+        float density = getResources().getDisplayMetrics().density;
+        float margin = 8 * density;
+        int cw = floatingMenuContainer.getWidth(), ch = floatingMenuContainer.getHeight();
+        if (fromDrag || floatSnapLeft == null) {
+            float curX = floatingMenuContainer.getLeft() + floatingMenuContainer.getTranslationX();
+            floatSnapLeft = curX + cw / 2f < parent.getWidth() / 2f;
+        }
+        boolean left = floatSnapLeft;
         boolean menuOpen = floatingMenuVertical != null && floatingMenuVertical.getVisibility() == View.VISIBLE;
-        // 菜单收起时贴边半藏（露出约 45%），展开时完整显示
         float targetX = menuOpen ? (left ? margin : parent.getWidth() - cw - margin) : (left ? -cw * 0.55f : parent.getWidth() - cw * 0.45f);
-        floatingMenuContainer.animate().translationX(targetX - floatingMenuContainer.getLeft()).setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+        float curY = floatingMenuContainer.getTop() + floatingMenuContainer.getTranslationY();
+        float minY = 64 * density, maxY = Math.max(minY, parent.getHeight() - ch - 16 * density);
+        float targetY = Math.max(minY, Math.min(curY, maxY));
+        floatingMenuContainer.animate().cancel();
+        floatingMenuContainer.animate()
+                .translationX(targetX - floatingMenuContainer.getLeft())
+                .translationY(targetY - floatingMenuContainer.getTop())
+                .setDuration(200).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
     }
 }
