@@ -399,6 +399,21 @@ public class WebTranslationManager {
      * OpenAI 兼容格式大模型批处理翻译 (支持 DeepSeek, OpenAI, Ollama, SiliconFlow 等)
      */
     public static List<String> translateWithOpenAiCompatible(String baseUrl, String apiKey, String model, List<String> texts) throws Exception {
+        try {
+            return openAiCompatibleOnce(baseUrl, apiKey, model, texts);
+        } catch (javax.net.ssl.SSLException e) {
+            // 服务器在 https 端口上其实是明文 HTTP（如 https://IP:443 → Unable to parse TLS packet header）：自动改用 http:// 重试
+            String b = baseUrl == null ? "" : baseUrl.trim();
+            if (b.regionMatches(true, 0, "https://", 0, 8)) {
+                List<String> r = openAiCompatibleOnce("http://" + b.substring(8), apiKey, model, texts);
+                Log.w(TAG, "TLS failed, http:// worked for " + b);
+                return r;
+            }
+            throw e;
+        }
+    }
+
+    private static List<String> openAiCompatibleOnce(String baseUrl, String apiKey, String model, List<String> texts) throws Exception {
         if (TextUtils.isEmpty(baseUrl)) {
             baseUrl = "https://api.deepseek.com/v1";
         }
