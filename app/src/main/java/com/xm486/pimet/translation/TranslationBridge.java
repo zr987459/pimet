@@ -5,7 +5,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
-import android.widget.Toast;
 
 import org.json.JSONArray;
 
@@ -51,7 +50,7 @@ public class TranslationBridge {
                 texts.add(arr.getString(i));
             }
         } catch (Throwable t) {
-            notifyBatchError(batchId);
+            notifyBatchError(batchId, "页面提交的文本格式不对");
             return;
         }
 
@@ -65,8 +64,8 @@ public class TranslationBridge {
                 final String resJson = resArr.toString();
                 mainHandler.post(() -> {
                     if (webView != null) {
-                        String js = "if (window.__pimet_receive_batch) window.__pimet_receive_batch('" +
-                                batchId + "', " + JSONObjectEscape(resJson) + ", false);";
+                        String js = "if (window.__pimet_receive_batch) window.__pimet_receive_batch(" +
+                                org.json.JSONObject.quote(batchId) + ", " + JSONObjectEscape(resJson) + ", false);";
                         webView.evaluateJavascript(js, null);
                     }
                 });
@@ -74,17 +73,28 @@ public class TranslationBridge {
 
             @Override
             public void onError(String error) {
-                notifyBatchError(batchId);
+                notifyBatchError(batchId, error);
             }
         });
     }
 
-    private void notifyBatchError(final String batchId) {
+    private long lastErrorToastAt = 0L;
+    private String lastErrorToast = null;
+
+    private void notifyBatchError(final String batchId, final String reason) {
+        final String msg = reason == null || reason.isEmpty() ? "翻译服务无响应" : reason;
         mainHandler.post(() -> {
             if (webView != null) {
-                String js = "if (window.__pimet_receive_batch) window.__pimet_receive_batch('" +
-                        batchId + "', '[]', true);";
+                String js = "if (window.__pimet_receive_batch) window.__pimet_receive_batch(" +
+                        org.json.JSONObject.quote(batchId) + ", '[]', true, " + org.json.JSONObject.quote(msg) + ");";
                 webView.evaluateJavascript(js, null);
+            }
+            // 同一原因 8 秒内只提示一次（一页会有几十批同时失败）
+            long now = System.currentTimeMillis();
+            if (!msg.equals(lastErrorToast) || now - lastErrorToastAt > 8000L) {
+                lastErrorToast = msg;
+                lastErrorToastAt = now;
+                WebTranslationManager.toast(activity, "网页翻译失败：" + msg);
             }
         });
     }
@@ -119,8 +129,8 @@ public class TranslationBridge {
     @JavascriptInterface
     public void showToast(final String message) {
         mainHandler.post(() -> {
-            if (activity != null && !activity.isFinishing() && message != null) {
-                Toast.makeText(activity, message, Toast.LENGTH_SHORT).show();
+            if (activity != null && message != null) {
+                WebTranslationManager.toast(activity, message);
             }
         });
     }

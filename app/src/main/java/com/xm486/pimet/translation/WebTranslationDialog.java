@@ -69,7 +69,7 @@ public class WebTranslationDialog {
 
         String curEngine = PiMetConfig.getTransEngine(context);
 
-        RadioButton rbAuto = createRadioButton(context, palette, "智能混合 (推荐 · 优先 AI，自动降级至极速通道)");
+        RadioButton rbAuto = createRadioButton(context, palette, "智能混合 (推荐 · 填了自定义 Key 先用它，否则极速通道，失败再用 Pi 的 AI)");
         RadioButton rbAi = createRadioButton(context, palette, "宿主/Pi 已配置 AI (复用当前系统 DeepSeek/OpenAI)");
         RadioButton rbFree = createRadioButton(context, palette, "免配置极速通道 (无需任何 Key · 毫秒级多线路)");
         RadioButton rbCustom = createRadioButton(context, palette, "自定义专属 API (OpenAI 兼容端点 / 自建模型)");
