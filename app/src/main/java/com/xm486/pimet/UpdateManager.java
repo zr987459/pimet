@@ -390,7 +390,7 @@ public final class UpdateManager {
                                 }
 
                                 // 部署到实际运行的那一份；先解到临时目录，再整体替换 .next / public / bin，
-                                // 避免旧版构建产物（BUILD_ID、旧 chunk）残留与新文件混在一起。依赖 node_modules 原样保留。
+                                // 避免旧版构建产物（BUILD_ID、旧 chunk）残留与新文件混在一起。
                                 String extractCmd = "set -e; T='" + targetDir + "'; S=/tmp/pi-web-update; " +
                                         "rm -rf \"$S\"; mkdir -p \"$S\" \"$T\"; " +
                                         "tar -xzf /tmp/pi-web-update.tgz -C \"$S\" --strip-components=1; " +
@@ -399,6 +399,35 @@ public final class UpdateManager {
                                         "cp -a \"$S/.\" \"$T/\"; chmod +x \"$T\"/bin/*.js 2>/dev/null || true; rm -rf \"$S\"";
                                 int extCode = ProotManager.executeCommandSync(context, extractCmd);
                                 targetTgz.delete();
+
+                                // 极速增量同步变更的核心依赖包（避免保留旧 node_modules 导致跨版本断层 500，同时绕过 npm install 全量扫描卡死）
+                                if (extCode == 0) {
+                                    if (progressListener != null) {
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(82, "正在极速对齐变更依赖包...", "Fast Tarball Dependency Sync..."));
+                                    }
+                                    String syncDepsCmd = "node -e '" +
+                                            "const fs=require(\"fs\"),path=require(\"path\"),{execSync}=require(\"child_process\");" +
+                                            "const T=\"" + targetDir + "\",REG=\"" + normalizedRegistry + "\".replace(/\\/+$/,\"\");" +
+                                            "(async()=>{" +
+                                            "try{" +
+                                            "const pkg=JSON.parse(fs.readFileSync(path.join(T,\"package.json\"),\"utf8\"));" +
+                                            "const deps=Object.assign({},pkg.dependencies||{});" +
+                                            "if(deps.next)deps[\"@next/env\"]=deps.next;" +
+                                            "if(deps[\"@earendil-works/pi-coding-agent\"]&&!deps[\"@earendil-works/pi-schema\"])deps[\"@earendil-works/pi-schema\"]=deps[\"@earendil-works/pi-coding-agent\"];" +
+                                            "for(const[name,spec]of Object.entries(deps)){" +
+                                            "const ver=String(spec).replace(/^[\\^~]/,\"\");" +
+                                            "const p=path.join(T,\"node_modules\",name,\"package.json\");" +
+                                            "let cur=null;if(fs.existsSync(p)){try{cur=JSON.parse(fs.readFileSync(p,\"utf8\")).version;}catch(e){}}" +
+                                            "if(cur!==ver){" +
+                                            "const m=await fetch(REG+\"/\"+name+\"/\"+ver).then(r=>r.json());" +
+                                            "const u=m&&m.dist&&m.dist.tarball;" +
+                                            "if(u){const d=path.join(T,\"node_modules\",name);fs.mkdirSync(d,{recursive:true});" +
+                                            "execSync(\"curl -sL \\\"\"+u+\"\\\" | tar -xzf - -C \\\"\"+d+\"\\\" --strip-components=1\");}" +
+                                            "}}" +
+                                            "}catch(e){}" +
+                                            "})();'";
+                                    ProotManager.executeCommandSync(context, syncDepsCmd);
+                                }
 
                                 // 校验构建产物确实换成了新版本（防止只覆盖了 package.json）
                                 String builtAfter = readBuiltPiWebVersion(new File(rootfsDir, targetDir.substring(1)));

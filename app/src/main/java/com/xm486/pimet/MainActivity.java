@@ -2631,10 +2631,15 @@ public class MainActivity extends AppCompatActivity {
     private void checkServiceStatus() {
         int port = PiMetConfig.getWebPort(this);
         new Thread(() -> {
-            boolean alive = ProotManager.isPiWebPortAlive(port);
+            boolean alive = ProotManager.isPiWebHttpReady(port);
+            if (!alive && ProotManager.isPiWebPortAlive(port)) {
+                try { Thread.sleep(800); } catch (InterruptedException ignored) {}
+                alive = ProotManager.isPiWebHttpReady(port);
+            }
+            final boolean finalAlive = alive;
             mainHandler.post(() -> {
-                isPiWebAlive = alive;
-                updateLaunchStatusUI(alive);
+                isPiWebAlive = finalAlive;
+                updateLaunchStatusUI(finalAlive);
             });
         }).start();
     }

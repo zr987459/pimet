@@ -293,6 +293,22 @@ public final class ProotManager {
                     }
                 }
             }
+
+            // 3. 兼容修复：Next.js 16.4+ 构建产物读取 experimental.instantInsights.validationLevel，
+            // 若容器内 next runtime 仍为 16.3.x，会导致所有路由抛 TypeError 返回 500。在 next.config.ts 中自动注入兜底字段。
+            File[] nextConfigs = new File[]{
+                    new File(rootfs, "usr/local/lib/node_modules/@agegr/pi-web/next.config.ts"),
+                    new File(rootfs, "usr/lib/node_modules/@agegr/pi-web/next.config.ts")
+            };
+            for (File nc : nextConfigs) {
+                if (nc.exists() && nc.canWrite()) {
+                    String content = readFileToString(nc);
+                    if (content != null && content.contains("experimental: {") && !content.contains("instantInsights")) {
+                        content = content.replace("experimental: {", "experimental: {\n    instantInsights: { validationLevel: 1 } as any,");
+                        writeStringToFile(nc, content);
+                    }
+                }
+            }
         } catch (Throwable t) {
             Log.w(TAG, "optimizePiWebOffline failed", t);
         }

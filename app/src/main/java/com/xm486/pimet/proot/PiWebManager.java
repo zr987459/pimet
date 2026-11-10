@@ -291,7 +291,8 @@ public final class PiWebManager {
                     "pkill -9 -f 'node.*pi-web' 2>/dev/null || true; " +
                     "pkill -9 -f pi-web 2>/dev/null || true; " +
                     "pkill -9 -f node 2>/dev/null || true; " +
-                    "fuser -k -9 " + port + "/tcp 2>/dev/null || true"
+                    "fuser -k -9 " + port + "/tcp 2>/dev/null || true; " +
+                    "fuser -k -9 9005/tcp 2>/dev/null || true"
             );
             ProcessBuilder pb = ProotManager.buildProotProcess(context, "/root", killCmd);
             pb.redirectOutput(new File("/dev/null"));
