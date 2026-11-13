@@ -446,8 +446,9 @@ public final class UpdateManager {
                                     }
                                     ProotManager.optimizePiWebOffline(context);
                                 } else if (extCode == 0 && syncCode != 0) {
+                                    final int finalSyncCode = syncCode;
                                     if (progressListener != null) {
-                                        MAIN_HANDLER.post(() -> progressListener.onProgress(30, "依赖增量同步未完成，自动切换 npm 完整同步...", "syncCode=" + syncCode));
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(30, "依赖增量同步未完成，自动切换 npm 完整同步...", "syncCode=" + finalSyncCode));
                                     }
                                 }
                             }
