@@ -81,7 +81,7 @@
         <!-- Pi 浏览器：独立全屏窗口（单独任务，可分屏/小窗；标签由 FloatingApps 单例持有） -->
         <activity
             android:name=".PiBrowserActivity"
-            android:exported="false"
+            android:exported="true"
             android:label="Pi 浏览器"
             android:launchMode="singleTask"
             android:taskAffinity="${applicationId}.browser"

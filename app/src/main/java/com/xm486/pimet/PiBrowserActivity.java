@@ -1,5 +1,6 @@
 package com.xm486.pimet;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.widget.FrameLayout;
 
@@ -15,6 +16,9 @@ import com.xm486.pimet.ui.ThemeHelper;
  */
 public class PiBrowserActivity extends AppCompatActivity {
 
+    public static final String EXTRA_OPEN_URL = "pimet_open_url";
+    public static final String EXTRA_CONTAINER = "pimet_container";
+
     private FrameLayout container;
 
     @Override
@@ -23,7 +27,14 @@ public class PiBrowserActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         container = new FrameLayout(this);
         setContentView(container);
-        FloatingApps.attachTo(this, container);
+        FloatingApps.attachTo(this, container, getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        FloatingApps.openFromIntent(this, intent);
     }
 
     @Override

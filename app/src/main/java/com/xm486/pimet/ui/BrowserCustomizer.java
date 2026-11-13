@@ -95,6 +95,7 @@ public final class BrowserCustomizer {
         b("piweb", "🤖", "Pi 工作台（新标签）", all);
         b("bookmark", "⭐", "收藏本页", all);
         b("bookmarks", "📑", "书签", all);
+        b("shortcut", "📲", "添加到桌面", all);
         b("copy", "📋", "复制网址", all);
         b("pistop", "⏸", "暂停/继续 Pi", all);
         b("ball", "●", "悬浮球开关", "menu");
@@ -103,6 +104,8 @@ public final class BrowserCustomizer {
         ALIASES.put("new_tab", "newtab");
         ALIASES.put("ask_pi", "askpi");
         ALIASES.put("customize", "settings");
+        ALIASES.put("add_to_desktop", "shortcut");
+        ALIASES.put("desktop_shortcut", "shortcut");
     }
 
     private static void b(String id, String icon, String label, String where) {

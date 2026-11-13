@@ -3,16 +3,23 @@ package com.xm486.pimet.ui;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.MutableContextWrapper;
 import android.content.SharedPreferences;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -203,11 +210,65 @@ public final class FloatingApps {
 
     /** PiBrowserActivity.onCreate：把浏览器界面放进 Activity */
     public static void attachTo(Activity a, ViewGroup container) {
+        attachTo(a, container, null);
+    }
+
+    public static void attachTo(Activity a, ViewGroup container, Intent intent) {
         sUserClosed = false;
         boolean created = sInstance == null;
         if (created) sInstance = new FloatingApps(a.getApplicationContext());
         sInstance.attachHost(a, container);
-        if (created) sInstance.goHome();
+        String intentUrl = extractIntentUrl(sInstance, intent);
+        if (intentUrl != null) {
+            openResolvedIntentUrl(sInstance, intentUrl, intent.getStringExtra(PiBrowserActivity.EXTRA_CONTAINER));
+        } else if (created) {
+            sInstance.goHome();
+        }
+    }
+
+    private static String extractIntentUrl(FloatingApps f, Intent intent) {
+        if (f == null || intent == null) return null;
+        String url = intent.getStringExtra(PiBrowserActivity.EXTRA_OPEN_URL);
+        if (url == null || url.trim().isEmpty()) url = intent.getDataString();
+        if (url == null) return null;
+        String target = url.trim();
+        boolean okScheme = target.startsWith("http://") || target.startsWith("https://") || f.isTrusted(target);
+        return okScheme ? target : null;
+    }
+
+    private static void openResolvedIntentUrl(FloatingApps f, String target, String reqContainer) {
+        if (f == null || target == null) return;
+        f.userTouched = true;
+        for (Tab t : f.tabs) {
+            if (!t.pi && !t.closed && target.equals(t.url)
+                    && (reqContainer == null || reqContainer.isEmpty() || reqContainer.equals(t.container))) {
+                f.switchTo(t);
+                return;
+            }
+        }
+        Tab cur = f.active;
+        if (cur != null && !cur.pi && !cur.closed && f.isHomeUrl(cur.url)
+                && (reqContainer == null || reqContainer.isEmpty() || reqContainer.equals(cur.container))) {
+            f.loadIn(cur, target, true);
+            return;
+        }
+        String c = (reqContainer != null && !reqContainer.isEmpty())
+                ? f.resolveContainer(reqContainer, cur)
+                : f.resolveContainer(f.uiDefaultContainer(), cur);
+        Tab nt = f.newTab(false, c);
+        f.switchTo(nt);
+        f.loadIn(nt, target, true);
+    }
+
+    /** 处理桌面快捷方式等外部 Intent 打开指定网页（仅放行 http/https 与可信本地页面） */
+    public static void openFromIntent(Activity a, Intent intent) {
+        if (intent == null) return;
+        final String reqContainer = intent.getStringExtra(PiBrowserActivity.EXTRA_CONTAINER);
+        MAIN.post(() -> {
+            FloatingApps f = sInstance;
+            String target = extractIntentUrl(f, intent);
+            if (target != null) openResolvedIntentUrl(f, target, reqContainer);
+        });
     }
 
     /** PiBrowserActivity.onStart / onStop */
@@ -238,8 +299,8 @@ public final class FloatingApps {
         if (f.switcher.getVisibility() == View.VISIBLE) { f.closeSwitcher(); return true; }
         if (f.fullscreen) { f.setFullscreen(false); return true; }
         if (f.urlField.hasFocus()) { f.hideIme(); f.showUrl(f.active, f.currentUrl()); return true; }
-        if (f.web != null && f.web.canGoBack()) { f.web.goBack(); return true; }
-        if (f.active != null && !f.isLauncher(f.currentUrl()) && !f.active.pi) { f.goHome(); return true; }
+        if (f.web != null && !f.isHomeUrl(f.currentUrl()) && f.web.canGoBack()) { f.web.goBack(); return true; }
+        if (f.active != null && !f.isHomeUrl(f.currentUrl()) && !f.active.pi) { f.goHome(); return true; }
         return false;
     }
 
@@ -580,6 +641,7 @@ public final class FloatingApps {
         boolean agentVisible;    // 后台标签被 Pi 操作时临时可见（压在当前标签下面）
         boolean desktop;         // 桌面版网站
         Bitmap thumb;            // 标签页网格里的缩略图
+        volatile Bitmap favicon; // 当前网页图标（桌面快捷方式用）
         volatile boolean translated; // 网页翻译已开启（悬浮球显示「原」）
         String autoAuthKey;      // 已自动用保存的账号密码登录过的 host|realm（失败时改为弹窗，避免死循环）
         long lastUsed = System.currentTimeMillis();
@@ -1242,6 +1304,135 @@ public final class FloatingApps {
         d.show();
     }
 
+    private void addToDesktopDialog() {
+        if (host == null || active == null) return;
+        final Tab t = active;
+        final String u = currentUrl();
+        boolean allowed = !isHomeUrl(u) && (u.startsWith("http://") || u.startsWith("https://") || isTrusted(u));
+        if (!allowed) {
+            Toast.makeText(ctx, "先打开一个网页再添加到桌面", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String defTitle = t.title != null ? t.title.trim() : "";
+        if (defTitle.isEmpty() || "Pi 浏览器".equals(defTitle)) {
+            String h = Uri.parse(u).getHost();
+            defTitle = (h != null && !h.isEmpty()) ? h.replaceFirst("^www\\.", "") : u;
+        }
+        if (defTitle.length() > 24) defTitle = defTitle.substring(0, 24);
+
+        final EditText et = new EditText(host);
+        et.setSingleLine(true);
+        et.setHint("桌面图标名称");
+        et.setText(defTitle);
+        et.selectAll();
+        FrameLayout wrap = new FrameLayout(host);
+        wrap.setPadding(dp(20), dp(10), dp(20), 0);
+        wrap.addView(et);
+
+        new AlertDialog.Builder(host)
+                .setTitle("添加到桌面")
+                .setMessage("在手机桌面创建独立图标，点击直接用 Pi 浏览器打开此网页。")
+                .setView(wrap)
+                .setPositiveButton("添加", (d, w) -> {
+                    String name = et.getText().toString().trim();
+                    if (name.isEmpty()) {
+                        String h = Uri.parse(u).getHost();
+                        name = (h != null && !h.isEmpty()) ? h : "网页捷径";
+                    }
+                    createDesktopShortcut(t, u, name);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void createDesktopShortcut(Tab t, String url, String title) {
+        try {
+            ShortcutManager sm = ctx.getSystemService(ShortcutManager.class);
+            if (sm == null || !sm.isRequestPinShortcutSupported()) {
+                Toast.makeText(ctx, "当前系统桌面不支持创建快捷方式", Toast.LENGTH_LONG).show();
+                return;
+            }
+            Bitmap iconBmp = buildShortcutIcon(t, url, title);
+            Intent launch = new Intent(ctx, PiBrowserActivity.class);
+            launch.setAction(Intent.ACTION_VIEW);
+            launch.setData(Uri.parse(url));
+            launch.putExtra(PiBrowserActivity.EXTRA_OPEN_URL, url);
+            if (t.container != null && !t.container.isEmpty()) {
+                launch.putExtra(PiBrowserActivity.EXTRA_CONTAINER, t.container);
+            }
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+
+            String sid = "pimet_web_" + Long.toHexString(System.currentTimeMillis());
+            ShortcutInfo info = new ShortcutInfo.Builder(ctx, sid)
+                    .setShortLabel(title)
+                    .setLongLabel(title)
+                    .setIcon(Icon.createWithBitmap(iconBmp))
+                    .setIntent(launch)
+                    .build();
+
+            Intent cbIntent = sm.createShortcutResultIntent(info);
+            int flags = Build.VERSION.SDK_INT >= 23
+                    ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                    : PendingIntent.FLAG_UPDATE_CURRENT;
+            PendingIntent pi = PendingIntent.getBroadcast(ctx, (int) (System.currentTimeMillis() & 0x7fffffff), cbIntent, flags);
+            boolean sent = sm.requestPinShortcut(info, pi != null ? pi.getIntentSender() : null);
+            Toast.makeText(ctx,
+                    sent ? "已请求添加到桌面；如未出现请确认已开启「桌面快捷方式」权限" : "桌面拒绝创建快捷方式，请检查权限",
+                    Toast.LENGTH_LONG).show();
+        } catch (Throwable e) {
+            Log.w(TAG, "createDesktopShortcut failed", e);
+            Toast.makeText(ctx, "添加到桌面失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private Bitmap buildShortcutIcon(Tab t, String url, String title) {
+        final int size = 192;
+        Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        Bitmap fav = (t != null && t.favicon != null && !t.favicon.isRecycled())
+                ? t.favicon
+                : ((t != null && t.web != null) ? t.web.getFavicon() : null);
+        if (fav != null && !fav.isRecycled() && fav.getWidth() >= 16 && fav.getHeight() >= 16) {
+            p.setColor(Color.WHITE);
+            c.drawRoundRect(new RectF(8, 8, size - 8, size - 8), 40f, 40f, p);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(2f);
+            p.setColor(Color.parseColor("#E2E8F0"));
+            c.drawRoundRect(new RectF(8, 8, size - 8, size - 8), 40f, 40f, p);
+            p.setStyle(Paint.Style.FILL);
+            int pad = 32;
+            Rect dst = new Rect(pad, pad, size - pad, size - pad);
+            c.drawBitmap(fav, null, dst, p);
+            return out;
+        }
+
+        int[] palette = {
+                Color.parseColor("#2563EB"), Color.parseColor("#00BA76"), Color.parseColor("#7C3AED"),
+                Color.parseColor("#EA580C"), Color.parseColor("#0891B2"), Color.parseColor("#DB2777"),
+                Color.parseColor("#4F46E5"), Color.parseColor("#059669")
+        };
+        String hostName = Uri.parse(url).getHost();
+        String seed = (hostName != null && !hostName.isEmpty()) ? hostName : title;
+        int col = palette[Math.abs(seed.hashCode()) % palette.length];
+        p.setColor(col);
+        c.drawRoundRect(new RectF(8, 8, size - 8, size - 8), 40f, 40f, p);
+
+        String ch = title != null && !title.trim().isEmpty() ? title.trim().substring(0, 1).toUpperCase() : "W";
+        if (hostName != null && !hostName.isEmpty() && ch.matches("[A-Za-z0-9]")) {
+            ch = hostName.replaceFirst("^www\\.", "").substring(0, 1).toUpperCase();
+        }
+        p.setColor(Color.WHITE);
+        p.setTextSize(88f);
+        p.setFakeBoldText(true);
+        p.setTextAlign(Paint.Align.CENTER);
+        Paint.FontMetrics fm = p.getFontMetrics();
+        float cy = size / 2f - (fm.ascent + fm.descent) / 2f;
+        c.drawText(ch, size / 2f, cy, p);
+        return out;
+    }
+
     private void showDownloads() {
         if (host == null) return;
         new AlertDialog.Builder(host).setTitle("下载内容").setMessage(downloadsText(ctx))
@@ -1651,6 +1842,7 @@ public final class FloatingApps {
                 t.httpStatus = 0;
                 t.loading = true;
                 t.translated = false;
+                t.favicon = favicon;
                 if (t == active) { updateProgress(); refreshBall(); }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
@@ -1757,6 +1949,11 @@ public final class FloatingApps {
             public void onProgressChanged(WebView view, int newProgress) {
                 t.progress = newProgress;
                 if (t == active) updateProgress();
+            }
+
+            @Override
+            public void onReceivedIcon(WebView view, Bitmap icon) {
+                if (icon != null && !icon.isRecycled()) t.favicon = icon;
             }
 
             @Override
@@ -2274,39 +2471,113 @@ public final class FloatingApps {
     }
 
     private void reload() {
-        if (isLauncher(currentUrl())) goHome();
+        if (isHomeUrl(currentUrl())) goHome();
         else web.reload();
     }
 
     private void goBack() {
-        if (web.canGoBack()) web.goBack();
-        else if (!isLauncher(currentUrl())) goHome();
+        if (web != null && !isHomeUrl(currentUrl()) && web.canGoBack()) web.goBack();
+        else if (!isHomeUrl(currentUrl())) goHome();
+        else agentMinimize();
     }
 
     private boolean isLauncher(String url) {
-        return url != null && url.endsWith("/.launcher.html");
+        if (url == null) return false;
+        String clean = url.split("[?#]", 2)[0];
+        return clean.endsWith("/.launcher.html");
     }
 
+    private boolean isHomeUrl(String u) {
+        if (u == null || u.isEmpty()) return true;
+        if (isLauncher(u)) return true;
+        String clean = u.split("[?#]", 2)[0];
+        String hp = uiHomepage();
+        if (hp != null) {
+            String rhp = resolveOpenUrl(hp).split("[?#]", 2)[0];
+            if (clean.equals(hp.split("[?#]", 2)[0]) || clean.equals(rhp)) return true;
+        }
+        File custom = new File(appsDir, "home.html");
+        if (custom.isFile() && clean.equals("file://" + custom.getAbsolutePath())) return true;
+        return false;
+    }
+
+    private boolean isBottomToolbar() {
+        return "bottom".equalsIgnoreCase(uiObj("theme").optString("toolbarPosition", "top"));
+    }
+
+    private Boolean lastBarHome = null;
+    private final java.util.IdentityHashMap<View, LinearLayout.LayoutParams> barOrigLp = new java.util.IdentityHashMap<>();
+
     /**
-     * 当前标签是内置主页（.launcher.html，页面中间已有搜索框）时隐藏工具栏地址栏，离开主页恢复。
-     * 用 INVISIBLE 保留占位，工具栏其他按钮不跳位置；正在编辑地址栏时不隐藏。
+     * 底栏双状态自适应：
+     * 1. 没网页状态（主页）：urlPill 彻底 GONE，底栏按钮 weight=1f 均匀铺满全屏，绝无空洞
+     * 2. 有网页状态：urlPill 撑满中间(weight=1f)，底栏按钮恢复固定紧凑宽度
      */
     private void syncUrlPill() {
-        if (urlPill == null) return;
-        boolean onHome = active != null && isLauncher(active.url) && (urlField == null || !urlField.hasFocus());
-        int vis = onHome ? View.INVISIBLE : View.VISIBLE;
-        if (urlPill.getVisibility() != vis) urlPill.setVisibility(vis);
+        if (urlPill == null || bar == null) return;
+        boolean onHome = active != null && isHomeUrl(active.url) && (urlField == null || !urlField.hasFocus());
+
+        if (!isBottomToolbar()) {
+            int vis = onHome ? View.INVISIBLE : View.VISIBLE;
+            if (urlPill.getVisibility() != vis) urlPill.setVisibility(vis);
+            return;
+        }
+
+        int want = onHome ? View.GONE : View.VISIBLE;
+        if (lastBarHome != null && lastBarHome.booleanValue() == onHome && urlPill.getVisibility() == want) {
+            return; // 幂等守卫
+        }
+        lastBarHome = onHome; // 先写守卫防焦点回调重入
+
+        if (onHome && urlField != null && urlField.hasFocus()) {
+            hideIme();
+        }
+
+        applyBarLayout(onHome);
+    }
+
+    private void applyBarLayout(boolean home) {
+        if (bar == null) return;
+        for (int i = 0; i < bar.getChildCount(); i++) {
+            View c = bar.getChildAt(i);
+            if (c == urlPill) continue;
+            LinearLayout.LayoutParams cur = (LinearLayout.LayoutParams) c.getLayoutParams();
+            if (cur == null) continue;
+            if (home) {
+                if (!barOrigLp.containsKey(c)) barOrigLp.put(c, new LinearLayout.LayoutParams(cur));
+                c.setLayoutParams(new LinearLayout.LayoutParams(0, cur.height, 1f));
+            } else {
+                LinearLayout.LayoutParams o = barOrigLp.remove(c);
+                if (o != null) c.setLayoutParams(o);
+            }
+        }
+        if (urlPill != null) {
+            urlPill.setVisibility(home ? View.GONE : View.VISIBLE);
+            LinearLayout.LayoutParams ulp = (LinearLayout.LayoutParams) urlPill.getLayoutParams();
+            if (ulp != null) {
+                ulp.width = 0;
+                ulp.weight = home ? 0f : 1f;
+                urlPill.setLayoutParams(ulp);
+            }
+        }
+        bar.requestLayout();
     }
 
     /** 要主动聚焦地址栏前先显示出来（主页上它是隐藏的，隐藏的 View 拿不到焦点） */
     private void revealUrlPill() {
-        if (urlPill != null && urlPill.getVisibility() != View.VISIBLE) urlPill.setVisibility(View.VISIBLE);
+        if (urlPill == null || bar == null) return;
+        if (isBottomToolbar()) {
+            lastBarHome = false;
+            applyBarLayout(false);
+        } else {
+            if (urlPill.getVisibility() != View.VISIBLE) urlPill.setVisibility(View.VISIBLE);
+        }
     }
 
     private void showUrl(Tab t, String url) {
         if (t == active) syncUrlPill();
         if (t != active || urlField.hasFocus()) return;
-        if (url == null || url.isEmpty() || isLauncher(url)) {
+        if (url == null || url.isEmpty() || isHomeUrl(url)) {
             siteIcon.setText("🔍");
             urlField.setText("");
             return;
@@ -4044,7 +4315,7 @@ public final class FloatingApps {
 
     /** 记一条历史（launcher、应用目录页面、非 http(s)/file 不记） */
     private void recordHistory(Tab t, String url, String title) {
-        if (t == null || url == null || url.isEmpty() || isLauncher(url) || isTrusted(url)) return;
+        if (t == null || url == null || url.isEmpty() || isHomeUrl(url) || isTrusted(url)) return;
         if (!(url.startsWith("http://") || url.startsWith("https://"))) return;
         try {
             history().add(url, title == null ? "" : title, t.container);
@@ -4356,7 +4627,7 @@ public final class FloatingApps {
             {"fullscreen", "⛶", "全屏"}, {"translate", "译", "网页翻译"}, {"theme", "🎨", "切换主题"}, {"askpi", "🤖", "问 Pi"},
             {"terminal", ">_", "终端"}, {"external", "↗", "用其他浏览器打开"}, {"downloads", "⬇", "下载内容"}, {"settings", "⚙", "自定义"},
             {"close", "⏻", "关闭浏览器"},
-            {"bookmark", "☆", "添加书签"}, {"bookmarks", "★", "书签"}, {"copy", "⧉", "复制链接"}, {"pistop", "⏹", "停止 Pi 操作浏览器"},
+            {"bookmark", "☆", "添加书签"}, {"bookmarks", "★", "书签"}, {"shortcut", "📲", "添加到桌面"}, {"copy", "⧉", "复制链接"}, {"pistop", "⏹", "停止 Pi 操作浏览器"},
             {"piweb", "🤖", "Pi 工作台（新标签打开）"}, {"workbench", "🌐", "回到 PiMet 工作台"}, {"ball", "●", "悬浮球"},
             {"newtab_container", "＋", "新标签页（选择容器）…"},
             {"open_newtab", "＋", "在新标签打开"}, {"open_background", "⇲", "在后台标签打开"}, {"copy_link", "⧉", "复制链接地址"},
@@ -4431,6 +4702,8 @@ public final class FloatingApps {
 
     /** 按配置重建工具栏（按钮顺序/隐藏/自定义按钮、上下位置、字体缩放） */
     private void renderToolbar() {
+        barOrigLp.clear();
+        lastBarHome = null;
         float fs = fontScale();
         bar.removeAllViews();
         boolean hasMenu = false;
@@ -4501,7 +4774,7 @@ public final class FloatingApps {
             bar.addView(v, lp);
         }
         // 位置：top | bottom
-        boolean bottom = "bottom".equalsIgnoreCase(uiObj("theme").optString("toolbarPosition", "top"));
+        boolean bottom = isBottomToolbar();
         int idx = column.indexOfChild(bar);
         int want = bottom ? column.getChildCount() - 1 : 0;
         if (idx >= 0 && idx != want) {
@@ -4510,6 +4783,7 @@ public final class FloatingApps {
             if (bottom) column.addView(bar, blp);
             else column.addView(bar, 0, blp);
         }
+        lastBarHome = null;
         syncUrlPill();
     }
 
@@ -4667,7 +4941,7 @@ public final class FloatingApps {
         // ui.json 表达不了的 App 自带功能（书签、Pi 开关、回工作台…）固定放在最后一组，配置怎么改都还能找到
         try {
             items.add(new JSONObject().put("type", "divider"));
-            for (String x : new String[]{"bookmark", "bookmarks", "pistop", "piweb", "workbench", "ball"}) {
+            for (String x : new String[]{"bookmark", "shortcut", "bookmarks", "pistop", "piweb", "workbench", "ball"}) {
                 if (!present.contains(x)) items.add(new JSONObject().put("id", x));
             }
             if (!hasSettings) items.add(new JSONObject().put("id", "settings"));
@@ -4686,6 +4960,7 @@ public final class FloatingApps {
                 case "forward": enabled = web != null && web.canGoForward(); break;
                 case "back": enabled = web != null && web.canGoBack(); break;
                 case "bookmark": title = isBookmarked(u) ? "★ 已加书签（点按移除）" : "☆ 添加书签"; enabled = webPage; break;
+                case "shortcut": enabled = !isHomeUrl(u) && (webPage || isTrusted(u)); break;
                 case "translate": if (title.isEmpty()) title = active != null && active.translated ? "显示原文" : "网页翻译"; enabled = webPage; break;
                 case "desktop": checkable = true; checked = active != null && active.desktop; break;
                 case "fullscreen": if (title.isEmpty()) title = fullscreen ? "退出全屏" : "全屏"; break;
@@ -4886,6 +5161,7 @@ public final class FloatingApps {
             case "close": confirmCloseBrowser(); break;
             case "bookmark": toggleBookmark(); break;
             case "bookmarks": showBookmarks(); break;
+            case "shortcut": addToDesktopDialog(); break;
             case "copy": copyUrl(); break;
             case "pistop": togglePiStopped(); break;
             case "piweb": openPiWebTab(); break;
