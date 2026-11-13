@@ -400,43 +400,55 @@ public final class UpdateManager {
                                 int extCode = ProotManager.executeCommandSync(context, extractCmd);
                                 targetTgz.delete();
 
-                                // 极速增量同步变更的核心依赖包（避免保留旧 node_modules 导致跨版本断层 500，同时绕过 npm install 全量扫描卡死）
+                                // 递归校验并极速流式同步缺失或跨版本变更的传递依赖（绕过 npm install 全量扫描卡死，同时避免只对齐顶层导致子依赖缺失 500）
+                                int syncCode = -1;
                                 if (extCode == 0) {
                                     if (progressListener != null) {
-                                        MAIN_HANDLER.post(() -> progressListener.onProgress(82, "正在极速对齐变更依赖包...", "Fast Tarball Dependency Sync..."));
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(78, "正在深度检查并同步变更依赖树...", "准备极速依赖同步脚本..."));
                                     }
-                                    String syncDepsCmd = "node -e '" +
-                                            "const fs=require(\"fs\"),path=require(\"path\"),{execSync}=require(\"child_process\");" +
-                                            "const T=\"" + targetDir + "\",REG=\"" + normalizedRegistry + "\".replace(/\\/+$/,\"\");" +
-                                            "(async()=>{" +
-                                            "try{" +
-                                            "const pkg=JSON.parse(fs.readFileSync(path.join(T,\"package.json\"),\"utf8\"));" +
-                                            "const deps=Object.assign({},pkg.dependencies||{});" +
-                                            "if(deps.next)deps[\"@next/env\"]=deps.next;" +
-                                            "if(deps[\"@earendil-works/pi-coding-agent\"]&&!deps[\"@earendil-works/pi-schema\"])deps[\"@earendil-works/pi-schema\"]=deps[\"@earendil-works/pi-coding-agent\"];" +
-                                            "for(const[name,spec]of Object.entries(deps)){" +
-                                            "const ver=String(spec).replace(/^[\\^~]/,\"\");" +
-                                            "const p=path.join(T,\"node_modules\",name,\"package.json\");" +
-                                            "let cur=null;if(fs.existsSync(p)){try{cur=JSON.parse(fs.readFileSync(p,\"utf8\")).version;}catch(e){}}" +
-                                            "if(cur!==ver){" +
-                                            "const m=await fetch(REG+\"/\"+name+\"/\"+ver).then(r=>r.json());" +
-                                            "const u=m&&m.dist&&m.dist.tarball;" +
-                                            "if(u){const d=path.join(T,\"node_modules\",name);fs.mkdirSync(d,{recursive:true});" +
-                                            "execSync(\"curl -sL \\\"\"+u+\"\\\" | tar -xzf - -C \\\"\"+d+\"\\\" --strip-components=1\");}" +
-                                            "}}" +
-                                            "}catch(e){}" +
-                                            "})();'";
-                                    ProotManager.executeCommandSync(context, syncDepsCmd);
+                                    File syncScript = new File(tmpDir, "pi-web-sync.js");
+                                    try (FileOutputStream sos = new FileOutputStream(syncScript)) {
+                                        sos.write(FAST_DEP_SYNC_SCRIPT.getBytes(StandardCharsets.UTF_8));
+                                    }
+                                    ProcessBuilder syncPb = ProotManager.buildProotProcess(
+                                            context,
+                                            "/root",
+                                            Arrays.asList(
+                                                    "/bin/bash", "-c",
+                                                    "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH; " +
+                                                    "node /tmp/pi-web-sync.js '" + targetDir + "' '" + normalizedRegistry + "'"
+                                            )
+                                    );
+                                    syncPb.redirectErrorStream(true);
+                                    Process syncProc = syncPb.start();
+                                    int syncedCount = 0;
+                                    try (BufferedReader sr = new BufferedReader(new InputStreamReader(syncProc.getInputStream(), StandardCharsets.UTF_8))) {
+                                        String line;
+                                        while ((line = sr.readLine()) != null) {
+                                            final String logLine = line;
+                                            if (line.startsWith("[sync] ")) syncedCount++;
+                                            final int pct = Math.min(90, 78 + (syncedCount / 3));
+                                            if (progressListener != null) {
+                                                MAIN_HANDLER.post(() -> progressListener.onProgress(pct, "正在极速对齐依赖包...", logLine));
+                                            }
+                                        }
+                                    }
+                                    syncCode = syncProc.waitFor();
+                                    syncScript.delete();
                                 }
 
                                 // 校验构建产物确实换成了新版本（防止只覆盖了 package.json）
                                 String builtAfter = readBuiltPiWebVersion(new File(rootfsDir, targetDir.substring(1)));
-                                if (extCode == 0 && builtAfter != null) {
+                                if (extCode == 0 && syncCode == 0 && builtAfter != null) {
                                     fastSuccess = true;
                                     if (progressListener != null) {
-                                        MAIN_HANDLER.post(() -> progressListener.onProgress(88, "增量解包完成，正在注入离线优化资源...", "optimizePiWebOffline..."));
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(92, "增量解包与依赖同步完成，正在注入离线优化资源...", "optimizePiWebOffline..."));
                                     }
                                     ProotManager.optimizePiWebOffline(context);
+                                } else if (extCode == 0 && syncCode != 0) {
+                                    if (progressListener != null) {
+                                        MAIN_HANDLER.post(() -> progressListener.onProgress(30, "依赖增量同步未完成，自动切换 npm 完整同步...", "syncCode=" + syncCode));
+                                    }
                                 }
                             }
                         }
@@ -793,4 +805,203 @@ public final class UpdateManager {
             Toast.makeText(context, "无法打开浏览器，请使用复制链接选项", Toast.LENGTH_SHORT).show();
         }
     }
+
+    private static final String FAST_DEP_SYNC_SCRIPT =
+            "\"use strict\";\n" +
+            "const fs = require(\"fs\");\n" +
+            "const path = require(\"path\");\n" +
+            "const { spawn } = require(\"child_process\");\n" +
+            "const { Readable } = require(\"stream\");\n" +
+            "\n" +
+            "const T = process.argv[2] || \"/usr/local/lib/node_modules/@agegr/pi-web\";\n" +
+            "const REG = (process.argv[3] || \"https://registry.npmmirror.com\").replace(/\\/+$/, \"\");\n" +
+            "const CONCURRENCY = 6;\n" +
+            "\n" +
+            "function readPkg(dir) {\n" +
+            "  try {\n" +
+            "    return JSON.parse(fs.readFileSync(path.join(dir, \"package.json\"), \"utf8\"));\n" +
+            "  } catch {\n" +
+            "    return null;\n" +
+            "  }\n" +
+            "}\n" +
+            "\n" +
+            "const packumentCache = new Map();\n" +
+            "async function getPackument(name) {\n" +
+            "  if (packumentCache.has(name)) return packumentCache.get(name);\n" +
+            "  const encoded = name.startsWith(\"@\")\n" +
+            "    ? \"@\" + encodeURIComponent(name.slice(1))\n" +
+            "    : encodeURIComponent(name);\n" +
+            "  const p = (async () => {\n" +
+            "    let lastErr;\n" +
+            "    for (let attempt = 0; attempt < 2; attempt++) {\n" +
+            "      try {\n" +
+            "        const res = await fetch(`${REG}/${encoded}`, {\n" +
+            "          headers: { Accept: \"application/vnd.npm.install-v1+json\" },\n" +
+            "          signal: AbortSignal.timeout(15000),\n" +
+            "        });\n" +
+            "        if (!res.ok) throw new Error(`HTTP ${res.status} for ${name}`);\n" +
+            "        return await res.json();\n" +
+            "      } catch (e) {\n" +
+            "        lastErr = e;\n" +
+            "      }\n" +
+            "    }\n" +
+            "    throw lastErr;\n" +
+            "  })();\n" +
+            "  packumentCache.set(name, p);\n" +
+            "  return p;\n" +
+            "}\n" +
+            "\n" +
+            "async function installTarball(url, destDir) {\n" +
+            "  const tmpDir = destDir + \".__tmp_\" + process.pid + \"_\" + Math.random().toString(36).slice(2, 7);\n" +
+            "  fs.rmSync(tmpDir, { recursive: true, force: true });\n" +
+            "  fs.mkdirSync(tmpDir, { recursive: true });\n" +
+            "  try {\n" +
+            "    let res;\n" +
+            "    let lastErr;\n" +
+            "    for (let attempt = 0; attempt < 2; attempt++) {\n" +
+            "      try {\n" +
+            "        res = await fetch(url, { signal: AbortSignal.timeout(45000) });\n" +
+            "        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} downloading ${url}`);\n" +
+            "        break;\n" +
+            "      } catch (e) {\n" +
+            "        lastErr = e;\n" +
+            "        res = null;\n" +
+            "      }\n" +
+            "    }\n" +
+            "    if (!res) throw lastErr;\n" +
+            "\n" +
+            "    await new Promise((resolve, reject) => {\n" +
+            "      const tar = spawn(\"tar\", [\"-xzf\", \"-\", \"-C\", tmpDir, \"--strip-components=1\"], {\n" +
+            "        stdio: [\"pipe\", \"ignore\", \"pipe\"],\n" +
+            "      });\n" +
+            "      let errBuf = \"\";\n" +
+            "      tar.stderr.on(\"data\", (d) => { errBuf += d.toString(); });\n" +
+            "      tar.on(\"error\", reject);\n" +
+            "      tar.on(\"close\", (code) => {\n" +
+            "        if (code === 0) resolve();\n" +
+            "        else reject(new Error(`tar exit ${code}: ${errBuf}`));\n" +
+            "      });\n" +
+            "      const nodeStream = Readable.fromWeb(res.body);\n" +
+            "      nodeStream.on(\"error\", (e) => {\n" +
+            "        try { tar.kill(); } catch {}\n" +
+            "        reject(e);\n" +
+            "      });\n" +
+            "      nodeStream.pipe(tar.stdin);\n" +
+            "    });\n" +
+            "\n" +
+            "    fs.rmSync(destDir, { recursive: true, force: true });\n" +
+            "    fs.mkdirSync(path.dirname(destDir), { recursive: true });\n" +
+            "    fs.renameSync(tmpDir, destDir);\n" +
+            "  } catch (e) {\n" +
+            "    fs.rmSync(tmpDir, { recursive: true, force: true });\n" +
+            "    throw e;\n" +
+            "  }\n" +
+            "}\n" +
+            "\n" +
+            "async function main() {\n" +
+            "  const t0 = Date.now();\n" +
+            "  const rootPkg = readPkg(T);\n" +
+            "  if (!rootPkg) throw new Error(\"Missing package.json in \" + T);\n" +
+            "\n" +
+            "  let semver;\n" +
+            "  try {\n" +
+            "    semver = require(path.join(T, \"node_modules/semver\"));\n" +
+            "  } catch {\n" +
+            "    semver = null;\n" +
+            "  }\n" +
+            "  if (!semver) {\n" +
+            "    const meta = await getPackument(\"semver\");\n" +
+            "    const ver = (meta[\"dist-tags\"] && meta[\"dist-tags\"].latest) || Object.keys(meta.versions).pop();\n" +
+            "    console.log(`[sync] bootstrap semver@${ver}`);\n" +
+            "    await installTarball(meta.versions[ver].dist.tarball, path.join(T, \"node_modules/semver\"));\n" +
+            "    semver = require(path.join(T, \"node_modules/semver\"));\n" +
+            "  }\n" +
+            "\n" +
+            "  const rootPlaced = new Map();\n" +
+            "  const nameLocks = new Map();\n" +
+            "  const queue = [];\n" +
+            "  const enqueued = new Set();\n" +
+            "\n" +
+            "  function withNameLock(name, fn) {\n" +
+            "    const prev = nameLocks.get(name) || Promise.resolve();\n" +
+            "    const next = prev.then(fn, fn);\n" +
+            "    nameLocks.set(name, next);\n" +
+            "    return next;\n" +
+            "  }\n" +
+            "\n" +
+            "  function enqueueDeps(deps, parentDir) {\n" +
+            "    if (!deps) return;\n" +
+            "    for (const [name, range] of Object.entries(deps)) {\n" +
+            "      const key = `${parentDir}::${name}::${range}`;\n" +
+            "      if (!enqueued.has(key)) {\n" +
+            "        enqueued.add(key);\n" +
+            "        queue.push({ name, range: String(range), parentDir });\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "\n" +
+            "  const rootDeps = Object.assign({}, rootPkg.dependencies || {});\n" +
+            "  if (rootDeps.next && !rootDeps[\"@next/env\"]) rootDeps[\"@next/env\"] = rootDeps.next;\n" +
+            "  enqueueDeps(rootDeps, T);\n" +
+            "\n" +
+            "  let syncedCount = 0;\n" +
+            "  let checkedCount = 0;\n" +
+            "  let failedCount = 0;\n" +
+            "\n" +
+            "  while (queue.length > 0) {\n" +
+            "    const batch = queue.splice(0, CONCURRENCY);\n" +
+            "    await Promise.all(batch.map(({ name, range, parentDir }) => withNameLock(name, async () => {\n" +
+            "      checkedCount++;\n" +
+            "      const rootDest = path.join(T, \"node_modules\", name);\n" +
+            "      const localNestedDest = path.join(parentDir, \"node_modules\", name);\n" +
+            "\n" +
+            "      const rootExisting = readPkg(rootDest);\n" +
+            "      if (rootExisting && semver.satisfies(rootExisting.version, range)) {\n" +
+            "        enqueueDeps(rootExisting.dependencies, rootDest);\n" +
+            "        return;\n" +
+            "      }\n" +
+            "\n" +
+            "      if (parentDir !== T) {\n" +
+            "        const nestedExisting = readPkg(localNestedDest);\n" +
+            "        if (nestedExisting && semver.satisfies(nestedExisting.version, range)) {\n" +
+            "          enqueueDeps(nestedExisting.dependencies, localNestedDest);\n" +
+            "          return;\n" +
+            "        }\n" +
+            "      }\n" +
+            "\n" +
+            "      try {\n" +
+            "        const meta = await getPackument(name);\n" +
+            "        const allVers = Object.keys(meta.versions || {});\n" +
+            "        const targetVer = semver.maxSatisfying(allVers, range) || (meta[\"dist-tags\"] && meta[\"dist-tags\"].latest);\n" +
+            "        if (!targetVer || !meta.versions[targetVer] || !meta.versions[targetVer].dist?.tarball) {\n" +
+            "          throw new Error(`No matching version for ${name}@${range}`);\n" +
+            "        }\n" +
+            "\n" +
+            "        let installDest = rootDest;\n" +
+            "        if (rootPlaced.has(name) && !semver.satisfies(rootPlaced.get(name), range)) {\n" +
+            "          installDest = localNestedDest;\n" +
+            "        } else {\n" +
+            "          rootPlaced.set(name, targetVer);\n" +
+            "        }\n" +
+            "\n" +
+            "        const vMeta = meta.versions[targetVer];\n" +
+            "        syncedCount++;\n" +
+            "        console.log(`[sync] ${name}@${targetVer}`);\n" +
+            "        await installTarball(vMeta.dist.tarball, installDest);\n" +
+            "        enqueueDeps(vMeta.dependencies, installDest);\n" +
+            "      } catch (err) {\n" +
+            "        failedCount++;\n" +
+            "        console.error(`[warn] ${name}@${range}: ${err.message}`);\n" +
+            "      }\n" +
+            "    })));\n" +
+            "  }\n" +
+            "\n" +
+            "  console.log(`[done] checked=${checkedCount} synced=${syncedCount} failed=${failedCount} ms=${Date.now() - t0}`);\n" +
+            "  if (failedCount > 0) process.exitCode = 1;\n" +
+            "}\n" +
+            "\n" +
+            "main().catch((err) => {\n" +
+            "  console.error(\"SYNC_FATAL:\", err && err.stack ? err.stack : err);\n" +
+            "  process.exit(1);\n" +
+            "});\n";
 }

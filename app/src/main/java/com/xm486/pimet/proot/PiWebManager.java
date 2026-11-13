@@ -368,18 +368,25 @@ public final class PiWebManager {
     }
 
     /**
-     * 读取容器内的 /root/pi-web.log 最后几行
+     * 读取容器内的 /root/pi-web.log 最后 150 行
      */
     public static String readLastLog(Context context) {
         File logFile = new File(ProotManager.getRootfsDir(context), "root/pi-web.log");
         if (!logFile.exists()) return "暂无日志文件";
-        StringBuilder sb = new StringBuilder();
+        java.util.ArrayDeque<String> lines = new java.util.ArrayDeque<>(150);
         try (BufferedReader br = new BufferedReader(new FileReader(logFile))) {
             String line;
             while ((line = br.readLine()) != null) {
-                sb.append(line).append("\n");
+                if (lines.size() >= 150) {
+                    lines.pollFirst();
+                }
+                lines.addLast(line);
             }
         } catch (Throwable ignored) {}
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) {
+            sb.append(l).append("\n");
+        }
         return sb.toString();
     }
 }
