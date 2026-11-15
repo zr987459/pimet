@@ -695,6 +695,27 @@ public class WebTranslationManager {
     /** 用户在某个 WebView 上手动开启翻译的站点：同一站点内跳转新页面时自动续翻（像浏览器的“翻译此网站”会话） */
     private static final java.util.Map<WebView, String> SESSION = new java.util.WeakHashMap<>();
 
+    /** 跨源子框架翻译协同回调（由 FloatingApps 为每个 Tab 注册；PiWebActivity 不注册则按单框架处理） */
+    public interface FrameTranslationDelegate {
+        boolean hasNonMainFrames();
+        boolean isTranslated();
+        void onTranslationStarted(String mode, boolean auto, int batchMax, int charMax, String accent);
+        void onTranslationRestored();
+    }
+
+    private static final java.util.Map<WebView, FrameTranslationDelegate> DELEGATES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    public static void registerDelegate(WebView webView, FrameTranslationDelegate delegate) {
+        if (webView == null) return;
+        if (delegate == null) DELEGATES.remove(webView);
+        else DELEGATES.put(webView, delegate);
+    }
+
+    public static void clearSession(WebView webView) {
+        if (webView != null) SESSION.remove(webView);
+    }
+
     /**
      * 触发对 WebView 注入翻译脚本或切换还原；任何一步失败都用 Toast 说明原因
      */
@@ -714,14 +735,16 @@ public class WebTranslationManager {
                 toast(context, "网页翻译失败：页面还没加载完成");
                 return;
             }
+            final FrameTranslationDelegate delegate = DELEGATES.get(webView);
             String checkJs = "(function(){return window.__pimet_is_translated===true;})()";
             webView.evaluateJavascript(checkJs, value -> {
                 if (value == null) {
                     toast(context, "网页翻译失败：WebView 未执行脚本（页面可能还在加载）");
                     return;
                 }
-                if ("true".equals(value)) {
-                    webView.evaluateJavascript("if (window.__pimet_restore) window.__pimet_restore();", null);
+                if ("true".equals(value) || (delegate != null && delegate.isTranslated())) {
+                    webView.evaluateJavascript("if (window.__pimet_restore) window.__pimet_restore(false);", null);
+                    if (delegate != null) delegate.onTranslationRestored();
                     SESSION.remove(webView);
                     toast(context, "已还原网页原文");
                 } else {
@@ -757,8 +780,11 @@ public class WebTranslationManager {
             MAIN_HANDLER.postDelayed(() -> {
                 String now = webView.getUrl();
                 if (now == null || !host.equals(TranslationSites.hostOf(now))) return;
+                final FrameTranslationDelegate delegate = DELEGATES.get(webView);
                 webView.evaluateJavascript("(function(){return window.__pimet_is_translated===true;})()", v -> {
-                    if (!"true".equals(v)) inject(webView, context, false, true);
+                    if (!"true".equals(v) && (delegate == null || !delegate.isTranslated())) {
+                        inject(webView, context, false, true);
+                    }
                 });
             }, 400);
         } catch (Throwable t) {
@@ -768,7 +794,13 @@ public class WebTranslationManager {
 
     /** 注入翻译脚本，按脚本返回的状态给出提示（auto=自动翻译时不打扰） */
     private static void inject(WebView webView, Context context, boolean announce, boolean auto) {
-        String script = TranslationScript.build(context, auto);
+        final FrameTranslationDelegate delegate = DELEGATES.get(webView);
+        final boolean hasSubframesHint = delegate != null && delegate.hasNonMainFrames();
+        final String mode = TranslationScript.displayMode(context);
+        final int batchMax = TranslationScript.batchMax(context);
+        final int charMax = TranslationScript.charMax(context);
+        final String accent = TranslationScript.accentColor(context);
+        String script = TranslationScript.build(context, auto, hasSubframesHint);
         webView.evaluateJavascript(script, value -> {
             String s = value == null ? "" : value;
             if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
@@ -779,11 +811,21 @@ public class WebTranslationManager {
                 }
             }
             if (s.startsWith("ok:")) {
+                if (delegate != null) delegate.onTranslationStarted(mode, auto, batchMax, charMax, accent);
                 if (announce) toast(context, "正在翻译网页（" + s.substring(3) + " 段）...");
+            } else if ("subframes".equals(s)) {
+                if (delegate != null) delegate.onTranslationStarted(mode, auto, batchMax, charMax, accent);
+                if (announce) toast(context, "正在翻译网页子框架...");
             } else if ("zh".equals(s)) {
-                if (!auto) toast(context, "本页已是中文");
+                if (hasSubframesHint && delegate != null) {
+                    delegate.onTranslationStarted(mode, auto, batchMax, charMax, accent);
+                    if (announce) toast(context, "正在翻译网页子框架...");
+                } else if (!auto) {
+                    toast(context, "本页已是中文");
+                }
             } else if ("none".equals(s)) {
-                // 脚本已挂上增量监听，新内容出现会自动翻译
+                // 脚本已挂上增量监听，新内容出现或子框架加载后会自动翻译
+                if (delegate != null) delegate.onTranslationStarted(mode, auto, batchMax, charMax, accent);
             } else if ("busy".equals(s)) {
                 if (!auto) toast(context, "上一次翻译还在进行中");
             } else if (auto) {
@@ -800,7 +842,7 @@ public class WebTranslationManager {
         });
     }
 
-    static void toast(Context context, String msg) {
+    public static void toast(Context context, String msg) {
         if (context == null || msg == null) return;
         if (Looper.myLooper() != Looper.getMainLooper()) {
             final Context c0 = context;
@@ -819,7 +861,9 @@ public class WebTranslationManager {
      */
     public static void refreshTranslation(WebView webView, Context context) {
         if (webView == null || context == null) return;
+        final FrameTranslationDelegate delegate = DELEGATES.get(webView);
         webView.evaluateJavascript("if (window.__pimet_restore) window.__pimet_restore(true);", null);
+        if (delegate != null) delegate.onTranslationRestored();
         inject(webView, context, false, false);
     }
 }

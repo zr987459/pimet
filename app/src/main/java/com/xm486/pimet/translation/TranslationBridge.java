@@ -21,10 +21,16 @@ public class TranslationBridge {
         void onTranslationStateChanged(boolean isTranslated, int doneCount, int totalCount);
     }
 
+    public interface FrameCoordinator {
+        void onProgress(int done, int total, int failed, boolean active, int pending, String lastError, boolean hasDomIframes);
+        void onRetry();
+    }
+
     private final Activity activity;
     private final WebView webView;
     private final Handler mainHandler;
     private StateListener stateListener;
+    private FrameCoordinator frameCoordinator;
 
     public TranslationBridge(Activity activity, WebView webView) {
         this.activity = activity;
@@ -34,6 +40,10 @@ public class TranslationBridge {
 
     public void setStateListener(StateListener listener) {
         this.stateListener = listener;
+    }
+
+    public void setFrameCoordinator(FrameCoordinator coordinator) {
+        this.frameCoordinator = coordinator;
     }
 
     /**
@@ -119,6 +129,25 @@ public class TranslationBridge {
         mainHandler.post(() -> {
             if (stateListener != null) {
                 stateListener.onTranslationStateChanged(isTranslated, doneCount, totalCount);
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void onProgress(final int done, final int total, final int failed, final boolean active,
+                           final int pending, final String lastError, final boolean hasDomIframes) {
+        mainHandler.post(() -> {
+            if (frameCoordinator != null) {
+                frameCoordinator.onProgress(done, total, failed, active, pending, lastError, hasDomIframes);
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void onRetry() {
+        mainHandler.post(() -> {
+            if (frameCoordinator != null) {
+                frameCoordinator.onRetry();
             }
         });
     }

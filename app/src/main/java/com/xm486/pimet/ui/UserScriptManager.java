@@ -92,6 +92,8 @@ public final class UserScriptManager {
     private final Map<String, Pattern> patternCache = new HashMap<>();
     /** 正在后台补下载的依赖 URL */
     private final java.util.Set<String> fetching = Collections.synchronizedSet(new java.util.HashSet<>());
+    /** 脚本增删改启停或依赖缓存完成时的回调 */
+    private volatile Runnable onChangeListener;
 
     public UserScriptManager(File appsDir) {
         this.appsDir = appsDir;
@@ -99,6 +101,17 @@ public final class UserScriptManager {
         this.stateFile = new File(appsDir, "scripts.json");
         this.dataDir = new File(appsDir, "script-data");
         this.cacheDir = new File(appsDir, "script-cache");
+    }
+
+    public void setOnChangeListener(Runnable listener) {
+        this.onChangeListener = listener;
+    }
+
+    private void notifyChanged() {
+        Runnable l = onChangeListener;
+        if (l != null) {
+            try { l.run(); } catch (Throwable ignored) {}
+        }
     }
 
     // ------------------------------------------------------------------ 列表 / 查询
@@ -267,6 +280,7 @@ public final class UserScriptManager {
         if (s != null && !onMainThread()) {
             try { prefetchDependencies(s); } catch (Throwable ignored) {}
         }
+        notifyChanged();
         return s;
     }
 
@@ -278,6 +292,7 @@ public final class UserScriptManager {
     }
 
     public boolean setEnabled(String id, boolean on) {
+        boolean changed;
         synchronized (lock) {
             if (id == null || !scanFiles().containsKey(id)) return false;
             try {
@@ -287,19 +302,22 @@ public final class UserScriptManager {
                 rec.put("enabled", on);
                 state.put(id, rec);
                 writeState(state);
-                return true;
+                changed = true;
             } catch (Exception e) {
                 return false;
             }
         }
+        if (changed) notifyChanged();
+        return true;
     }
 
     /** 删除源码、状态、数据。 */
     public boolean remove(String id) {
         if (id == null) return false;
+        boolean existed;
         synchronized (lock) {
             File f = scanFiles().get(id);
-            boolean existed = f != null;
+            existed = f != null;
             for (String suffix : new String[]{".user.js", ".js"}) {
                 File x = new File(scriptsDir, id + suffix);
                 if (x.isFile()) //noinspection ResultOfMethodCallIgnored
@@ -313,8 +331,9 @@ public final class UserScriptManager {
                 JSONObject state = readState();
                 if (state.has(id)) { state.remove(id); writeState(state); existed = true; }
             } catch (Exception ignored) {}
-            return existed;
         }
+        if (existed) notifyChanged();
+        return existed;
     }
 
     /** 有新版本返回新代码，否则 null（比较 @version）。 */
@@ -418,22 +437,15 @@ public final class UserScriptManager {
 
     // ------------------------------------------------------------------ 注入
 
-    /** 返回可直接 evaluateJavascript 的完整 JS：GM 垫片 + @require 缓存内容 + 脚本，带防重复注入守卫。 */
-    public String buildInjection(Script s, String tabKey) {
-        if (s == null || s.code == null) return "void 0";
+    private void prepareBundleAssets(Script s, String tabKey, StringBuilder req, JSONObject res, JSONObject info, List<String> missing) {
         String id = s.id == null ? "" : s.id;
-        String qid = JSONObject.quote(id);
         String name = s.name == null ? id : s.name;
-
-        // 依赖：只读缓存，缺失的在后台补下载
-        StringBuilder req = new StringBuilder();
-        List<String> missing = new ArrayList<>();
         for (String u : s.requires) {
             String text = cachedText(u);
             if (text == null) { missing.add(u); continue; }
+            if (text.startsWith("\uFEFF")) text = text.substring(1);
             req.append(text).append("\n;\n");
         }
-        JSONObject res = new JSONObject();
         for (Map.Entry<String, String> e : s.resources.entrySet()) {
             byte[] b = cachedBytes(e.getValue());
             if (b == null) { missing.add(e.getValue()); continue; }
@@ -445,9 +457,6 @@ public final class UserScriptManager {
                         .put("u", e.getValue()));
             } catch (Exception ignored) {}
         }
-        if (!missing.isEmpty()) fetchInBackground(missing);
-
-        JSONObject info = new JSONObject();
         try {
             JSONObject sc = new JSONObject();
             sc.put("name", name);
@@ -477,9 +486,24 @@ public final class UserScriptManager {
             info.put("scriptMetaStr", metaBlock(s.code));
             info.put("tabKey", tabKey == null ? "" : tabKey);
         } catch (Exception ignored) {}
+    }
 
+    /** 返回可直接 evaluateJavascript 的完整 JS：GM 垫片 + @require 缓存内容 + 脚本，带防重复注入守卫。 */
+    public String buildInjection(Script s, String tabKey) {
+        if (s == null || s.code == null) return "void 0";
+        String id = s.id == null ? "" : s.id;
+        String qid = JSONObject.quote(id);
+
+        StringBuilder req = new StringBuilder();
+        JSONObject res = new JSONObject();
+        JSONObject info = new JSONObject();
+        List<String> missing = new ArrayList<>();
+        prepareBundleAssets(s, tabKey, req, res, info, missing);
+        if (!missing.isEmpty()) fetchInBackground(missing);
+
+        String code = s.code.startsWith("\uFEFF") ? s.code.substring(1) : s.code;
         String guardKey = JSONObject.quote(id + "|" + (tabKey == null ? "" : tabKey));
-        StringBuilder js = new StringBuilder(s.code.length() + req.length() + 8192);
+        StringBuilder js = new StringBuilder(code.length() + req.length() + 8192);
         js.append("(function(){\n");
         js.append("var W=window;var D=W.__pimetUSdone||(W.__pimetUSdone={});var GK=").append(guardKey)
                 .append(";if(D[GK])return;D[GK]=1;\n");
@@ -499,7 +523,7 @@ public final class UserScriptManager {
                 .append("GM_unregisterMenuCommand,GM_getResourceText,GM_getResourceURL,GM_download,GM_log,GM){\n");
         js.append("try{\n");
         js.append(req);
-        js.append(s.code);
+        js.append(code);
         js.append("\n}catch(e){console.error('[PiMet 用户脚本 '+GM_info.script.name+']',e)}\n");
         js.append("}).call(W,API.GM_info,W,API.GM_getValue,API.GM_setValue,API.GM_deleteValue,API.GM_listValues,")
                 .append("API.GM_addValueChangeListener,API.GM_removeValueChangeListener,API.GM_addStyle,API.GM_addElement,")
@@ -509,9 +533,258 @@ public final class UserScriptManager {
         return js.toString();
     }
 
-    /** 每个文档一份的共享运行时：回调分发 __pimetGMcb / __pimetGMmenu。 */
+    /** 单个子框架 document-start 注入条目（与其它脚本、跨源翻译运行时完全隔离注册）。 */
+    public static final class SubframeScriptEntry {
+        public final String id;
+        public final String name;
+        public final String js;
+
+        public SubframeScriptEntry(String id, String name, String js) {
+            this.id = id;
+            this.name = name;
+            this.js = js;
+        }
+    }
+
+    private static final String SUBFRAME_URL_MATCHER_JS = String.join("\n",
+            "  function escRe(s){return String(s).replace(/[\\\\.\\[\\]{}()+?^$|\\-]/g,'\\\\$&');}",
+            "  function globBody(g){",
+            "    var out='';",
+            "    for(var i=0;i<g.length;i++){",
+            "      var c=g.charAt(i);",
+            "      if(c==='*')out+='[\\\\s\\\\S]*';",
+            "      else if('\\\\.[]{}()+-?^$|'.indexOf(c)>=0)out+='\\\\'+c;",
+            "      else out+=c;",
+            "    }",
+            "    return out;",
+            "  }",
+            "  function hostRegex(host){",
+            "    var h=host,port=null;",
+            "    var colon=h.lastIndexOf(':');",
+            "    if(colon>0&&h.indexOf(']')<colon){port=h.substring(colon+1);h=h.substring(0,colon);}",
+            "    var sb=h.toLowerCase().slice(-4)==='.tld'?(escRe(h.slice(0,-4))+'\\\\.[a-z.]{2,}'):escRe(h);",
+            "    if(port!==null&&port!=='*')sb+=':'+escRe(port);",
+            "    return sb;",
+            "  }",
+            "  function globMatches(rule,u){",
+            "    var g=String(rule||'').trim();",
+            "    if(!g)return false;",
+            "    try{",
+            "      if(g.length>2&&g.charAt(0)==='/'&&g.slice(-2)==='/i')return new RegExp(g.slice(1,-2),'i').test(u);",
+            "      if(g.length>2&&g.charAt(0)==='/'&&g.slice(-1)==='/')return new RegExp(g.slice(1,-1)).test(u);",
+            "      if(g==='*'||g==='<all_urls>')return true;",
+            "      var body=globBody(g).split('\\\\.tld').join('\\\\.[a-z.]{2,}');",
+            "      return new RegExp('^'+body+'$','i').test(u);",
+            "    }catch(e){return false;}",
+            "  }",
+            "  function matchPatternMatches(pattern,u){",
+            "    var p=String(pattern||'').trim();",
+            "    if(!p)return false;",
+            "    if(p==='<all_urls>')return /^(https?|file|ftp):\\/\\//.test(u);",
+            "    var m=/^(\\*|https?|file|ftp|wss?):\\/\\/([^\\/]*)(\\/.*)?$/i.exec(p);",
+            "    if(!m)return globMatches(p,u);",
+            "    var scheme=m[1],host=m[2],path=m[3]||'/';",
+            "    var sb='^'+(scheme==='*'?'https?':escRe(scheme))+'://';",
+            "    if(scheme==='file'){}",
+            "    else if(host==='*')sb+='[^/]*';",
+            "    else if(host.indexOf('*.')===0)sb+='(?:[^/@]*@)?(?:[^/]*\\\\.)?'+hostRegex(host.substring(2));",
+            "    else if(host.indexOf('*')>=0)return globMatches(p,u);",
+            "    else sb+='(?:[^/@]*@)?'+hostRegex(host);",
+            "    sb+='(?::\\\\d+)?'+globBody(path)+'$';",
+            "    try{return new RegExp(sb,'i').test(u);}catch(e){return globMatches(p,u);}",
+            "  }",
+            "  function urlMatches(sc,url){",
+            "    if(!url)return false;",
+            "    var hi=url.indexOf('#');",
+            "    var u=hi>=0?url.substring(0,hi):url;",
+            "    var i;",
+            "    for(i=0;i<sc.excludes.length;i++)if(globMatches(sc.excludes[i],u))return false;",
+            "    for(i=0;i<sc.matches.length;i++)if(matchPatternMatches(sc.matches[i],u))return true;",
+            "    for(i=0;i<sc.includes.length;i++)if(globMatches(sc.includes[i],u))return true;",
+            "    return false;",
+            "  }"
+    );
+
+    private String buildSubframeRunnerObject(Script s) {
+        String id = s.id == null ? "" : s.id;
+        String name = s.name == null ? id : s.name;
+        String qid = JSONObject.quote(id);
+        StringBuilder req = new StringBuilder();
+        JSONObject res = new JSONObject();
+        JSONObject info = new JSONObject();
+        List<String> missing = new ArrayList<>();
+        prepareBundleAssets(s, "", req, res, info, missing);
+        if (!missing.isEmpty()) fetchInBackground(missing);
+        String code = s.code.startsWith("\uFEFF") ? s.code.substring(1) : s.code;
+
+        StringBuilder runner = new StringBuilder(code.length() + req.length() + 4096);
+        runner.append("{\n");
+        runner.append("  id:").append(qid).append(",\n");
+        runner.append("  name:").append(JSONObject.quote(name)).append(",\n");
+        runner.append("  runAt:").append(JSONObject.quote(s.runAt == null ? RUN_IDLE : s.runAt)).append(",\n");
+        runner.append("  matches:").append(new JSONArray(s.matches)).append(",\n");
+        runner.append("  includes:").append(new JSONArray(s.includes)).append(",\n");
+        runner.append("  excludes:").append(new JSONArray(s.excludes)).append(",\n");
+        runner.append("  run:function(){\n");
+        runner.append("    var W=window;var D=W.__pimetUSdone||(W.__pimetUSdone={});var GK=").append(qid)
+                .append(";if(D[GK])return;D[GK]=1;\n");
+        runner.append(RUNTIME);
+        runner.append("    var ID=").append(qid).append(";\n");
+        runner.append("    var V=").append(getValues(id).toString()).append(";\n");
+        runner.append("    var B0=W.PiMetGM||null;if(B0&&typeof B0.getValuesJson==='function'){try{var fv=B0.getValuesJson(ID);if(fv)V=JSON.parse(fv)}catch(eV){}}\n");
+        runner.append("    var R=").append(res.toString()).append(";\n");
+        runner.append("    var INFO=").append(info.toString()).append(";\n");
+        if (!missing.isEmpty()) {
+            runner.append("    try{console.warn('[PiMet 用户脚本 '+INFO.script.name+'] 依赖尚未缓存，刷新页面后生效：'+")
+                    .append(JSONObject.quote(String.join(", ", missing))).append(")}catch(e){}\n");
+        }
+        runner.append(SHIM);
+        runner.append("    (function(GM_info,unsafeWindow,GM_getValue,GM_setValue,GM_deleteValue,GM_listValues,")
+                .append("GM_addValueChangeListener,GM_removeValueChangeListener,GM_addStyle,GM_addElement,")
+                .append("GM_xmlhttpRequest,GM_openInTab,GM_setClipboard,GM_notification,GM_registerMenuCommand,")
+                .append("GM_unregisterMenuCommand,GM_getResourceText,GM_getResourceURL,GM_download,GM_log,GM){\n");
+        runner.append("    try{\n");
+        runner.append(req);
+        runner.append(code);
+        runner.append("\n    }catch(e){console.error('[PiMet 用户脚本 '+GM_info.script.name+']',e)}\n");
+        runner.append("    }).call(W,API.GM_info,W,API.GM_getValue,API.GM_setValue,API.GM_deleteValue,API.GM_listValues,")
+                .append("API.GM_addValueChangeListener,API.GM_removeValueChangeListener,API.GM_addStyle,API.GM_addElement,")
+                .append("API.GM_xmlhttpRequest,API.GM_openInTab,API.GM_setClipboard,API.GM_notification,API.GM_registerMenuCommand,")
+                .append("API.GM_unregisterMenuCommand,API.GM_getResourceText,API.GM_getResourceURL,API.GM_download,API.GM_log,API.GM);\n");
+        runner.append("  }\n");
+        runner.append("}");
+        return runner.toString();
+    }
+
+    /**
+     * 为每个启用且 !noframes 的脚本生成独立 document-start 注入条目（零 eval / new Function / 字符串定时器）：
+     * 仅在 window !== window.top 时运行；先同步调用 PiMetGM.authorizeSubframe(frameSecret, id) 鉴权再执行脚本；
+     * 每个脚本单独注册为一个 ScriptHandler，单个脚本语法报错不影响其他脚本或跨源翻译运行时。
+     */
+    public List<SubframeScriptEntry> buildSubframeScriptEntries(String frameSecret) {
+        List<Script> all = list();
+        List<SubframeScriptEntry> out = new ArrayList<>();
+        String secretQuoted = JSONObject.quote(frameSecret == null ? "" : frameSecret);
+        for (Script s : all) {
+            if (s == null || !s.enabled || s.noframes || s.code == null) continue;
+            String id = s.id == null ? "" : s.id;
+            String name = s.name == null ? id : s.name;
+            String runner = buildSubframeRunnerObject(s);
+            String js = String.join("\n",
+                    "(function(sc){",
+                    "  var W=window;",
+                    "  if(W===W.top||!sc)return;",
+                    "  var href=String((W.location&&W.location.href)||'');",
+                    "  var proto=String((W.location&&W.location.protocol)||'').toLowerCase();",
+                    "  if(proto!=='http:'&&proto!=='https:'&&proto!=='file:')return;",
+                    "  var SECRET=" + secretQuoted + ";",
+                    SUBFRAME_URL_MATCHER_JS,
+                    "  if(!urlMatches(sc,href))return;",
+                    "  function execOne(){",
+                    "    try{",
+                    "      var B=W.PiMetGM;",
+                    "      if(B&&typeof B.authorizeSubframe==='function'){if(!B.authorizeSubframe(SECRET,sc.id))return;}",
+                    "      sc.run();",
+                    "    }catch(e){try{console.error('[PiMet 用户脚本 '+sc.name+']',e);}catch(e2){}}",
+                    "  }",
+                    "  if(sc.runAt==='document-start')execOne();",
+                    "  else if(sc.runAt==='document-end'){",
+                    "    if(document.readyState==='interactive'||document.readyState==='complete'){execOne();}",
+                    "    else{",
+                    "      var endDone=false;",
+                    "      var flushEnd=function(){if(endDone)return;endDone=true;execOne();};",
+                    "      document.addEventListener('DOMContentLoaded',flushEnd,{once:true});",
+                    "      W.addEventListener('load',flushEnd,{once:true});",
+                    "    }",
+                    "  }else{",
+                    "    if(document.readyState==='complete'){setTimeout(execOne,0);}",
+                    "    else{",
+                    "      var idleDone=false;",
+                    "      var flushIdle=function(){if(idleDone)return;idleDone=true;setTimeout(execOne,0);};",
+                    "      W.addEventListener('load',flushIdle,{once:true});",
+                    "    }",
+                    "  }",
+                    "})(" + runner + ");"
+            );
+            out.add(new SubframeScriptEntry(id, name, js));
+        }
+        return out;
+    }
+
+    /**
+     * 生成嵌入 document-start 的子框架油猴静态捆绑脚本（零 eval / new Function / 字符串定时器）：
+     * 仅在 window !== window.top 时运行；先同步调用 PiMetGM.authorizeSubframe(frameSecret, id) 鉴权再执行脚本；
+     * frameSecret 保存在外层 IIFE 闭包中，绝不暴露给 s.code 或 window。
+     */
+    public String buildSubframeBundle(String frameSecret) {
+        List<Script> all = list();
+        List<Script> active = new ArrayList<>();
+        for (Script s : all) {
+            if (s != null && s.enabled && !s.noframes && s.code != null) active.add(s);
+        }
+        if (active.isEmpty()) return "";
+
+        StringBuilder runners = new StringBuilder();
+        runners.append("[\n");
+        boolean first = true;
+        for (Script s : active) {
+            if (!first) runners.append(",\n");
+            first = false;
+            runners.append(buildSubframeRunnerObject(s));
+        }
+        runners.append("\n]");
+
+        String[] outer = {
+                "(function(runners){",
+                "  var W=window;",
+                "  if(W===W.top||!runners||!runners.length)return;",
+                "  var href=String((W.location&&W.location.href)||'');",
+                "  var proto=String((W.location&&W.location.protocol)||'').toLowerCase();",
+                "  if(proto!=='http:'&&proto!=='https:'&&proto!=='file:')return;",
+                "  var SECRET=" + JSONObject.quote(frameSecret == null ? "" : frameSecret) + ";",
+                SUBFRAME_URL_MATCHER_JS,
+                "  var startList=[],endList=[],idleList=[];",
+                "  for(var i=0;i<runners.length;i++){",
+                "    var sc=runners[i];",
+                "    if(!urlMatches(sc,href))continue;",
+                "    if(sc.runAt==='document-start')startList.push(sc);",
+                "    else if(sc.runAt==='document-end')endList.push(sc);",
+                "    else idleList.push(sc);",
+                "  }",
+                "  function execOne(sc){",
+                "    try{",
+                "      var B=W.PiMetGM;",
+                "      if(B&&typeof B.authorizeSubframe==='function'){if(!B.authorizeSubframe(SECRET,sc.id))return;}",
+                "      sc.run();",
+                "    }catch(e){try{console.error('[PiMet 用户脚本 '+sc.name+']',e);}catch(e2){}}",
+                "  }",
+                "  function runList(arr){for(var k=0;k<arr.length;k++)execOne(arr[k]);}",
+                "  if(startList.length)runList(startList);",
+                "  if(endList.length){",
+                "    if(document.readyState==='interactive'||document.readyState==='complete'){runList(endList);}",
+                "    else{",
+                "      var endDone=false;",
+                "      var flushEnd=function(){if(endDone)return;endDone=true;runList(endList);};",
+                "      document.addEventListener('DOMContentLoaded',flushEnd,{once:true});",
+                "      W.addEventListener('load',flushEnd,{once:true});",
+                "    }",
+                "  }",
+                "  if(idleList.length){",
+                "    if(document.readyState==='complete'){setTimeout(function(){runList(idleList);},0);}",
+                "    else{",
+                "      var idleDone=false;",
+                "      var flushIdle=function(){if(idleDone)return;idleDone=true;setTimeout(function(){runList(idleList);},0);};",
+                "      W.addEventListener('load',flushIdle,{once:true});",
+                "    }",
+                "  }",
+                "})(" + runners + ");"
+        };
+        return String.join("\n", outer);
+    }
+
+    /** 每个文档一份的共享运行时：回调分发 __pimetGMcb / __pimetGMmenu（子框架带随机前缀防止菜单/回调 ID 碰撞）。 */
     private static final String RUNTIME =
-            "var RT=W.__pimetGMrt;if(!RT){RT=W.__pimetGMrt={cbs:{},menus:{},seq:0};\n"
+            "var RT=W.__pimetGMrt;if(!RT){RT=W.__pimetGMrt={cbs:{},menus:{},seq:0,ftag:(W===W.top?'':('f'+(Math.random().toString(36)+'0000').slice(2,6)+'_'))};\n"
             + "W.__pimetGMcb=function(callId,result){var f=RT.cbs[callId];if(!f)return;delete RT.cbs[callId];"
             + "var r=result;if(typeof r==='string'){try{r=JSON.parse(r)}catch(e){r={error:String(r)}}}try{f(r||{})}catch(e){console.error(e)}};\n"
             + "W.__pimetGMmenu=function(id,cmdId){var m=RT.menus[id];var f=m&&m[cmdId];if(f){try{f()}catch(e){console.error('[PiMet 菜单命令]',e)}}};\n"
@@ -542,7 +815,7 @@ public final class UserScriptManager {
             + "var e=document.createElement(tag);attrs=attrs||{};for(var k in attrs){if(k==='textContent'||k==='innerHTML'||k==='innerText'){e[k]=attrs[k]}else{e.setAttribute(k,attrs[k])}}"
             + "if(!parent){parent=/^(script|style|link|meta)$/i.test(tag)?(document.head||document.documentElement):(document.body||document.documentElement)}"
             + "parent.appendChild(e);return e};\n"
-            + "API.GM_xmlhttpRequest=function(d){d=d||{};var callId=ID+':'+(++RT.seq)+':'+Date.now();var aborted=false;"
+            + "API.GM_xmlhttpRequest=function(d){d=d||{};var callId=ID+':'+(RT.ftag||'')+(++RT.seq)+':'+Date.now();var aborted=false;"
             + "var rt=(d.responseType||'').toLowerCase();var data=d.data;var dataB64=null;"
             + "if(data instanceof ArrayBuffer){dataB64=bytesToB64(data);data=null}else if(data&&data.buffer instanceof ArrayBuffer&&ArrayBuffer.isView(data)){dataB64=bytesToB64(data.buffer);data=null}"
             + "else if(data!=null&&typeof data!=='string'){if(typeof URLSearchParams!=='undefined'&&data instanceof URLSearchParams){data=data.toString()}else{try{data=JSON.stringify(data)}catch(e){data=String(data)}}}"
@@ -566,7 +839,7 @@ public final class UserScriptManager {
             + "API.GM_setClipboard=function(t){if(nb('setClipboard'))B.setClipboard(String(t))};\n"
             + "API.GM_notification=function(a,b,c,e){var title,text,onclick,ondone;if(a&&typeof a==='object'){title=a.title;text=a.text;onclick=a.onclick;ondone=a.ondone}else{text=a;title=b;onclick=e}"
             + "if(nb('notify'))B.notify(ID,String(title||INFO.script.name),String(text||''));if(typeof ondone==='function'){try{ondone()}catch(x){}}};\n"
-            + "API.GM_registerMenuCommand=function(cap,fn,opt){var cid=(opt&&typeof opt==='object'&&opt.id)?String(opt.id):('m'+(++RT.seq));"
+            + "API.GM_registerMenuCommand=function(cap,fn,opt){var cid=(opt&&typeof opt==='object'&&opt.id)?String(opt.id):((RT.ftag||'')+'m'+(++RT.seq));"
             + "var m=RT.menus[ID]||(RT.menus[ID]={});m[cid]=fn;if(nb('registerMenu'))B.registerMenu(ID,cid,String(cap));return cid};\n"
             + "API.GM_unregisterMenuCommand=function(cid){cid=String(cid);var m=RT.menus[ID];if(m)delete m[cid];if(nb('unregisterMenu'))B.unregisterMenu(ID,cid)};\n"
             + "API.GM_getResourceText=function(n){var r=R[n];if(!r)return null;var a=b64ToBytes(r.b);try{return new TextDecoder('utf-8').decode(a)}catch(e){var s='';for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return s}};\n"
@@ -616,10 +889,12 @@ public final class UserScriptManager {
         for (String u : urls) if (fetching.add(u)) todo.add(u);
         if (todo.isEmpty()) return;
         Thread t = new Thread(() -> {
+            boolean any = false;
             for (String u : todo) {
-                try { cacheUrl(u); } catch (Throwable ignored) {}
+                try { cacheUrl(u); any = true; } catch (Throwable ignored) {}
                 finally { fetching.remove(u); }
             }
+            if (any) notifyChanged();
         }, "pimet-us-fetch");
         t.setDaemon(true);
         t.start();

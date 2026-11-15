@@ -58,6 +58,12 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.webkit.JavaScriptReplyProxy;
+import androidx.webkit.ScriptHandler;
+import androidx.webkit.WebMessageCompat;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+
 import com.xm486.pimet.AttachmentPickerActivity;
 import com.xm486.pimet.PiBrowserActivity;
 import com.xm486.pimet.ThemeManager;
@@ -75,7 +81,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -616,6 +627,28 @@ public final class FloatingApps {
      * 这样既不用把 Pi 标签切到前台抢用户的画面，也不必退回 JS 点击（JS 点击只在窗口最小化时作为兜底）。
      * 后台标签不抢输入焦点：按键改用 JS 键盘事件（见 BrowserAgent.pressKey）。
      */
+    static final class FrameSession {
+        final String frameId;
+        final boolean isMainFrame;
+        volatile String url;
+        volatile JavaScriptReplyProxy replyProxy;
+        volatile int transDone;
+        volatile int transTotal;
+        volatile int transFailed;
+        volatile boolean transActive;
+        volatile int transPending;
+        volatile boolean transStarted;
+        volatile String lastError = "";
+        final long createdAt = System.currentTimeMillis();
+
+        FrameSession(String frameId, boolean isMainFrame, String url, JavaScriptReplyProxy replyProxy) {
+            this.frameId = frameId;
+            this.isMainFrame = isMainFrame;
+            this.url = url == null ? "" : url;
+            this.replyProxy = replyProxy;
+        }
+    }
+
     static final class Tab {
         final String id;
         final boolean pi;
@@ -662,9 +695,52 @@ public final class FloatingApps {
         /** 该容器的 CookieManager（主线程建 WebView 时取好，后台线程直接用） */
         volatile android.webkit.CookieManager cookies;
 
+        /** 每个标签独立的跨框架消息鉴权密钥（随机 UUID，仅存于 document-start 闭包与 Java 端，绝不暴露给页面或用户脚本） */
+        final String frameSecret = UUID.randomUUID().toString();
+        /** 跨源翻译与 __pimetFrameMsg 桥接的 document-start 注入句柄（createWebView 时注册一次，不受用户脚本影响） */
+        ScriptHandler transDocStartHandler;
+        /** 子框架用户脚本的独立 document-start 注入句柄列表（每个启用且 !noframes 的脚本单独注册） */
+        final List<ScriptHandler> scriptDocStartHandlers = new ArrayList<>();
+        /** 当前文档各框架代理：frameId -> FrameSession */
+        final ConcurrentHashMap<String, FrameSession> frames = new ConcurrentHashMap<>();
+        /** 已通过 frameSecret 鉴权并注入到子框架的用户脚本 id */
+        final Set<String> subframeInjectedIds = Collections.newSetFromMap(new ConcurrentHashMap<>());
+        /** 当前页面是否处于跨框架翻译激活态（供延迟加载的跨源 iframe 在 hello 时自动激活翻译） */
+        volatile boolean translatingAllFrames = false;
+        volatile String transMode = "replace";
+        volatile boolean transAuto = false;
+        volatile int transBatchMax = 15;
+        volatile int transCharMax = 1800;
+        volatile String transAccent = "#58A6FF";
+        /** 主框架翻译统计（与各子框架 FrameSession 汇总更新顶层胶囊） */
+        volatile int mainTransDone = 0;
+        volatile int mainTransTotal = 0;
+        volatile int mainTransFailed = 0;
+        volatile boolean mainTransActive = false;
+        volatile int mainTransPending = 0;
+        volatile boolean mainTransHasDomIframes = false;
+        volatile String mainTransError = "";
+
         Tab(String id, boolean pi) {
             this.id = id;
             this.pi = pi;
+        }
+
+        void resetMainTransStats() {
+            mainTransDone = 0;
+            mainTransTotal = 0;
+            mainTransFailed = 0;
+            mainTransActive = false;
+            mainTransPending = 0;
+            mainTransHasDomIframes = false;
+            mainTransError = "";
+        }
+
+        boolean hasNonMainFrames() {
+            for (FrameSession fs : frames.values()) {
+                if (!fs.isMainFrame) return true;
+            }
+            return false;
         }
     }
 
@@ -741,6 +817,7 @@ public final class FloatingApps {
     private void recoverTab(Tab t, WebView dead, boolean crashed) {
         if (t == null || t.closed || t.web != dead) return;
         if (sPendingFileWebView == dead) cancelPendingFileChooser();
+        cleanupTabFrames(t, dead);
         int idx = webFrame.indexOfChild(dead);
         try { webFrame.removeView(dead); } catch (Throwable ignored) {}
         try { dead.destroy(); } catch (Throwable ignored) {}
@@ -807,6 +884,7 @@ public final class FloatingApps {
         int idx = tabs.indexOf(t);
         tabs.remove(t);
         t.closed = true;
+        cleanupTabFrames(t, t.web);
         try {
             webFrame.removeView(t.web);
             t.web.stopLoading();
@@ -1790,6 +1868,8 @@ public final class FloatingApps {
         w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
         w.addJavascriptInterface(new ThemeBridge(t), "PiMetTheme");
         w.addJavascriptInterface(new GMBridge(t), "PiMetGM");
+        com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, new TabTranslationDelegate(t));
+        setupCrossFrameSupport(t, w);
         w.setDownloadListener((url, ua, contentDisposition, mime, length) -> {
             if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
             startDownload(t, url, ua, contentDisposition, mime);
@@ -1842,12 +1922,20 @@ public final class FloatingApps {
                 t.httpStatus = 0;
                 t.loading = true;
                 t.translated = false;
+                t.translatingAllFrames = false;
+                t.resetMainTransStats();
                 t.favicon = favicon;
                 if (t == active) { updateProgress(); refreshBall(); }
                 t.url = url != null ? url : "";
                 showUrl(t, url);
                 applySiteSettings(t, url, false);
                 t.injectedIds.clear();
+                t.subframeInjectedIds.clear();
+                for (Iterator<Map.Entry<String, FrameSession>> it = t.frames.entrySet().iterator(); it.hasNext(); ) {
+                    Map.Entry<String, FrameSession> e = it.next();
+                    FrameSession fs = e.getValue();
+                    if (fs == null || !fs.isMainFrame) it.remove();
+                }
                 synchronized (t.menus) { t.menus.clear(); }
                 clearConsoleLogs(t);
                 if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) {
@@ -2783,8 +2871,448 @@ public final class FloatingApps {
 
     /** 用户脚本管理器（M1 实现，线程安全）。BrowserAgent 也用它 */
     synchronized UserScriptManager scripts() {
-        if (scriptMgr == null) scriptMgr = new UserScriptManager(appsDir);
+        if (scriptMgr == null) {
+            scriptMgr = new UserScriptManager(appsDir);
+            scriptMgr.setOnChangeListener(() -> MAIN.post(this::refreshAllDocStartScripts));
+        }
         return scriptMgr;
+    }
+
+    // ------------------------------------------------------------------ 跨源 iframe 消息通道、翻译与油猴支持（androidx.webkit）
+
+    private static final int MAX_FRAME_SESSIONS = 64;
+    private long lastFrameTransErrToastAt = 0L;
+    private String lastFrameTransErrToast = null;
+
+    private static boolean crossFrameSupported() {
+        try {
+            return WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+                    && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    private void cleanupTabFrames(Tab t, WebView w) {
+        if (t == null) return;
+        if (t.transDocStartHandler != null) {
+            try { t.transDocStartHandler.remove(); } catch (Throwable ignored) {}
+            t.transDocStartHandler = null;
+        }
+        clearScriptDocStartHandlers(t);
+        t.frames.clear();
+        t.subframeInjectedIds.clear();
+        t.translatingAllFrames = false;
+        t.resetMainTransStats();
+        if (w != null) com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, null);
+    }
+
+    private void clearScriptDocStartHandlers(Tab t) {
+        if (t == null) return;
+        synchronized (t.scriptDocStartHandlers) {
+            for (ScriptHandler h : t.scriptDocStartHandlers) {
+                if (h != null) {
+                    try { h.remove(); } catch (Throwable ignored) {}
+                }
+            }
+            t.scriptDocStartHandlers.clear();
+        }
+    }
+
+    private void setupCrossFrameSupport(Tab t, WebView w) {
+        if (t == null || w == null || !crossFrameSupported()) return;
+        try {
+            WebViewCompat.addWebMessageListener(
+                    w,
+                    "__pimetFrameMsg",
+                    Collections.singleton("*"),
+                    (view, message, sourceOrigin, isMainFrame, replyProxy) ->
+                            handleFrameMessage(t, view, message, isMainFrame, replyProxy)
+            );
+            installTransDocStartScript(t, w);
+            installScriptDocStartScripts(t, w);
+        } catch (Throwable e) {
+            Log.w(TAG, "setupCrossFrameSupport failed, falling back to main-frame only", e);
+        }
+    }
+
+    private void installTransDocStartScript(Tab t, WebView w) {
+        if (t == null || t.closed || w == null || !crossFrameSupported()) return;
+        if (t.transDocStartHandler != null) {
+            try { t.transDocStartHandler.remove(); } catch (Throwable ignored) {}
+            t.transDocStartHandler = null;
+        }
+        try {
+            String js = buildTransDocumentStartScript(t);
+            t.transDocStartHandler = WebViewCompat.addDocumentStartJavaScript(w, js, Collections.singleton("*"));
+        } catch (Throwable e) {
+            Log.w(TAG, "addDocumentStartJavaScript (trans) failed", e);
+        }
+    }
+
+    private void installScriptDocStartScripts(Tab t, WebView w) {
+        if (t == null || t.closed || w == null || !crossFrameSupported()) return;
+        clearScriptDocStartHandlers(t);
+        List<UserScriptManager.SubframeScriptEntry> entries;
+        try {
+            entries = scripts().buildSubframeScriptEntries(t.frameSecret);
+        } catch (Throwable e) {
+            Log.w(TAG, "buildSubframeScriptEntries failed", e);
+            return;
+        }
+        if (entries == null || entries.isEmpty()) return;
+        String trustedPrefix = JSONObject.quote(appsUrlPrefix());
+        for (UserScriptManager.SubframeScriptEntry entry : entries) {
+            if (entry == null || entry.js == null || entry.js.isEmpty()) continue;
+            try {
+                String wrapped = "if (window !== window.top && String((window.location && window.location.href) || '').indexOf("
+                        + trustedPrefix + ") !== 0) {\n" + entry.js + "\n}";
+                ScriptHandler h = WebViewCompat.addDocumentStartJavaScript(w, wrapped, Collections.singleton("*"));
+                if (h != null) {
+                    synchronized (t.scriptDocStartHandlers) {
+                        t.scriptDocStartHandlers.add(h);
+                    }
+                }
+            } catch (Throwable e) {
+                Log.w(TAG, "addDocumentStartJavaScript (script " + entry.id + ") failed", e);
+            }
+        }
+    }
+
+    void refreshAllDocStartScripts() {
+        if (!crossFrameSupported()) return;
+        for (Tab t : new ArrayList<>(tabs)) {
+            if (t != null && !t.closed && t.web != null) {
+                installScriptDocStartScripts(t, t.web);
+            }
+        }
+    }
+
+    private String buildTransDocumentStartScript(Tab t) {
+        String subframeTrans = com.xm486.pimet.translation.TranslationScript.buildSubframeRuntime();
+        String secretQuoted = JSONObject.quote(t.frameSecret);
+        String[] head = {
+                "(function(){",
+                "  var W = window;",
+                "  var pm = W.__pimetFrameMsg;",
+                "  try { delete W.__pimetFrameMsg; } catch (e) {}",
+                "  var SECRET = " + secretQuoted + ";",
+                "  var IS_TOP = (W === W.top);",
+                "  var FRAME_ID = 'f_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36);",
+                "  function postFrame(obj) {",
+                "    if (!pm || !obj || typeof obj !== 'object') return;",
+                "    try {",
+                "      obj.secret = SECRET;",
+                "      obj.frameId = FRAME_ID;",
+                "      pm.postMessage(JSON.stringify(obj));",
+                "    } catch (e) {}",
+                "  }",
+                "  var transCtrl = !IS_TOP ? (" + subframeTrans + ")(postFrame) : null;",
+                "  if (pm) {",
+                "    pm.addEventListener('message', function(ev) {",
+                "      var msg;",
+                "      try { msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch (e) { return; }",
+                "      if (!msg || typeof msg !== 'object') return;",
+                "      if (msg.type === 'gm_cb') {",
+                "        if (typeof W.__pimetGMcb === 'function') { try { W.__pimetGMcb(msg.callId, msg.resultJson); } catch (e) {} }",
+                "        return;",
+                "      }",
+                "      if (msg.type === 'gm_menu') {",
+                "        if (typeof W.__pimetGMmenu === 'function') { try { W.__pimetGMmenu(msg.scriptId, msg.cmdId); } catch (e) {} }",
+                "        return;",
+                "      }",
+                "      if (IS_TOP && msg.type === 'trans_summary') {",
+                "        if (typeof W.__pimet_apply_summary === 'function') { try { W.__pimet_apply_summary(msg); } catch (e) {} }",
+                "        return;",
+                "      }",
+                "      if (!IS_TOP && transCtrl) {",
+                "        if (msg.type === 'trans_start') { transCtrl.start(msg); return; }",
+                "        if (msg.type === 'trans_restore') { transCtrl.restore(true); return; }",
+                "        if (msg.type === 'trans_retry') { transCtrl.retry(); return; }",
+                "        if (msg.type === 'trans_batch_result') {",
+                "          transCtrl.receiveBatch(msg.batchId, msg.translationsJson, !!msg.isError, msg.errMsg || '');",
+                "          return;",
+                "        }",
+                "      }",
+                "    });",
+                "    var href = ''; try { href = String((W.location && W.location.href) || ''); } catch (e) {}",
+                "    postFrame({ type: 'hello', url: href });",
+                "  }",
+                "})();"
+        };
+        return String.join("\n", head);
+    }
+
+    private void handleFrameMessage(Tab t, WebView view, WebMessageCompat message,
+                                    boolean isMainFrame, JavaScriptReplyProxy replyProxy) {
+        if (t == null || t.closed || t.web != view || message == null || replyProxy == null) return;
+        if (message.getType() != WebMessageCompat.TYPE_STRING) return;
+        String raw = message.getData();
+        if (raw == null || raw.isEmpty()) return;
+
+        JSONObject msg;
+        try {
+            msg = new JSONObject(raw);
+        } catch (Throwable e) {
+            return;
+        }
+        String secret = msg.optString("secret", "");
+        if (!t.frameSecret.equals(secret)) return;
+        String type = msg.optString("type", "");
+        String frameId = msg.optString("frameId", "");
+        if (frameId.isEmpty()) return;
+
+        switch (type) {
+            case "hello": {
+                String url = msg.optString("url", "");
+                if (isMainFrame) {
+                    for (Iterator<Map.Entry<String, FrameSession>> it = t.frames.entrySet().iterator(); it.hasNext(); ) {
+                        Map.Entry<String, FrameSession> e = it.next();
+                        if (!frameId.equals(e.getKey())) it.remove();
+                    }
+                    t.subframeInjectedIds.clear();
+                    t.translatingAllFrames = false;
+                    t.translated = false;
+                    t.resetMainTransStats();
+                    refreshBall();
+                } else {
+                    if (!t.frames.containsKey(frameId) && t.frames.size() >= MAX_FRAME_SESSIONS) {
+                        return;
+                    }
+                }
+                FrameSession fs = new FrameSession(frameId, isMainFrame, url, replyProxy);
+                t.frames.put(frameId, fs);
+                if (!isMainFrame && t.translatingAllFrames && !t.pi && !isLauncher(t.url) && !isTrusted(t.url)) {
+                    sendTransStartToFrame(t, fs);
+                    updateAggregatedTranslationUi(t);
+                }
+                break;
+            }
+            case "trans_batch": {
+                final FrameSession fs = t.frames.get(frameId);
+                if (fs == null) return;
+                fs.replyProxy = replyProxy;
+                final String batchId = msg.optString("batchId", "");
+                JSONArray arr = msg.optJSONArray("texts");
+                if (arr == null) return;
+                List<String> texts = new ArrayList<>(arr.length());
+                for (int i = 0; i < arr.length(); i++) {
+                    texts.add(arr.optString(i, ""));
+                }
+                com.xm486.pimet.translation.WebTranslationManager.translateBatch(
+                        ctx,
+                        texts,
+                        new com.xm486.pimet.translation.WebTranslationManager.TranslationCallback() {
+                            @Override
+                            public void onSuccess(List<String> translatedTexts) {
+                                if (t.closed || t.web == null || t.frames.get(frameId) != fs) return;
+                                try {
+                                    JSONArray resArr = new JSONArray();
+                                    for (String s : translatedTexts) resArr.put(s);
+                                    String payload = new JSONObject()
+                                            .put("type", "trans_batch_result")
+                                            .put("batchId", batchId)
+                                            .put("translationsJson", resArr.toString())
+                                            .put("isError", false)
+                                            .put("errMsg", "")
+                                            .toString();
+                                    if (fs.replyProxy != null) fs.replyProxy.postMessage(payload);
+                                } catch (Throwable ignored) {}
+                            }
+
+                            @Override
+                            public void onError(String error) {
+                                if (t.closed || t.web == null || t.frames.get(frameId) != fs) return;
+                                final String errMsg = error == null || error.isEmpty() ? "翻译服务无响应" : error;
+                                try {
+                                    String payload = new JSONObject()
+                                            .put("type", "trans_batch_result")
+                                            .put("batchId", batchId)
+                                            .put("translationsJson", "[]")
+                                            .put("isError", true)
+                                            .put("errMsg", errMsg)
+                                            .toString();
+                                    if (fs.replyProxy != null) fs.replyProxy.postMessage(payload);
+                                } catch (Throwable ignored) {}
+                                long now = System.currentTimeMillis();
+                                if (!errMsg.equals(lastFrameTransErrToast) || now - lastFrameTransErrToastAt > 8000L) {
+                                    lastFrameTransErrToast = errMsg;
+                                    lastFrameTransErrToastAt = now;
+                                    com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "网页翻译失败：" + errMsg);
+                                }
+                            }
+                        }
+                );
+                break;
+            }
+            case "trans_state": {
+                FrameSession fs = t.frames.get(frameId);
+                if (fs == null) return;
+                fs.replyProxy = replyProxy;
+                fs.transDone = Math.max(0, msg.optInt("done", 0));
+                fs.transTotal = Math.max(0, msg.optInt("total", 0));
+                fs.transFailed = Math.max(0, msg.optInt("failed", 0));
+                fs.transActive = msg.optBoolean("active", false);
+                fs.transPending = Math.max(0, msg.optInt("pending", 0));
+                fs.lastError = msg.optString("lastError", "");
+                fs.transStarted = true;
+                updateAggregatedTranslationUi(t);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    private void sendTransStartToFrame(Tab t, FrameSession fs) {
+        if (t == null || fs == null || fs.isMainFrame || fs.replyProxy == null) return;
+        fs.transDone = 0;
+        fs.transTotal = 0;
+        fs.transFailed = 0;
+        fs.transActive = false;
+        fs.transPending = 0;
+        fs.transStarted = false;
+        fs.lastError = "";
+        try {
+            String payload = new JSONObject()
+                    .put("type", "trans_start")
+                    .put("mode", t.transMode)
+                    .put("auto", t.transAuto)
+                    .put("batchMax", t.transBatchMax)
+                    .put("charMax", t.transCharMax)
+                    .put("accent", t.transAccent)
+                    .toString();
+            fs.replyProxy.postMessage(payload);
+        } catch (Throwable ignored) {}
+    }
+
+    private void restoreTabSubframes(Tab t) {
+        if (t == null) return;
+        t.translatingAllFrames = false;
+        t.translated = false;
+        t.resetMainTransStats();
+        refreshBall();
+        try {
+            String payload = new JSONObject().put("type", "trans_restore").toString();
+            for (FrameSession fs : t.frames.values()) {
+                if (!fs.isMainFrame) {
+                    fs.transDone = 0;
+                    fs.transTotal = 0;
+                    fs.transFailed = 0;
+                    fs.transActive = false;
+                    fs.transPending = 0;
+                    fs.transStarted = false;
+                    fs.lastError = "";
+                    if (fs.replyProxy != null) {
+                        try { fs.replyProxy.postMessage(payload); } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void retryTabSubframes(Tab t) {
+        if (t == null || t.closed) return;
+        try {
+            String payload = new JSONObject().put("type", "trans_retry").toString();
+            for (FrameSession fs : t.frames.values()) {
+                if (!fs.isMainFrame && fs.replyProxy != null) {
+                    try { fs.replyProxy.postMessage(payload); } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void updateAggregatedTranslationUi(Tab t) {
+        if (t == null || t.closed) return;
+        if (!t.translatingAllFrames && !t.translated) return;
+        int done = t.mainTransDone;
+        int total = t.mainTransTotal;
+        int failed = t.mainTransFailed;
+        boolean activeFlag = t.mainTransActive;
+        int pending = t.mainTransPending;
+        String lastError = t.mainTransError != null ? t.mainTransError : "";
+
+        int subframeCount = 0;
+        boolean anySubframeReported = false;
+        FrameSession mainFs = null;
+        for (FrameSession fs : t.frames.values()) {
+            if (fs.isMainFrame) {
+                mainFs = fs;
+                continue;
+            }
+            subframeCount++;
+            if (fs.transStarted) anySubframeReported = true;
+            done += fs.transDone;
+            total += fs.transTotal;
+            failed += fs.transFailed;
+            pending += fs.transPending;
+            if (fs.transActive) activeFlag = true;
+            if (lastError.isEmpty() && fs.lastError != null && !fs.lastError.isEmpty()) {
+                lastError = fs.lastError;
+            }
+        }
+        boolean hasSubframes = subframeCount > 0 || t.mainTransHasDomIframes;
+        if (!hasSubframes) return;
+
+        try {
+            String summaryJson = new JSONObject()
+                    .put("type", "trans_summary")
+                    .put("done", done)
+                    .put("total", total)
+                    .put("failed", failed)
+                    .put("active", activeFlag)
+                    .put("pending", pending)
+                    .put("hasSubframes", true)
+                    .put("anySubframeReported", anySubframeReported)
+                    .put("lastError", lastError)
+                    .toString();
+            if (mainFs != null && mainFs.replyProxy != null) {
+                mainFs.replyProxy.postMessage(summaryJson);
+            } else if (t.web != null) {
+                t.web.evaluateJavascript("if(window.__pimet_apply_summary)window.__pimet_apply_summary(" + summaryJson + ");", null);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private final class TabTranslationDelegate implements com.xm486.pimet.translation.WebTranslationManager.FrameTranslationDelegate {
+        private final Tab tab;
+
+        TabTranslationDelegate(Tab tab) {
+            this.tab = tab;
+        }
+
+        @Override
+        public boolean hasNonMainFrames() {
+            return tab != null && tab.hasNonMainFrames();
+        }
+
+        @Override
+        public boolean isTranslated() {
+            return tab != null && (tab.translated || tab.translatingAllFrames);
+        }
+
+        @Override
+        public void onTranslationStarted(String mode, boolean auto, int batchMax, int charMax, String accent) {
+            if (tab == null || tab.closed) return;
+            tab.translatingAllFrames = true;
+            tab.translated = true;
+            tab.transMode = mode;
+            tab.transAuto = auto;
+            tab.transBatchMax = batchMax;
+            tab.transCharMax = charMax;
+            tab.transAccent = accent;
+            refreshBall();
+            for (FrameSession fs : tab.frames.values()) {
+                if (!fs.isMainFrame) sendTransStartToFrame(tab, fs);
+            }
+            updateAggregatedTranslationUi(tab);
+        }
+
+        @Override
+        public void onTranslationRestored() {
+            restoreTabSubframes(tab);
+        }
     }
 
     private static boolean injectableUrl(String url) {
@@ -2908,8 +3436,20 @@ public final class FloatingApps {
 
     /** 给 BrowserAgent / 面板：执行一个 GM 菜单命令（主线程） */
     void runMenuCommand(Tab t, String scriptId, String cmdId) {
-        if (t == null || t.web == null || scriptId == null || cmdId == null) return;
+        if (t == null || t.closed || t.web == null || scriptId == null || cmdId == null) return;
         t.web.evaluateJavascript("window.__pimetGMmenu&&window.__pimetGMmenu(" + JSONObject.quote(scriptId) + "," + JSONObject.quote(cmdId) + ")", null);
+        try {
+            String frameMsg = new JSONObject()
+                    .put("type", "gm_menu")
+                    .put("scriptId", scriptId)
+                    .put("cmdId", cmdId)
+                    .toString();
+            for (FrameSession fs : t.frames.values()) {
+                if (!fs.isMainFrame && fs.replyProxy != null) {
+                    try { fs.replyProxy.postMessage(frameMsg); } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ---- window.PiMetGM：GM 垫片里需要原生的部分
@@ -2921,9 +3461,35 @@ public final class FloatingApps {
             this.tab = tab;
         }
 
-        /** 脚本必须存在、启用，并且已注入到这个标签的当前页面 */
+        /** 子框架执行用户脚本前的同步鉴权：校验 frameSecret 与脚本状态后登记到 subframeInjectedIds */
+        @JavascriptInterface
+        public boolean authorizeSubframe(String secret, String id) {
+            if (secret == null || !secret.equals(tab.frameSecret) || id == null) return false;
+            if (isLauncher(tab.url) || isTrusted(tab.url)) return false;
+            try {
+                UserScriptManager.Script s = scripts().get(id);
+                if (s == null || !s.enabled || s.noframes) return false;
+                tab.subframeInjectedIds.add(id);
+                return true;
+            } catch (Throwable e) {
+                return false;
+            }
+        }
+
+        /** 为已鉴权的子框架同步拉取最新 GM 存储值快照 */
+        @JavascriptInterface
+        public String getValuesJson(String id) {
+            if (ok(id) == null) return null;
+            try {
+                return scripts().getValues(id).toString();
+            } catch (Throwable e) {
+                return null;
+            }
+        }
+
+        /** 脚本必须存在、启用，并且已注入到这个标签的当前页面（主框架或已鉴权子框架） */
         private UserScriptManager.Script ok(String id) {
-            if (id == null || !tab.injectedIds.contains(id)) return null;
+            if (id == null || (!tab.injectedIds.contains(id) && !tab.subframeInjectedIds.contains(id))) return null;
             try {
                 UserScriptManager.Script s = scripts().get(id);
                 return s != null && s.enabled ? s : null;
@@ -2935,6 +3501,7 @@ public final class FloatingApps {
         /** 没有脚本 id 的方法：要求当前页面至少注入了一个仍然启用的脚本 */
         private boolean anyOk() {
             for (String id : tab.injectedIds) if (ok(id) != null) return true;
+            for (String id : tab.subframeInjectedIds) if (ok(id) != null) return true;
             return false;
         }
 
@@ -3077,8 +3644,29 @@ public final class FloatingApps {
     }
 
     private void deliverGm(Tab t, String callId, JSONObject res) {
-        String js = "window.__pimetGMcb&&window.__pimetGMcb(" + JSONObject.quote(callId) + "," + JSONObject.quote(res.toString()) + ")";
-        MAIN.post(() -> { if (t.web != null && !t.closed) t.web.evaluateJavascript(js, null); });
+        if (t == null || t.closed) return;
+        final String resStr = res.toString();
+        final String js = "window.__pimetGMcb&&window.__pimetGMcb(" + JSONObject.quote(callId) + "," + JSONObject.quote(resStr) + ")";
+        String framePayload = null;
+        try {
+            framePayload = new JSONObject()
+                    .put("type", "gm_cb")
+                    .put("callId", callId)
+                    .put("resultJson", resStr)
+                    .toString();
+        } catch (Throwable ignored) {}
+        final String frameMsg = framePayload;
+        MAIN.post(() -> {
+            if (t.closed) return;
+            if (t.web != null) t.web.evaluateJavascript(js, null);
+            if (frameMsg != null) {
+                for (FrameSession fs : t.frames.values()) {
+                    if (!fs.isMainFrame && fs.replyProxy != null) {
+                        try { fs.replyProxy.postMessage(frameMsg); } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        });
     }
 
     /** @connect 检查：未声明则允许（并记一条提示）；声明了则 host 必须命中（* / self / 域名及其子域 / IP） */
@@ -6622,10 +7210,35 @@ public final class FloatingApps {
 
         @JavascriptInterface
         public void onStateChanged(boolean isTranslated, int doneCount, int totalCount) {
-            tab.translated = isTranslated;
-            MAIN.post(FloatingApps.this::refreshBall);
+            if (!isTranslated) {
+                MAIN.post(() -> {
+                    if (tab.web != null) com.xm486.pimet.translation.WebTranslationManager.clearSession(tab.web);
+                    restoreTabSubframes(tab);
+                });
+            } else {
+                tab.translated = true;
+                MAIN.post(FloatingApps.this::refreshBall);
+            }
             com.xm486.pimet.translation.TranslationBridge r = real();
             if (r != null) r.onStateChanged(isTranslated, doneCount, totalCount);
+        }
+
+        @JavascriptInterface
+        public void onProgress(int done, int total, int failed, boolean activeFlag,
+                               int pending, String lastError, boolean hasDomIframes) {
+            tab.mainTransDone = Math.max(0, done);
+            tab.mainTransTotal = Math.max(0, total);
+            tab.mainTransFailed = Math.max(0, failed);
+            tab.mainTransActive = activeFlag;
+            tab.mainTransPending = Math.max(0, pending);
+            tab.mainTransError = lastError == null ? "" : lastError;
+            tab.mainTransHasDomIframes = hasDomIframes;
+            MAIN.post(() -> updateAggregatedTranslationUi(tab));
+        }
+
+        @JavascriptInterface
+        public void onRetry() {
+            MAIN.post(() -> retryTabSubframes(tab));
         }
 
         @JavascriptInterface
