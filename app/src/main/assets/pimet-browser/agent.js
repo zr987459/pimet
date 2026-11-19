@@ -130,6 +130,75 @@
     }
     return chain;
   }
+  function hasFixedCB(el) {
+    var a = parentOf(el), g = 0;
+    while (a && a.nodeType === 1 && a.ownerDocument === el.ownerDocument && g++ < 20) {
+      var s = styleOf(a);
+      if (s) {
+        var tf = s.transform || s.webkitTransform || 'none';
+        var fl = s.filter || s.webkitFilter || 'none';
+        var pp = s.perspective || s.webkitPerspective || 'none';
+        if ((tf && tf !== 'none') || (fl && fl !== 'none') || (pp && pp !== 'none')) return true;
+      }
+      a = parentOf(a);
+    }
+    return false;
+  }
+  function inViewport(el) {
+    var lr = el.getBoundingClientRect();
+    if (lr.width <= 0 || lr.height <= 0) return false;
+    var W = winOf(el), iw = W.innerWidth || 0, ih = W.innerHeight || 0;
+    if (!iw || !ih) return false;
+    var cx = lr.left + lr.width / 2, cy = lr.top + lr.height / 2;
+    if (cx < 4 || cx > iw - 4 || cy < 4 || cy > ih - 4) return false;
+    var ix = Math.max(0, Math.min(lr.right, iw) - Math.max(lr.left, 0));
+    var iy = Math.max(0, Math.min(lr.bottom, ih) - Math.max(lr.top, 0));
+    var elArea = lr.width * lr.height;
+    if (elArea <= iw * ih * 0.8 && (ix * iy) < elArea * 0.5) return false;
+    var es = styleOf(el);
+    if (!(es && es.position === 'fixed' && !hasFixedCB(el))) {
+      var p = parentOf(el), k = 0;
+      while (p && p.nodeType === 1 && k++ < 15) {
+        var ps = styleOf(p);
+        if (p.tagName !== 'BODY' && p.tagName !== 'HTML') {
+          if (ps && /(auto|scroll|overlay)/.test((ps.overflowX || '') + ' ' + (ps.overflowY || ''))) {
+            var pr = p.getBoundingClientRect();
+            if (pr.width > 0 && pr.height > 0 && (cx < pr.left || cx > pr.right || cy < pr.top || cy > pr.bottom)) return false;
+          }
+        }
+        if (ps && ps.position === 'fixed' && !hasFixedCB(p)) break;
+        p = parentOf(p);
+      }
+    }
+    if (inFrame(el)) {
+      var tr = toTop(lr, el.ownerDocument);
+      var visLeft = 0, visTop = 0, visRight = innerWidth, visBottom = innerHeight;
+      var chain = frameChain(el);
+      for (var ci = 0; ci < chain.length; ci++) {
+        var fe = chain[ci], ftr = toTop(fe.getBoundingClientRect(), fe.ownerDocument), fcs = styleOf(fe);
+        if (ftr.width <= 0 || ftr.height <= 0) return false;
+        var padL = fcs ? parseFloat(fcs.paddingLeft) || 0 : 0;
+        var padT = fcs ? parseFloat(fcs.paddingTop) || 0 : 0;
+        var padR = fcs ? parseFloat(fcs.paddingRight) || 0 : 0;
+        var padB = fcs ? parseFloat(fcs.paddingBottom) || 0 : 0;
+        var fl = ftr.left + fe.clientLeft + padL;
+        var ft = ftr.top + fe.clientTop + padT;
+        var fr = fe.clientWidth > 0 ? (ftr.left + fe.clientLeft + fe.clientWidth - padR) : ftr.right;
+        var fb = fe.clientHeight > 0 ? (ftr.top + fe.clientTop + fe.clientHeight - padB) : ftr.bottom;
+        visLeft = Math.max(visLeft, fl);
+        visTop = Math.max(visTop, ft);
+        visRight = Math.min(visRight, fr);
+        visBottom = Math.min(visBottom, fb);
+        if (visRight <= visLeft || visBottom <= visTop) return false;
+      }
+      var tcx = tr.left + tr.width / 2, tcy = tr.top + tr.height / 2;
+      if (tcx < Math.max(4, visLeft) || tcx > Math.min(innerWidth - 4, visRight) || tcy < Math.max(4, visTop) || tcy > Math.min(innerHeight - 4, visBottom)) return false;
+      var tix = Math.max(0, Math.min(tr.right, visRight) - Math.max(tr.left, visLeft));
+      var tiy = Math.max(0, Math.min(tr.bottom, visBottom) - Math.max(tr.top, visTop));
+      if (elArea <= innerWidth * innerHeight * 0.8 && (tix * tiy) < elArea * 0.5) return false;
+    }
+    return true;
+  }
   function reveal(el) {
     var chain = frameChain(el);
     for (var i = 0; i < chain.length; i++) try { chain[i].scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) {}
@@ -260,7 +329,7 @@
   }
 
   // ------------------------------------------------------------------ 页面稳定（waitStable）
-  var ST = window.__pimetState || (window.__pimetState = { lastMut: now(), reqs: {}, rid: 0, hooked: false });
+  var ST = window.__pimetState || (window.__pimetState = { lastMut: now(), mutCount: 0, reqs: {}, rid: 0, hooked: false });
   function onMutations(recs) {
     for (var i = 0; i < recs.length; i++) {
       var r = recs[i];
@@ -271,6 +340,7 @@
         if (own && (r.addedNodes.length || r.removedNodes.length)) continue;
       }
       ST.lastMut = now();
+      ST.mutCount = (ST.mutCount || 0) + 1;
       return;
     }
   }
@@ -310,7 +380,13 @@
   observeRoot(document);
   hookNet();
 
-  /** 同步返回 {stable, pending, idleMs}；宿主轮询调用 */
+  /** 动作触发/开始 settle 时重置静默计时并记录 mutCount 基线 */
+  A.markAction = function () {
+    ST.lastMut = now();
+    return { ok: true, mutCount: ST.mutCount || 0 };
+  };
+
+  /** 同步返回 {stable, pending, idleMs, mutAge, mutCount}；宿主轮询调用 */
   A.waitStable = function (quietMs, maxMs) {
     quietMs = quietMs > 0 ? quietMs : 300;
     maxMs = maxMs > 0 ? maxMs : 3000;
@@ -321,7 +397,13 @@
     }
     var idle = Math.max(0, t - ST.lastMut);
     var loading = document.readyState === 'loading';
-    return { stable: !loading && pending === 0 && idle >= quietMs, pending: pending, idleMs: idle };
+    return {
+      stable: !loading && pending === 0 && idle >= quietMs,
+      pending: pending,
+      idleMs: idle,
+      mutAge: idle,
+      mutCount: ST.mutCount || 0
+    };
   };
 
   // ------------------------------------------------------------------ ref（跨快照稳定）+ 目标解析
@@ -1095,9 +1177,14 @@
     }
     if (!el && text) el = findByText(text);
     if (!el) return { ok: false, error: ref ? '找不到元素 ' + ref + '，页面可能已变化，请重新 snapshot' : '找不到包含「' + text + '」的元素' };
-    reveal(el);
+    var scrolled = false;
+    if (!inViewport(el)) {
+      reveal(el);
+      scrolled = true;
+    }
     var m = measure(el);
     if (!m.ok) return { ok: false, error: (ref ? ref + ' ' : '') + m.error };
+    m.scrolled = scrolled;
     flash(m._r);
     return strip(m);
   };
@@ -1421,6 +1508,302 @@
   /** 供宿主判断 eval 的 script 是表达式还是语句体 */
   A.evalExpr = function (src) {
     try { new Function('return (' + src + '\n)'); return { ok: true, expr: true }; } catch (e) { return { ok: true, expr: false }; }
+  };
+
+  // ------------------------------------------------------------------ 智能正文提取（read）
+  var READ_SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, SVG: 1, TEMPLATE: 1, NAV: 1, FOOTER: 1, ASIDE: 1, HEAD: 1, META: 1, LINK: 1, TITLE: 1 };
+  var READ_SKIP_ROLES = { navigation: 1, banner: 1, contentinfo: 1, complementary: 1, menu: 1, menubar: 1, toolbar: 1 };
+  var READ_NOISE_RE = /(^|[\s_-])(ad|ads|advert|advertisement|sponsored|promo|sidebar|side-bar|comments?|comment-list|comment-box|disqus|respond|breadcrumb|breadcrumbs|share-bar|social-share|related-posts|recommend|cookie-banner|newsletter)($|[\s_-])/i;
+  var READ_BLOCK_TAGS = { P: 1, DIV: 1, SECTION: 1, ARTICLE: 1, MAIN: 1, HEADER: 1, BLOCKQUOTE: 1, FIGURE: 1, FIGCAPTION: 1, DT: 1, DD: 1, ADDRESS: 1, DETAILS: 1, SUMMARY: 1, UL: 1, OL: 1, DL: 1, TABLE: 1 };
+
+  function readHidden(el, isRoot) {
+    if (!el || el.nodeType !== 1 || el.__pimetOwn) return true;
+    var tag = el.tagName;
+    if (READ_SKIP_TAGS[tag]) return true;
+    if (el.hidden || el.hasAttribute('inert') || el.getAttribute('aria-hidden') === 'true') return true;
+    var s = styleOf(el);
+    if (s && (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse' || parseFloat(s.opacity || '1') <= 0.05)) return true;
+    if (!isRoot) {
+      var role = (el.getAttribute('role') || '').toLowerCase();
+      if (role && READ_SKIP_ROLES[role]) return true;
+      var idCls = (el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : '');
+      if (idCls.replace(/\s+/g, '') && READ_NOISE_RE.test(idCls) && tag !== 'ARTICLE' && tag !== 'MAIN') {
+        var hasMain = false;
+        try { hasMain = !!el.querySelector('article,main,[role="main"]'); } catch (e) {}
+        if (!hasMain) return true;
+      }
+    }
+    return false;
+  }
+
+  function readPlainLen(el) {
+    if (!el) return 0;
+    return (el.textContent || '').replace(/\s+/g, '').length;
+  }
+
+  function readLinkLen(el) {
+    var total = 0;
+    try {
+      var as = el.querySelectorAll('a');
+      for (var i = 0; i < as.length && i < 500; i++) total += readPlainLen(as[i]);
+    } catch (e) {}
+    return total;
+  }
+
+  function readPickRoot(selector) {
+    if (selector) {
+      var custom = null;
+      try {
+        custom = /\s>>>\s/.test(selector) ? queryLoc(selector) : (document.querySelector(selector) || queryDeep(selector));
+      } catch (e) {
+        return { error: '无效的 selector: ' + selector };
+      }
+      if (!custom) return { error: '找不到匹配 selector 的元素: ' + selector };
+      return { root: custom };
+    }
+    var priSels = ['article', 'main', '[role="main"]', '.markdown-body', '.article-content', '#content'];
+    var bestPri = null, bestPriScore = 0;
+    for (var i = 0; i < priSels.length; i++) {
+      var list;
+      try { list = document.querySelectorAll(priSels[i]); } catch (e) { continue; }
+      for (var j = 0; j < list.length && j < 20; j++) {
+        var cand = list[j];
+        if (readHidden(cand, false)) continue;
+        var tLen = readPlainLen(cand);
+        if (tLen <= 150) continue;
+        var lLen = readLinkLen(cand);
+        var plain = Math.max(0, tLen - lLen);
+        var density = tLen > 0 ? lLen / tLen : 1;
+        var sc = plain * (1 - density * 0.7);
+        if (list.length === 1 && sc > 120) return { root: cand };
+        if (sc > bestPriScore) { bestPriScore = sc; bestPri = cand; }
+      }
+      if (bestPri && bestPriScore > 300) return { root: bestPri };
+    }
+    if (bestPri) return { root: bestPri };
+
+    // 轻量启发式：按「纯文本字数 - 链接密度惩罚」选最佳块级主容器
+    var best = null, bestScore = 0;
+    var blocks;
+    try { blocks = document.body ? document.body.querySelectorAll('main,article,section,div') : []; } catch (e2) { blocks = []; }
+    for (var k = 0; k < blocks.length && k < 400; k++) {
+      var el = blocks[k];
+      if (readHidden(el, false)) continue;
+      var tl = readPlainLen(el);
+      if (tl < 120) continue;
+      var ll = readLinkLen(el);
+      var ld = tl > 0 ? ll / tl : 1;
+      if (ld > 0.75) continue;
+      var pl = Math.max(0, tl - ll);
+      var pCount = 0;
+      try { pCount = el.querySelectorAll('p').length; } catch (e3) {}
+      var score = pl * (1 - ld) - ll * 0.5 + Math.min(pCount, 20) * 20;
+      if (score > bestScore) { bestScore = score; best = el; }
+    }
+    return { root: best || document.body || document.documentElement };
+  }
+
+  function readHasBlock(el) {
+    var kids = el.children;
+    if (!kids) return false;
+    for (var i = 0; i < kids.length; i++) {
+      var t = kids[i].tagName;
+      if (READ_BLOCK_TAGS[t] || /^H[1-6]$/.test(t) || t === 'PRE' || t === 'LI' || t === 'TR') return true;
+    }
+    return false;
+  }
+
+  A.read = function (opts) {
+    opts = opts || {};
+    var maxChars = +(opts.maxChars || opts.max_chars) || 12000;
+    if (maxChars < 200) maxChars = 200;
+    var selector = opts.selector ? String(opts.selector).replace(/^\s+|\s+$/g, '') : '';
+    var includeLinks = opts.includeLinks !== false && opts.include_links !== false;
+
+    beginCache();
+    try {
+      var picked = readPickRoot(selector);
+      if (picked.error) return { ok: false, error: picked.error };
+      var root = picked.root;
+      if (!root) return { ok: false, error: '页面没有可读取的内容' };
+
+      var parts = [];
+      var links = [];
+      var linkSeen = new MapC();
+      var visited = 0;
+      var charTotal = 0;
+      var charBudget = maxChars * 3;
+      var stopWalk = false;
+      var CODE_START = '\u0001PIMET_CODE_START\u0001';
+      var CODE_END = '\u0001PIMET_CODE_END\u0001';
+
+      function pushPart(s) {
+        if (!s || stopWalk) return;
+        parts.push(s);
+        charTotal += s.length;
+        if (charTotal > charBudget) stopWalk = true;
+      }
+
+      function pushLink(el, text) {
+        if (!includeLinks || links.length >= 30) return;
+        var rawHref = el.getAttribute('href') || '';
+        if (!rawHref || rawHref.charAt(0) === '#' || /^javascript:/i.test(rawHref)) return;
+        var href = el.href || rawHref;
+        if (!href || linkSeen.get(href)) return;
+        var lt = clean(text);
+        if (!lt) return;
+        linkSeen.set(href, 1);
+        links.push({ text: cut(lt, 120), url: href });
+      }
+
+      function walk(node, isRoot, inPre, depth) {
+        if (!node || stopWalk || depth > 200 || ++visited > 15000) {
+          if (visited > 15000 || charTotal > charBudget) stopWalk = true;
+          return;
+        }
+        if (node.nodeType === 3) {
+          var v = node.nodeValue || '';
+          if (inPre) {
+            pushPart(v);
+          } else {
+            var s = v.replace(/[ \t\r\n]+/g, ' ');
+            if (s !== ' ' || (parts.length && !/[\s\n]$/.test(parts[parts.length - 1]))) pushPart(s);
+          }
+          return;
+        }
+        if (node.nodeType !== 1) return;
+        if (readHidden(node, isRoot)) return;
+        var tag = node.tagName;
+
+        if (tag === 'BR') { pushPart('\n'); return; }
+        if (tag === 'HR') { pushPart('\n---\n'); return; }
+        if (tag === 'IMG') {
+          var alt = clean(node.getAttribute('alt') || '');
+          if (alt) pushPart(' [' + cut(alt, 80) + '] ');
+          return;
+        }
+
+        var hm = /^H([1-6])$/.exec(tag);
+        if (hm) {
+          var ht = clean(itext(node));
+          if (ht) {
+            var prefix = '';
+            for (var hi = 0; hi < +hm[1]; hi++) prefix += '#';
+            pushPart('\n\n' + prefix + ' ' + ht + '\n\n');
+          }
+          return;
+        }
+
+        if (tag === 'PRE') {
+          var codeText = (node.textContent || '').replace(/\r/g, '').replace(/^\n+|\n+$/g, '');
+          codeText = codeText.split(CODE_START).join('').split(CODE_END).join('');
+          if (codeText) pushPart('\n\n' + CODE_START + '\n' + codeText + '\n' + CODE_END + '\n\n');
+          return;
+        }
+
+        if (tag === 'CODE' && !inPre) {
+          var inlineCode = clean(node.textContent || '');
+          if (inlineCode) pushPart('`' + inlineCode + '`');
+          return;
+        }
+
+        if (tag === 'TR') {
+          var cells = [];
+          var ch = node.children;
+          for (var ci = 0; ci < ch.length; ci++) {
+            var ct = ch[ci].tagName;
+            if (ct === 'TD' || ct === 'TH') {
+              var cv = clean(itext(ch[ci]));
+              if (cv) cells.push(cv);
+            }
+          }
+          if (cells.length) pushPart('\n' + cells.join(' | ') + '\n');
+          return;
+        }
+
+        if (tag === 'LI') {
+          pushPart('\n- ');
+          each(slotKids(node), function (c) { if (!stopWalk) walk(c, false, inPre, depth + 1); });
+          pushPart('\n');
+          return;
+        }
+
+        if (tag === 'BLOCKQUOTE') {
+          var bq = clean(itext(node));
+          if (bq) pushPart('\n\n> ' + bq + '\n\n');
+          return;
+        }
+
+        if (tag === 'A') {
+          var aText = clean(itext(node));
+          pushLink(node, aText);
+          if (readHasBlock(node)) {
+            each(slotKids(node), function (c) { if (!stopWalk) walk(c, false, inPre, depth + 1); });
+          } else if (aText) {
+            var rawH = node.getAttribute('href') || '';
+            var fullH = node.href || rawH;
+            if (includeLinks && fullH && /^https?:/i.test(fullH) && aText.length <= 80 && aText !== fullH && fullH.length <= 240) {
+              pushPart('[' + aText + '](' + fullH + ')');
+            } else {
+              pushPart(aText);
+            }
+          }
+          return;
+        }
+
+        var isBlock = !!READ_BLOCK_TAGS[tag];
+        if (isBlock) pushPart('\n');
+        each(slotKids(node), function (c) { if (!stopWalk) walk(c, false, inPre, depth + 1); });
+        if (isBlock) pushPart('\n');
+      }
+
+      walk(root, true, false, 0);
+
+      var raw = parts.join('');
+      var lines = raw.split('\n');
+      var norm = [];
+      var inCode = false;
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li];
+        if (line === CODE_START) {
+          inCode = true;
+          norm.push('```');
+          continue;
+        }
+        if (line === CODE_END) {
+          inCode = false;
+          norm.push('```');
+          continue;
+        }
+        if (inCode) {
+          norm.push(line.replace(/\s+$/g, ''));
+        } else {
+          var trimmed = line.replace(/[ \t]+/g, ' ').replace(/^\s+|\s+$/g, '');
+          if (trimmed) norm.push(trimmed);
+          else if (norm.length && norm[norm.length - 1] !== '') norm.push('');
+        }
+      }
+      var text = norm.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\s+|\s+$/g, '');
+      var fullLen = text.length;
+      var truncated = fullLen > maxChars || stopWalk;
+      if (text.length > maxChars) {
+        var cutAt = maxChars;
+        var nl = text.lastIndexOf('\n', maxChars);
+        if (nl > maxChars * 0.8) cutAt = nl;
+        text = text.slice(0, cutAt).replace(/\s+$/g, '') + '\n…（已截断）';
+      }
+      return {
+        ok: true,
+        url: location.href,
+        title: document.title,
+        text: text,
+        length: fullLen,
+        truncated: truncated,
+        links: includeLinks ? links : []
+      };
+    } finally {
+      endCache();
+    }
   };
 
   window.__pimetAgent = A;

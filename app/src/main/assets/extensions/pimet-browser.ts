@@ -35,8 +35,9 @@ const UI_ACTIONS = [
   "ui_get", "ui_schema", "ui_set", "ui_patch", "ui_remove", "ui_reset", "ui_backups", "ui_restore",
   "panel_write", "panel_open", "panel_delete", "panels", "action_run", "site_set", "site_get", "rule_add", "rule_remove", "rules",
 ];
-/** 油猴脚本 / 浏览器设置类动作（beta.22 合同第 3 节）：不带快照，结果按数据字段原样展示 */
+/** 油猴脚本 / 浏览器设置类动作（beta.22+）：不带快照，结果按数据字段原样展示 */
 const MANAGE = new Set([
+  "read",
   "scripts", "script_get", "script_install", "script_enable", "script_remove", "script_update", "script_values",
   "menu_commands", "menu_run", "console", "config_get", "config_set", "ua", "desktop", "zoom", "cookies", "clear_data",
   "find", "wait_for", "inject",
@@ -99,6 +100,12 @@ function adaptParams(action: string, p: Record<string, any>): Record<string, any
     case "tab_new":
       if (q.container === undefined || q.container === "") q.container = "new";
       if (q.background === undefined) q.background = true;
+      break;
+    case "read":
+      if (q.max_chars === undefined && q.maxChars !== undefined) q.max_chars = Number(q.maxChars);
+      delete q.maxChars;
+      if (q.include_links === undefined && q.includeLinks !== undefined) q.include_links = Boolean(q.includeLinks);
+      delete q.includeLinks;
       break;
     case "snapshot":
       if (q.scope === "interactive") { q.mode = "interactive"; delete q.scope; }
@@ -163,6 +170,7 @@ function adaptParams(action: string, p: Record<string, any>): Record<string, any
       break;
     }
   }
+  if (q.settle !== undefined) q.settle = Boolean(q.settle);
   if (MANAGE.has(action) || action === "batch") q.snapshot = false;
   return q;
 }
@@ -453,6 +461,504 @@ async function call1(action: string, params: Record<string, any>, signal?: Abort
   return j;
 }
 
+// ------------------------------------------------------------------ 页面端高阶辅助（兼容新旧宿主）
+
+/**
+ * 页面正文提取器（在浏览器上下文执行；纯 JS 写法确保 toString() 零 TS 残留）：
+ * 去噪 nav/header/footer/aside/script/style，选主容器或文本密度最高块，保留标题/段落/列表/表格/代码块，提取关键链接。
+ */
+const pageReadExtractor: (opts: any) => any = function (opts) {
+  var maxChars = Math.max(200, Math.min(Number(opts && opts.maxChars) || 15000, 100000));
+  var selector = opts && opts.selector ? String(opts.selector).trim() : "";
+  var includeLinks = !opts || opts.includeLinks !== false;
+  var NOISE_TAGS = { NAV: 1, HEADER: 1, FOOTER: 1, ASIDE: 1, SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, IFRAME: 1, DIALOG: 1 };
+  var NOISE_ROLES = { navigation: 1, banner: 1, contentinfo: 1, complementary: 1, search: 1 };
+  var NOISE_RE = /\b(nav|navbar|header|footer|sidebar|aside|menu|breadcrumb|comment|comments|ad|ads|advert|banner|cookie|consent|popup|modal|share|social|related|recommend)\b/i;
+
+  function isVisible(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hidden || el.getAttribute("aria-hidden") === "true" || el.hasAttribute("inert")) return false;
+    try {
+      var s = getComputedStyle(el);
+      if (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" || parseFloat(s.opacity || "1") <= 0.05) return false;
+    } catch (e) {}
+    return true;
+  }
+  function isNoise(el, isRoot) {
+    if (!el || el.nodeType !== 1) return true;
+    if (!isVisible(el)) return true;
+    if (isRoot) return false;
+    if (Object.prototype.hasOwnProperty.call(NOISE_TAGS, el.tagName)) return true;
+    var role = (el.getAttribute("role") || "").toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(NOISE_ROLES, role)) return true;
+    var sig = (typeof el.id === "string" ? el.id : "") + " " + (typeof el.className === "string" ? el.className : "");
+    if (sig.trim() && NOISE_RE.test(sig) && !/article|main|post|content|entry|readme|markdown/i.test(sig)) {
+      if ((el.textContent || "").trim().length < 1200) return true;
+    }
+    return false;
+  }
+  function cleanText(s) {
+    return String(s || "").replace(/\u00a0/g, " ").replace(/[ \t\r\f\v]+/g, " ");
+  }
+  function linkTextLen(el) {
+    var as = el.querySelectorAll("a"), total = 0;
+    for (var i = 0; i < as.length; i++) total += (as[i].textContent || "").trim().length;
+    return total;
+  }
+  function pickRoot() {
+    if (selector) {
+      var found = null;
+      try { found = document.querySelector(selector); } catch (e) { return { el: null, error: "选择器不合法: " + selector }; }
+      return found ? { el: found } : { el: null, error: "找不到选择器: " + selector };
+    }
+    var prio = ["article", "main", '[role="main"]', ".markdown-body", ".article-content", ".post-content", ".entry-content", "#article-content", "#content", ".content"];
+    var best = null, bestScore = 0;
+    for (var i = 0; i < prio.length; i++) {
+      var list;
+      try { list = document.querySelectorAll(prio[i]); } catch (e) { continue; }
+      for (var j = 0; j < list.length && j < 10; j++) {
+        var el = list[j];
+        if (!isVisible(el)) continue;
+        var txt = (Object(el).innerText || el.textContent || "").trim();
+        if (txt.length < 100) continue;
+        var density = txt.length * (1 - Math.min(0.85, linkTextLen(el) / Math.max(1, txt.length)));
+        var bonus = i < 3 ? 1.3 : 1.0;
+        if (density * bonus > bestScore) { bestScore = density * bonus; best = el; }
+      }
+      if (best && bestScore >= 400 && i < 3) break;
+    }
+    if (best) return { el: best };
+    var cands = document.querySelectorAll("div, section, article, main");
+    for (var k = 0; k < cands.length && k < 400; k++) {
+      var c = cands[k];
+      if (isNoise(c, false)) continue;
+      var t = (Object(c).innerText || c.textContent || "").trim();
+      if (t.length < 150 || t.length > 200000) continue;
+      var ratio = linkTextLen(c) / Math.max(1, t.length);
+      if (ratio > 0.65) continue;
+      var pCount = c.querySelectorAll("p, pre, h1, h2, h3, li").length;
+      var sc = t.length * (1 - ratio) + pCount * 40;
+      if (sc > bestScore) { bestScore = sc; best = c; }
+    }
+    return { el: best || document.body || document.documentElement };
+  }
+
+  var picked = pickRoot();
+  if (!picked.el) {
+    return { ok: false, url: location.href, title: document.title || "", text: "", length: 0, truncated: false, links: [], error: picked.error || "页面无内容" };
+  }
+  var root = picked.el;
+  var out = new Array();
+  function pushBlank() {
+    if (out.length && out[out.length - 1] !== "\n\n") out.push("\n\n");
+  }
+  function walk(node, isRoot) {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      var t = cleanText(node.nodeValue || "");
+      if (t.trim()) out.push(t);
+      return;
+    }
+    if (node.nodeType !== 1 || isNoise(node, isRoot)) return;
+    var tag = node.tagName;
+    if (tag === "BR") { out.push("\n"); return; }
+    if (tag === "HR") { pushBlank(); out.push("---\n\n"); return; }
+    if (tag === "PRE") {
+      pushBlank();
+      var code = String(node.innerText != null ? node.innerText : node.textContent || "").replace(/\r/g, "").replace(/^\n+|\n+$/g, "");
+      if (code) out.push("```\n" + code + "\n```\n\n");
+      return;
+    }
+    if (tag === "CODE" && (!node.parentElement || node.parentElement.tagName !== "PRE")) {
+      var ic = cleanText(node.textContent || "").trim();
+      if (ic) out.push("`" + ic + "`");
+      return;
+    }
+    var hm = /^H([1-6])$/.exec(tag);
+    if (hm) {
+      pushBlank();
+      var hashes = "";
+      for (var hi = 0; hi < Number(hm[1]); hi++) hashes += "#";
+      var ht = cleanText(node.innerText || node.textContent || "").trim();
+      if (ht) out.push(hashes + " " + ht + "\n\n");
+      return;
+    }
+    if (tag === "LI") {
+      if (out.length && !/\n$/.test(out[out.length - 1])) out.push("\n");
+      out.push("- ");
+      for (var lc = node.firstChild; lc; lc = lc.nextSibling) walk(lc, false);
+      out.push("\n");
+      return;
+    }
+    if (tag === "TR") {
+      var cells = [], kids = node.children || [];
+      for (var ci = 0; ci < kids.length; ci++) {
+        if (kids[ci].tagName === "TD" || kids[ci].tagName === "TH") {
+          cells.push(cleanText(kids[ci].innerText || kids[ci].textContent || "").trim());
+        }
+      }
+      if (cells.join("").trim()) {
+        if (out.length && !/\n$/.test(out[out.length - 1])) out.push("\n");
+        out.push(cells.join(" | ") + "\n");
+      }
+      return;
+    }
+    if (tag === "BLOCKQUOTE") {
+      pushBlank();
+      var bq = cleanText(node.innerText || node.textContent || "").trim();
+      if (bq) out.push("> " + bq.replace(/\n+/g, "\n> ") + "\n\n");
+      return;
+    }
+    var isBlock = /^(P|DIV|SECTION|ARTICLE|MAIN|UL|OL|TABLE|FIGURE|FIGCAPTION|DT|DD|DETAILS|SUMMARY|ADDRESS)$/.test(tag);
+    if (isBlock) pushBlank();
+    for (var ch = node.firstChild; ch; ch = ch.nextSibling) walk(ch, false);
+    if (isBlock) pushBlank();
+  }
+
+  walk(root, true);
+  var text = out.join("").replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (!text) text = String(Object(root).innerText || root.textContent || "").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+
+  var fullLen = text.length;
+  var truncated = fullLen > maxChars;
+  if (truncated) {
+    var cutAt = text.lastIndexOf("\n", maxChars);
+    if (cutAt < maxChars * 0.7) cutAt = maxChars;
+    text = text.slice(0, cutAt).replace(/\s+$/, "");
+  }
+
+  var links = new Array();
+  if (includeLinks) {
+    var seen = Object.create(null), anchors = root.querySelectorAll("a[href]"), baseHref = location.href.split("#")[0];
+    for (var ai = 0; ai < anchors.length && links.length < 30; ai++) {
+      var a = Object(anchors[ai]);
+      if (!isVisible(a)) continue;
+      var href = a.href || "";
+      if (!href || href.indexOf("javascript:") === 0 || href === location.href || href.indexOf(baseHref + "#") === 0) continue;
+      var label = cleanText(a.innerText || a.textContent || a.getAttribute("aria-label") || "").trim();
+      if (label.length < 2 || seen[href]) continue;
+      seen[href] = 1;
+      links.push({ text: label.slice(0, 80), url: href });
+    }
+  }
+  return { ok: true, url: location.href, title: document.title || "", text: text, length: fullLen, truncated: truncated, links: links };
+};
+
+/** 扫描并关闭一个可见的挡路弹窗/Cookie 同意栏/登录遮罩 */
+const pageDismissPopups: () => any = function () {
+  var CLICK_SEL = 'button, [role="button"], a, span, div, i, svg';
+  var SAFE_EXACT = /^(×|✕|✖|x|关闭|跳过|取消|知道了|我知道了|暂不|暂不登录|暂不开通|稍后再说|以后再说|不登录|先逛逛|不用了|残忍拒绝|继续访问|拒绝|仅必要|仅使用必要|close|dismiss|skip|cancel|no thanks|not now|later|got it|ok|accept|accept all|allow|allow all|agree|i agree|reject|reject all|decline)$/i;
+  var SAFE_PARTIAL = /(关闭|跳过|暂不登录|暂不开通|残忍拒绝|继续访问|我知道了|Accept all|Allow all|Got it|No thanks|I agree|Reject all)/i;
+  var CLOSE_ATTR_RE = /^(close|dismiss|关闭|关闭弹窗|关闭广告|取消)$/i;
+  var DANGER_RE = /(登录|注册|立即购买|购买|下单|支付|付款|充值|删除|清空|提交|确认订单|sign in|log in|sign up|register|buy|pay|checkout|delete|submit)/i;
+  var OVERLAY_RE = /(modal|dialog|popup|popover|drawer|overlay|mask|cookie|consent|gdpr|banner|login-guide|passport|toast-box)/i;
+
+  function vis(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hidden || el.getAttribute("aria-hidden") === "true" || el.getAttribute("data-pimet-dismissed") === "1") return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return false;
+    try {
+      var s = getComputedStyle(el);
+      if (s.display === "none" || s.visibility === "hidden" || parseFloat(s.opacity || "1") <= 0.05) return false;
+    } catch (e) {}
+    return true;
+  }
+  function labelOf(el) {
+    var al = (el.getAttribute("aria-label") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+    var tx = (el.innerText != null ? el.innerText : el.textContent || "").replace(/\s+/g, " ").trim();
+    return tx && tx.length <= 24 ? tx : al;
+  }
+  function descBox(el) {
+    var tag = el.tagName.toLowerCase();
+    var id = el.id ? "#" + el.id : "";
+    var cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/)[0] : "";
+    return (tag + id + cls).slice(0, 60);
+  }
+  function scoreBtn(el, inOverlay) {
+    if (!vis(el)) return -1;
+    var r = el.getBoundingClientRect();
+    if (r.width > innerWidth * 0.9 || r.height > innerHeight * 0.4) return -1;
+    var tx = (el.innerText != null ? el.innerText : el.textContent || "").replace(/\s+/g, " ").trim();
+    var al = (el.getAttribute("aria-label") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+    var cls = (typeof el.className === "string" ? el.className : "") + " " + (el.id || "");
+    var lbl = tx && tx.length <= 24 ? tx : al;
+    if (!lbl && !/close|dismiss|cancel/i.test(cls)) return -1;
+    if (lbl && DANGER_RE.test(lbl) && !/暂不登录|不登录/.test(lbl)) return -1;
+    var sc = 0;
+    if (lbl && SAFE_EXACT.test(lbl)) sc += 100;
+    else if (al && CLOSE_ATTR_RE.test(al)) sc += 95;
+    else if (lbl && lbl.length <= 24 && SAFE_PARTIAL.test(lbl)) sc += 75;
+    else if (inOverlay && /close|dismiss/i.test(cls) && tx.length <= 4) sc += 65;
+    else return -1;
+    if (inOverlay) sc += 40;
+    if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") sc += 20;
+    if (/^[×✕✖x]$/i.test(lbl)) sc += 10;
+    return sc;
+  }
+  function tryClick(el, box) {
+    try { el.setAttribute("data-pimet-dismissed", "1"); } catch (e) {}
+    var lbl = labelOf(el) || descBox(el);
+    try { el.click(); } catch (e) {
+      try { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); } catch (e2) { return null; }
+    }
+    return { clicked: true, label: lbl, container: box ? descBox(box) : "" };
+  }
+
+  var containers = new Array();
+  var dialogs = document.querySelectorAll('dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"]');
+  for (var i = 0; i < dialogs.length; i++) if (vis(dialogs[i])) containers.push(dialogs[i]);
+  var all = document.querySelectorAll("div, section, aside, footer, header");
+  for (var j = 0; j < all.length && containers.length < 30; j++) {
+    var el = all[j];
+    if (!vis(el)) continue;
+    var s;
+    try { s = getComputedStyle(el); } catch (e) { continue; }
+    if (s.position !== "fixed" && s.position !== "sticky") continue;
+    var z = parseInt(s.zIndex, 10) || 0;
+    var sig = (el.id || "") + " " + (typeof el.className === "string" ? el.className : "");
+    var r = el.getBoundingClientRect();
+    var big = r.width >= innerWidth * 0.5 && r.height >= 40;
+    if ((z >= 10 && big) || (OVERLAY_RE.test(sig) && (z >= 1 || big))) containers.push(el);
+  }
+
+  var best = null, bestScore = 0, bestBox = null;
+  for (var ci = 0; ci < containers.length; ci++) {
+    var box = containers[ci];
+    var btns = box.querySelectorAll(CLICK_SEL);
+    for (var bi = 0; bi < btns.length && bi < 120; bi++) {
+      var sc = scoreBtn(btns[bi], true);
+      if (sc > bestScore) { bestScore = sc; best = btns[bi]; bestBox = box; }
+    }
+  }
+  if (best) {
+    var r1 = tryClick(best, bestBox);
+    if (r1) return r1;
+  }
+
+  var known = [
+    "#onetrust-accept-btn-handler", "#onetrust-reject-all-handler", ".cc-dismiss", ".cc-allow",
+    '[aria-label="Close"]', '[aria-label="关闭"]', '[data-testid="close-button"]', ".modal-close", ".close-btn"
+  ];
+  for (var ki = 0; ki < known.length; ki++) {
+    var kEl = null;
+    try { kEl = document.querySelector(known[ki]); } catch (e) {}
+    if (kEl && vis(kEl)) {
+      var sc2 = scoreBtn(kEl, true);
+      if (sc2 > 0 || known[ki].indexOf("onetrust") >= 0 || known[ki].indexOf("cc-") >= 0) {
+        var r2 = tryClick(kEl, null);
+        if (r2) return r2;
+      }
+    }
+  }
+  return { clicked: false };
+};
+
+/** 从候选目标数组中找出第一个存在且可见的元素索引 */
+const pageProbeTargets: (targets: any[]) => any = function (targets) {
+  var list = Array.isArray(targets) ? targets : [];
+  function vis(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    try {
+      var s = getComputedStyle(el);
+      if (s.display === "none" || s.visibility === "hidden" || parseFloat(s.opacity || "1") <= 0.05) return false;
+    } catch (e) {}
+    return true;
+  }
+  function findText(text) {
+    var cand = document.querySelectorAll('a, button, input[type="button"], input[type="submit"], [role="button"], label, summary, span, div, li');
+    var best = null, bestLen = 1e9;
+    for (var i = 0; i < cand.length && i < 1500; i++) {
+      var e = Object(cand[i]);
+      if (!vis(e)) continue;
+      var t = (e.innerText != null ? e.innerText : e.value || e.textContent || "").replace(/\s+/g, " ").trim();
+      if (!t || t.indexOf(text) < 0) continue;
+      if (t.length < bestLen) { best = e; bestLen = t.length; }
+    }
+    return best;
+  }
+  var A = Object(window).__pimetAgent;
+  for (var i = 0; i < list.length; i++) {
+    var raw = list[i];
+    if (Array.isArray(raw) && raw.length === 2) {
+      var e0 = document.elementFromPoint(Number(raw[0]), Number(raw[1]));
+      if (e0 && vis(e0)) return { index: i };
+      continue;
+    }
+    var t = String(raw == null ? "" : raw).trim();
+    if (!t) continue;
+    if (/^(?:@|ref\s*=\s*|\[\s*ref\s*=\s*)?e?(\d+)\s*\]?$/i.test(t) && A && typeof A.get === "function") {
+      var eRef = A.get(t);
+      if (eRef && eRef.nodeType === 1 && vis(eRef)) return { index: i };
+      continue;
+    }
+    if (/^text\s*=/i.test(t)) {
+      var q = t.replace(/^text\s*=\s*/i, "").replace(/^(["'])(.*)\1$/, "$2").trim();
+      if (q && findText(q)) return { index: i };
+      continue;
+    }
+    var el = null;
+    try {
+      if (/\s>>>\s/.test(t) && A && typeof A.get === "function") {
+        var r = A.get(t);
+        if (r && r.nodeType === 1) el = r;
+      } else {
+        var qs = document.querySelectorAll(t);
+        for (var j = 0; j < qs.length; j++) if (vis(qs[j])) { el = qs[j]; break; }
+      }
+    } catch (e) { el = null; }
+    if (el && vis(el)) return { index: i };
+  }
+  return { index: -1 };
+};
+
+/** 探测指定的文字或选择器是否已经消失（全部消失返回 true） */
+const pageWaitGoneProbe: (opts: any) => boolean = function (opts) {
+  var sel = opts && opts.selector ? String(opts.selector).trim() : "";
+  var txt = opts && opts.text ? String(opts.text) : "";
+  if (sel) {
+    var list;
+    try { list = document.querySelectorAll(sel); } catch (e) { list = []; }
+    for (var i = 0; i < list.length; i++) {
+      var el = Object(list[i]);
+      if (el.offsetParent !== null || el.getClientRects().length > 0) {
+        try {
+          var s = getComputedStyle(el);
+          if (s.display !== "none" && s.visibility !== "hidden" && parseFloat(s.opacity || "1") > 0.05) return false;
+        } catch (e) { return false; }
+      }
+    }
+  }
+  if (txt) {
+    var A = Object(window).__pimetAgent;
+    if (A && typeof A.hasText === "function") {
+      var r = A.hasText(txt);
+      if (r && r.v) return false;
+    } else {
+      var bodyTxt = (document.body && (document.body.innerText || document.body.textContent)) || "";
+      if (bodyTxt.indexOf(txt) >= 0) return false;
+    }
+  }
+  return true;
+};
+
+/** 等待页面 DOM 变更与网络请求趋于稳定 */
+const pageWaitIdle: (quietMs: number, maxMs: number) => Promise<any> = async function (quietMs, maxMs) {
+  var qRaw = quietMs === undefined || quietMs === null || isNaN(Number(quietMs)) ? 350 : Number(quietMs);
+  var mRaw = maxMs === undefined || maxMs === null || isNaN(Number(maxMs)) ? 5000 : Number(maxMs);
+  var qMs = Math.max(50, qRaw);
+  var mMs = Math.max(qMs, Math.min(mRaw, 30000));
+  var start = Date.now(), end = start + mMs;
+  var A = Object(window).__pimetAgent;
+  if (A && typeof A.waitStable === "function") {
+    while (true) {
+      var st = A.waitStable(qMs, mMs);
+      if (st && st.stable) return { stable: true, pending: st.pending || 0, idleMs: st.idleMs || qMs, elapsed: Date.now() - start };
+      if (Date.now() >= end) return { stable: false, pending: (st && st.pending) || 0, idleMs: (st && st.idleMs) || 0, elapsed: Date.now() - start };
+      await new Promise(function (ok) { setTimeout(ok, Math.min(80, Math.max(10, end - Date.now()))); });
+    }
+  }
+  var lastMut = Date.now(), obs = null;
+  var MO = Object(window).MutationObserver || Object(window).WebKitMutationObserver;
+  if (MO && document.documentElement) {
+    obs = new MO(function () { lastMut = Date.now(); });
+    try { obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true }); } catch (e) {}
+  }
+  try {
+    while (true) {
+      var idle = Date.now() - lastMut;
+      if (document.readyState !== "loading" && idle >= qMs) return { stable: true, pending: 0, idleMs: idle, elapsed: Date.now() - start, fallback: true };
+      if (Date.now() >= end) return { stable: false, pending: 0, idleMs: idle, elapsed: Date.now() - start, fallback: true };
+      await new Promise(function (ok) { setTimeout(ok, Math.min(80, Math.max(10, end - Date.now()))); });
+    }
+  } finally {
+    if (obs) try { obs.disconnect(); } catch (e) {}
+  }
+};
+
+type ReadDoc = { ok: boolean; url: string; title: string; text: string; length: number; truncated: boolean; links: Array<{ text: string; url: string }>; error?: string };
+
+function normalizeReadLinks(rawLinks: any, includeLinks: boolean): Array<{ text: string; url: string }> {
+  if (!includeLinks || !Array.isArray(rawLinks)) return [];
+  return rawLinks.map((l: any) => ({ text: String(l?.text ?? ""), url: String(l?.url ?? l?.href ?? "") })).filter((l) => l.url);
+}
+
+async function performRead(
+  opts: { maxChars?: number; max_chars?: number; selector?: string; includeLinks?: boolean; include_links?: boolean; timeout?: number },
+  execHostRead: (req: Record<string, any>) => Promise<any>,
+  execEvalRead: (script: string) => Promise<any>
+): Promise<ReadDoc> {
+  const maxChars = Math.max(200, Math.min(Number(opts.max_chars ?? opts.maxChars) || 15000, 100000));
+  const selector = opts.selector ? String(opts.selector).trim() : "";
+  const includeLinks = (opts.include_links ?? opts.includeLinks) !== false;
+  const hostReq: Record<string, any> = { snapshot: false, max_chars: maxChars };
+  if (selector) hostReq.selector = selector;
+  if (!includeLinks) hostReq.include_links = false;
+  if (opts.timeout) hostReq.timeout = opts.timeout;
+
+  let hostRes: any = null;
+  let needFallback = false;
+  try {
+    hostRes = await execHostRead(hostReq);
+    // 旧宿主把 read 当成 snapshot 别名（只回 snapshot，没有 text），也需要透明降级
+    if (!hostRes || typeof hostRes.text !== "string") needFallback = true;
+  } catch (e: any) {
+    if (e instanceof FatalError) throw e;
+    const msg = String(e?.rawError ?? e?.message ?? "");
+    if (isUnknownAction(msg) || /未知操作|不支持|unknown action|not supported/i.test(msg)) needFallback = true;
+    else throw e;
+  }
+
+  if (!needFallback && hostRes) {
+    const text = String(hostRes.text ?? "");
+    return {
+      ok: hostRes.ok !== false,
+      url: String(hostRes.url ?? ""),
+      title: String(hostRes.title ?? ""),
+      text,
+      length: typeof hostRes.length === "number" ? hostRes.length : text.length,
+      truncated: !!hostRes.truncated,
+      links: normalizeReadLinks(hostRes.links, includeLinks),
+    };
+  }
+
+  const raw = await execEvalRead(wrapScript(pageReadExtractor, [{ maxChars, selector, includeLinks }]));
+  if (typeof raw === "string" && (raw.startsWith("脚本出错: ") || /^脚本超时（\d+ms）未返回/.test(raw))) {
+    throw new BrowserError(raw);
+  }
+  const d = decodeEnvelope(raw);
+  const val = d.enveloped ? d.value : (typeof raw === "string" ? maybeJson(raw) : raw);
+  if (!val || typeof val !== "object") throw new BrowserError("read 提取结果异常");
+  if (val.ok === false && val.error) throw new BrowserError(String(val.error));
+  const text = String(val.text ?? "");
+  return {
+    ok: val.ok !== false,
+    url: String(val.url ?? hostRes?.url ?? ""),
+    title: String(val.title ?? hostRes?.title ?? ""),
+    text,
+    length: typeof val.length === "number" ? val.length : text.length,
+    truncated: !!val.truncated,
+    links: normalizeReadLinks(val.links, includeLinks),
+  };
+}
+
+function formatReadResult(doc: ReadDoc): string {
+  const parts: string[] = [];
+  if (doc.title) parts.push(`标题: ${doc.title}`);
+  if (doc.url) parts.push(`网址: ${doc.url}`);
+  parts.push(`正文长度: ${doc.length} 字符${doc.truncated ? "（已截断）" : ""}`);
+  parts.push("");
+  parts.push(doc.text || "(页面没有可提取的正文)");
+  if (doc.links && doc.links.length) {
+    parts.push("");
+    parts.push(`关键链接 (${doc.links.length}):`);
+    for (const l of doc.links) parts.push(`- ${l.text}: ${l.url}`);
+  }
+  return parts.join("\n");
+}
+
 // ------------------------------------------------------------------ 站点工具
 
 function checkName(s: string, what: string): string {
@@ -593,6 +1099,7 @@ function argSummary(action: string, p: Record<string, any>): string {
     case "scroll": return clip(p.ref ?? p.direction ?? "down", 20);
     case "wait": return p.text !== undefined ? `「${clip(p.text, 30)}」` : `${p.ms ?? ""}ms`;
     case "eval": return p.__label ?? "脚本";
+    case "read": return p.selector ? clip(p.selector, 40) : `max=${p.max_chars ?? 15000}`;
     case "snapshot": return p.mode ?? "full";
     default: return p.tab ? `tab=${p.tab}` : "";
   }
@@ -698,24 +1205,163 @@ function makeB(st: RunState, tab?: string): any {
       const j = await go("snapshot", { snapshot: true, ...opts });
       return String(j.snapshot ?? j.text ?? "");
     },
+    /** 提取当前页干净正文（去噪 + 保留标题/段落/代码块 + 关键链接），兼容新旧宿主 */
+    async read(opts: { maxChars?: number; max_chars?: number; selector?: string; includeLinks?: boolean; include_links?: boolean; timeout?: number } = {}) {
+      if (st.fatal) throw st.fatal;
+      const step: Step = { i: st.trace.length + 1, action: "read", arg: opts.selector ? clip(opts.selector, 40) : `max=${opts.max_chars ?? opts.maxChars ?? 15000}`, ms: 0, ok: false, at: codeLocation(new Error().stack) };
+      st.trace.push(step);
+      const t0 = Date.now();
+      try {
+        const doc = await performRead(
+          opts,
+          async (hostReq) => {
+            const j = await call("read", { ...(tab ? { tab } : {}), ...hostReq }, sig);
+            if (j.url) st.lastUrl = j.url;
+            return j;
+          },
+          async (script) => {
+            const ev = await call("eval", { ...(tab ? { tab } : {}), snapshot: false, script, fn: true, ...(opts.timeout ? { timeout: opts.timeout } : {}) }, sig);
+            if (ev.url) st.lastUrl = ev.url;
+            return ev.result;
+          }
+        );
+        step.ok = true;
+        return doc;
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        if (e instanceof FatalError && !st.fatal) { st.fatal = e; st.abort(); }
+        if (st.fatal) throw st.fatal;
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
+    },
+    /** 一行代码读网页：打开 URL → 可选自动清理弹窗 → 返回 b.read(opts) 结构化正文 */
+    async openAndRead(url: string, opts: { timeout?: number; dismissPopups?: boolean; waitFor?: string; maxChars?: number; max_chars?: number; selector?: string; includeLinks?: boolean; include_links?: boolean } = {}) {
+      const nav = await b.open(url, opts.timeout ? { timeout: opts.timeout } : {});
+      if (opts.waitFor) await b.waitFor(opts.waitFor, opts.timeout ?? 10000);
+      let dismissed = 0;
+      if (opts.dismissPopups !== false) {
+        try {
+          const d = await b.dismissPopups();
+          dismissed = d?.closed ?? 0;
+        } catch (e: any) {
+          if (e instanceof FatalError || st.fatal || sig.aborted) throw st.fatal ?? e;
+        }
+      }
+      const doc = await b.read(opts);
+      return {
+        ...doc,
+        dismissed,
+        ...(nav.loaded !== undefined ? { loaded: nav.loaded } : {}),
+        ...(nav.http_status !== undefined ? { http_status: nav.http_status } : {}),
+        ...(nav.load_error ? { load_error: nav.load_error } : {}),
+      };
+    },
+    /** 智能关闭挡路弹窗 / Cookie 同意栏 / 登录提示遮罩，最多尝试 3 次防误伤 */
+    async dismissPopups(opts: { max?: number } = {}) {
+      const rounds = Math.max(1, Math.min(Number(opts.max) || 3, 3));
+      const step: Step = { i: st.trace.length + 1, action: "dismissPopups", arg: `max=${rounds}`, ms: 0, ok: false, at: codeLocation(new Error().stack) };
+      if (st.fatal) throw st.fatal;
+      st.trace.push(step);
+      const t0 = Date.now();
+      const items: Array<{ label: string; container: string }> = [];
+      try {
+        for (let i = 0; i < rounds; i++) {
+          let r: any;
+          try {
+            r = await runJs(pageDismissPopups, [], { timeout: 3000, trace: false });
+          } catch (e: any) {
+            if (st.fatal || sig.aborted) throw st.fatal ?? e;
+            break;
+          }
+          if (!r || !r.clicked) break;
+          items.push({ label: String(r.label ?? ""), container: String(r.container ?? "") });
+          await sleep(220);
+        }
+        step.ok = true;
+        return { closed: items.length, items };
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
+    },
     /** 目标：@N / CSS 选择器 / text=文字 / [x,y]；其它字符串按包含的文字找 */
-    async click(target: any, opts: { js?: boolean; timeout?: number } = {}) {
+    async click(target: any, opts: { js?: boolean; timeout?: number; settle?: boolean } = {}) {
       const j = await go("click", isRef(target) ? { target: tgt(target), ...opts } : { text: String(target), ...opts });
       return String(j.result ?? "");
     },
-    async fill(target: any, text: string, opts: { submit?: boolean; clear?: boolean; timeout?: number } = {}) {
+    async fill(target: any, text: string, opts: { submit?: boolean; clear?: boolean; timeout?: number; settle?: boolean } = {}) {
       const j = await go("fill", { target: tgt(target), text: String(text ?? ""), ...opts });
       return String(j.result ?? "");
     },
-    async select(target: any, value: string) {
-      const j = await go("select", { target: tgt(target), value: String(value) });
+    async select(target: any, value: string, opts: { settle?: boolean } = {}) {
+      const j = await go("select", { target: tgt(target), value: String(value), ...opts });
       return String(j.result ?? "");
     },
-    async hover(target: any) {
-      return String((await go("hover", { target: tgt(target) })).result ?? "");
+    async hover(target: any, opts: { settle?: boolean } = {}) {
+      return String((await go("hover", { target: tgt(target), ...opts })).result ?? "");
     },
     async scrollIntoView(target: any) {
       return String((await go("scroll_into_view", { target: tgt(target) })).result ?? "");
+    },
+    /** 批量填表：支持 [{target, value, kind?:'fill'|'select'|'click'}] 或 {[target]: value}；中间步自动 settle:false 提速 */
+    async fillForm(fields: Array<{ target: any; value?: any; kind?: "fill" | "select" | "click"; clear?: boolean; js?: boolean }> | Record<string, any>, opts: { submit?: string | boolean; stopOnError?: boolean; settle?: boolean } = {}) {
+      const list = Array.isArray(fields)
+        ? fields
+        : Object.keys(fields || {}).map((k) => ({ target: k, value: (fields as any)[k], kind: "fill" as const }));
+      const steps: any[] = [];
+      for (const f of list) {
+        if (!f || f.target === undefined) continue;
+        const kind = f.kind ?? "fill";
+        if (kind === "select") steps.push({ action: "select", target: tgt(f.target), value: String(f.value ?? "") });
+        else if (kind === "click") steps.push({ action: "click", target: tgt(f.target), ...(f.js !== undefined ? { js: f.js } : {}) });
+        else steps.push({ action: "fill", target: tgt(f.target), value: String(f.value ?? ""), ...(f.clear !== undefined ? { clear: f.clear } : {}) });
+      }
+      if (opts.submit) {
+        if (opts.submit === true || /^enter$/i.test(String(opts.submit).trim())) steps.push({ action: "press", key: "Enter" });
+        else steps.push({ action: "click", target: tgt(opts.submit) });
+      }
+      if (!steps.length) return [];
+      for (let i = 0; i < steps.length - 1; i++) steps[i].settle = false;
+      if (opts.settle !== undefined) steps[steps.length - 1].settle = opts.settle;
+      return await b.batch(steps, { stopOnError: opts.stopOnError });
+    },
+    /** 依次探测候选目标数组，点击第一个存在且可见的元素；真实触摸失败且未禁止时自动降级 js:true 点击一次 */
+    async clickAny(targets: any[], opts: { js?: boolean; timeout?: number; settle?: boolean; fallbackJs?: boolean } = {}) {
+      const list = Array.isArray(targets) ? targets : [targets];
+      if (!list.length) throw new BrowserError("clickAny 需要非空的候选目标数组");
+      const step: Step = { i: st.trace.length + 1, action: "clickAny", arg: clip(list.map(targetStr).join(" | "), 60), ms: 0, ok: false, at: codeLocation(new Error().stack) };
+      if (st.fatal) throw st.fatal;
+      st.trace.push(step);
+      const t0 = Date.now();
+      try {
+        const probe = await runJs(pageProbeTargets, [list], { timeout: 4000, trace: false });
+        const idx = typeof probe?.index === "number" ? probe.index : -1;
+        if (idx < 0 || idx >= list.length) throw new BrowserError(`clickAny 未找到可见元素：${list.map(targetStr).join(" | ")}`);
+        const matched = list[idx];
+        const { fallbackJs = true, ...clickOpts } = opts;
+        let jsFallback = false;
+        let result = "";
+        try {
+          const j = await go("click", isRef(matched) ? { target: tgt(matched), ...clickOpts } : { text: String(matched), ...clickOpts }, { trace: false });
+          result = String(j.result ?? "");
+        } catch (e: any) {
+          if (e instanceof FatalError || st.fatal || sig.aborted || opts.js === true || opts.js === false || fallbackJs === false) throw e;
+          jsFallback = true;
+          const j2 = await go("click", isRef(matched) ? { target: tgt(matched), ...clickOpts, js: true } : { text: String(matched), ...clickOpts, js: true }, { trace: false });
+          result = String(j2.result ?? "");
+        }
+        step.ok = true;
+        return { target: matched, index: idx, result, jsFallback };
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
     },
     /** 一次执行多步：[{action:"click",target:"@3"},{action:"fill",target:"@5",value:"…"},{action:"press",key:"Enter"}]；返回每步结果数组，有失败步骤时抛错 */
     async batch(steps: any[], opts: { stopOnError?: boolean } = {}) {
@@ -794,13 +1440,14 @@ function makeB(st: RunState, tab?: string): any {
       );
       return runJs(fn, [selector, fields ?? null, Math.max(1, Math.min(Number(opts.limit) || 50, 500))], { label: "extract", stack: new Error().stack });
     },
-    async press(key: string) {
-      const j = await go("press", { key });
+    async press(key: string, opts: { settle?: boolean } = {}) {
+      const j = await go("press", { key, ...opts });
       return String(j.result ?? "");
     },
-    async scroll(dirOrRef: string = "down", amount?: number) {
+    async scroll(dirOrRef: string = "down", amount?: number, opts: { settle?: boolean } = {}) {
       const p: any = isRef(dirOrRef) ? { ref: dirOrRef.trim() } : { direction: dirOrRef || "down" };
       if (amount !== undefined) p.amount = amount;
+      if (opts.settle !== undefined) p.settle = opts.settle;
       const j = await go("scroll", p);
       return String(j.result ?? "");
     },
@@ -856,6 +1503,66 @@ function makeB(st: RunState, tab?: string): any {
           }
           await sleep(Math.min(300, Math.max(0, end - Date.now())));
         }
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
+    },
+    /** 轮询等待指定文字或选择器消失（适合等 loading 骨架屏/转圈消失）；消失返回 true，超时返回 false */
+    async waitGone(opts: { text?: string; selector?: string; timeout?: number }) {
+      if (!opts || (!opts.text && !opts.selector)) throw new BrowserError("waitGone 需要 text 或 selector");
+      const stack = new Error().stack;
+      const label = opts.selector ? clip(opts.selector, 40) : `「${clip(opts.text, 30)}」`;
+      const step: Step = { i: st.trace.length + 1, action: "waitGone", arg: label, ms: 0, ok: false, at: codeLocation(stack) };
+      if (st.fatal) throw st.fatal;
+      st.trace.push(step);
+      const t0 = Date.now();
+      const rawTimeout = opts.timeout;
+      const timeout = rawTimeout !== undefined && rawTimeout !== null && !Number.isNaN(Number(rawTimeout)) ? Math.max(0, Number(rawTimeout)) : 15000;
+      const end = t0 + timeout;
+      try {
+        while (true) {
+          let gone = false;
+          try {
+            gone = Boolean(await runJs(pageWaitGoneProbe, [{ text: opts.text, selector: opts.selector }], { timeout: 3000, trace: false }));
+          } catch (e: any) {
+            if (st.fatal || sig.aborted) throw st.fatal ?? e;
+            gone = false;
+          }
+          if (gone) {
+            step.ok = true;
+            return true;
+          }
+          if (Date.now() >= end) {
+            step.ok = true;
+            step.err = "超时仍未消失";
+            return false;
+          }
+          await sleep(Math.min(300, Math.max(50, end - Date.now())));
+        }
+      } catch (e: any) {
+        step.err = e?.message ?? String(e);
+        throw e;
+      } finally {
+        step.ms = Date.now() - t0;
+      }
+    },
+    /** 等待页面 DOM 变更与网络请求趋于稳定（复用 A.waitStable 或 MutationObserver 兜底） */
+    async waitIdle(quietMs: number = 350, maxMs: number = 5000) {
+      const qRaw = quietMs === undefined || quietMs === null || Number.isNaN(Number(quietMs)) ? 350 : Number(quietMs);
+      const mRaw = maxMs === undefined || maxMs === null || Number.isNaN(Number(maxMs)) ? 5000 : Number(maxMs);
+      const qMs = Math.max(50, qRaw);
+      const mMs = Math.max(qMs, Math.min(mRaw, 30000));
+      const step: Step = { i: st.trace.length + 1, action: "waitIdle", arg: `${qMs}/${mMs}ms`, ms: 0, ok: false, at: codeLocation(new Error().stack) };
+      if (st.fatal) throw st.fatal;
+      st.trace.push(step);
+      const t0 = Date.now();
+      try {
+        const res = await runJs(pageWaitIdle, [qMs, mMs], { timeout: mMs + 3000, trace: false });
+        step.ok = true;
+        return res;
       } catch (e: any) {
         step.err = e?.message ?? String(e);
         throw e;
@@ -1100,31 +1807,21 @@ export default function (pi: ExtensionAPI) {
     name: "browser",
     label: "Browser",
     description:
-      "操控 PiMet 手机上的「Pi 浏览器」（真实 Android WebView，用户能看到并随时接手）。用于需要真正打开网页的任务：动态页面、登录后的网站、填表、点按钮、看本地页面。" +
-      "用法细节和常见坑见 pimet-browser 技能，第一次用前先读它。\n" +
-      "【推荐流程】tab_new(url, container:\"new\") 在自己的后台容器标签里干活（拿到 tab id，之后都带上 tab）→ snapshot（语义树，元素带 [ref=N]）→ " +
-      "batch(steps:[{action:\"click\",target:\"@3\"},{action:\"fill\",target:\"@5\",value:\"…\"},{action:\"press\",key:\"Enter\"},{action:\"snapshot\",scope:\"viewport\"}]) 一次做完多步 → " +
-      "要提取数据或流程较长时用 run 一次完成（打开→操作→提取→return）。每个动作自带等待，不用另外 wait。ref 失效（unknown_ref）就重新 snapshot。\n" +
-      "【目标 target】@N（最近一次快照的 ref）| CSS 选择器 | text=文字 | [x,y] 坐标。\n" +
-      "【run】code 是 async 函数体：b.open b.snapshot b.click b.fill b.select b.press b.hover b.scroll b.scrollIntoView b.scrollUntil b.waitFor b.extract(选择器,{字段}) b.batch " +
-      "b.js(fn,...args) b.screenshot b.log b.tool('站点/工具名',args) b.newTab(url,{container}) b.tab(id) b.call(action,参数)；return 结果。出错会给出错位置、当前网址和最后几步轨迹。\n" +
-      "【网站任务先 action=tools】看 sites/ 下的现成工具和 notes.md；成功后沉淀工具和经验。\n" +
-      "【单步】open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
-      "【标签/容器/历史】tab_new(url,container:new|same|Default|容器名,background) | tabs | tab_switch(tab) | tab_close(tab) | containers | container_keep(name,keep) | history(q,limit,offset) | history_delete(url) | history_clear(since_ms)。" +
-      "需要用户的登录态时用 container:\"same\"（沿用用户当前标签的容器）或用户指定的容器。\n" +
-      "【油猴脚本】scripts | script_get(id) | script_install(code 或 url) | script_enable(id,on) | script_remove(id) | script_update(id?) | script_values(id,set?,delete?) | menu_commands | menu_run(id,cmd) | inject(script,persist?)；调试用 console、find、wait_for。\n" +
-      "【自定义浏览器 ui.json】外观、工具栏、菜单、悬浮球、主页/新标签页、搜索引擎、长按菜单、手势、站点规则、拦截/重定向、面板都在 ui.json，改完立即生效。" +
-      "先 ui_schema（字段说明 + 内置按钮 id）/ ui_get(pointer?) 看现状再改；小改 ui_set(pointer,value)（如 /theme/accent、/toolbar/-），多处改 ui_patch(patch)（合并补丁），删 ui_remove(pointer)，恢复默认 ui_reset(pointer?)；" +
-      "改坏了 ui_backups → ui_restore(name)（每次写入前自动备份）。校验失败会返回错误且不写入。" +
-      "自定义功能优先组合 action（builtin/open/js/script_menu/panel/askpi/seq），可先 action_run(ui_action) 试；复杂界面写成面板 panel_write(id,title,icon,html,where)（HTML+JS，可调 PiMetUI.runAction）| panel_open | panel_delete | panels。" +
-      "站点：site_set(pattern,settings) | site_get(url)；规则：rule_add(kind:block|redirect, rule) | rule_remove(kind, index 或 rule) | rules。详见 pimet-browser 技能「自定义浏览器」。\n" +
-      "【旧设置】config_get | config_set(patch) | ua(ua) | desktop(on) | zoom(percent) | cookies(url,set?,container?) | clear_data(what)。script_remove、clear_data、history_clear、ui_reset 前先征得用户同意。\n" +
-      "不传 tab 时在 Pi 专属标签操作；用户明确要你操作他当前页面才传 tab=\"user\"。不要擅自 show / tab_switch 打断用户。" +
-      "返回「用户已叫停」或「用户正在操作标签」（user_takeover）时立即停止所有浏览器操作、告诉用户进展，等用户允许后再继续，不要重试。验证码、支付、登录确认等交给用户本人完成。",
+      "操控 PiMet 手机上的「Pi 浏览器」（真实 Android WebView，用户可见并随时接手）。详见 pimet-browser 技能。\n" +
+      "【怎么选最快】读文章/文档用 read 或 run 里的 b.openAndRead(url)（去噪提取正文，比 full snapshot 省快）；" +
+      "查网页/GitHub 先 action=tools 复用站点工具；连续填表用 batch（中间步设 settle:false）或 b.fillForm；" +
+      "单步探索先 tab_new(url, container:\"new\") 拿 tab id，再用 snapshot(scope:\"viewport\") 看当前屏。ref 失效（unknown_ref）就重新 snapshot。\n" +
+      "【目标 target】@N（快照 ref）| CSS 选择器（跨层用 >>>）| text=文字 | [x,y] 坐标。\n" +
+      "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
+      "【单步】tools | read | open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
+      "【标签/容器/历史】tab_new(url,container:new|same|Default|容器名,background) | tabs | tab_switch | tab_close | containers | container_keep | history | history_delete | history_clear（需用户登录态用 container:\"same\"）。\n" +
+      "【油猴与定制】scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject；" +
+      "ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panel_* | action_run | site_* | rule_* | rules（定制细节按需读 customize.md）。\n" +
+      "【红线】script_remove、clear_data、history_clear、ui_reset 先征得用户同意；不擅自 show / tab_switch；遇到「用户已叫停」或 user_takeover 立即停下汇报；验证码/支付/登录确认交由用户完成。",
     parameters: Type.Object({
       action: Type.String({
         description:
-          "run | batch | tools | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
+          "run | batch | tools | read | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
           " | tab_new | tabs | tab_switch | tab_close | containers | container_keep | history | history_delete | history_clear" +
           " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
           " | config_get | config_set | ua | desktop | zoom | cookies | clear_data" +
@@ -1191,7 +1888,8 @@ export default function (pi: ExtensionAPI) {
       js: Type.Optional(Type.Boolean({ description: "click 时用 JS 点击而不是模拟真实触摸（被遮挡或真实点击无效时用）" })),
       mode: Type.Optional(Type.String({ description: "旧快照模式：interactive = 只列可交互元素（单步变更操作后附带的快照默认用它）" })),
       snapshot: Type.Optional(Type.Boolean({ description: "单步操作后是否返回快照，默认 true" })),
-      max_chars: Type.Optional(Type.Number({ description: "快照最大字符数，snapshot 默认 12000（超出时折叠长列表），变更操作后附带的快照默认 2500" })),
+      settle: Type.Optional(Type.Boolean({ description: "操作后是否等待页面稳定，默认 true；连续填表/高速连点可设 false 提速" })),
+      max_chars: Type.Optional(Type.Number({ description: "快照或 read 正文的最大字符数：snapshot 默认 12000，变更操作后附带快照默认 2500，read 默认 15000" })),
       timeout: Type.Optional(Type.Number({ description: "单步：等待加载 / wait / eval 的超时毫秒，默认 20000，最大 120000；run：整段代码的超时秒数，默认 120，最大 600" })),
       id: Type.Optional(Type.String({ description: "panel_write / panel_open / panel_delete 的面板 id；用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
       on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版 / false 手机版" })),
@@ -1211,7 +1909,8 @@ export default function (pi: ExtensionAPI) {
       ua: Type.Optional(Type.String({ description: "ua：自定义 User-Agent 字符串；空字符串或 default = 恢复默认" })),
       percent: Type.Optional(Type.Number({ description: "zoom：页面缩放百分比，如 100、125" })),
       what: Type.Optional(Type.String({ description: "clear_data：cookies | cache | storage | all" })),
-      selector: Type.Optional(Type.String({ description: "wait_for：等待出现的 CSS 选择器（与 text 二选一）" })),
+      selector: Type.Optional(Type.String({ description: "wait_for：等待出现的 CSS 选择器（与 text 二选一）；read：限定提取正文的容器选择器" })),
+      include_links: Type.Optional(Type.Boolean({ description: "read：是否提取页面关键链接列表，默认 true" })),
       timeout_ms: Type.Optional(Type.Number({ description: "wait_for 的超时毫秒，默认 15000，最大 30000" })),
       persist: Type.Optional(
         Type.Object(
@@ -1239,6 +1938,24 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text", text: truncate(listTools(rest.site)) }], details: { action, ok: true } };
         } catch (e: any) {
           return { content: [{ type: "text", text: `失败: ${e?.message ?? e}` }], details: { action, ok: false }, isError: true };
+        }
+      }
+      if (action === "read") {
+        const failRead = (text: string) => ({ content: [{ type: "text", text: truncate(text) }], details: { action, tab, ok: false }, isError: true });
+        try {
+          const doc = await performRead(
+            rest,
+            async (hostReq) => await call("read", { ...(tab ? { tab } : {}), ...hostReq }, signal),
+            async (script) => {
+              const ev = await call("eval", { ...(tab ? { tab } : {}), snapshot: false, script, fn: true, ...(rest.timeout ? { timeout: rest.timeout } : {}) }, signal);
+              return ev.result;
+            }
+          );
+          return { content: [{ type: "text", text: truncate(formatReadResult(doc)) }], details: { action, tab, ok: true } };
+        } catch (e: any) {
+          const msg = e?.message ?? String(e);
+          if (msg === "已中止") return failRead("已中止（已通知宿主取消该操作）");
+          return failRead(`失败: ${msg}${e?.url ? `\n网址: ${e.url}` : ""}`);
         }
       }
 

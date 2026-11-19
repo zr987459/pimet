@@ -365,11 +365,28 @@ public final class FloatingApps {
                 if (fs != null) for (File f : fs) f.delete();
                 old.delete();
             }
-            String guide = readAsset(context, "pimet-browser/SKILL.md");
-            if (guide == null) return;
             File skillDir = new File(rootfs, "root/.pi/agent/skills/pimet-browser");
-            skillDir.mkdirs();
-            writeIfChanged(new File(skillDir, "SKILL.md"), guide);
+            String guide = null;
+            String[] assets = null;
+            try {
+                assets = context.getAssets().list("pimet-browser");
+            } catch (Throwable ignored) {}
+            if (assets != null && assets.length > 0) {
+                for (String name : assets) {
+                    if (name == null || !name.endsWith(".md")) continue;
+                    String content = readAsset(context, "pimet-browser/" + name);
+                    if (content == null) continue;
+                    skillDir.mkdirs();
+                    writeIfChanged(new File(skillDir, name), content);
+                    if ("SKILL.md".equals(name)) guide = content;
+                }
+            }
+            if (guide == null) {
+                guide = readAsset(context, "pimet-browser/SKILL.md");
+                if (guide == null) return;
+                skillDir.mkdirs();
+                writeIfChanged(new File(skillDir, "SKILL.md"), guide);
+            }
             // 应用目录里也放一份，方便直接查看
             String body = guide.replaceFirst("(?s)^---.*?---\\s*", "");
             writeIfChanged(new File(apps, "README.md"), body);

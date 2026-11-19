@@ -412,6 +412,7 @@ public final class BrowserAgent {
 
     private static JSONObject doTab(FloatingApps win, FloatingApps.Tab tab, String action, JSONObject req, int timeout) throws Exception {
         boolean wantSnapshot = req.optBoolean("snapshot", true);
+        boolean wantSettle = req.optBoolean("settle", true);
         String result;
         JSONObject out = ok();
         switch (action) {
@@ -463,17 +464,29 @@ public final class BrowserAgent {
                 break;
             }
             case "snapshot":
-            case "read":
                 waitLoadedNow(tab, Math.min(softLeft(), 8000));
                 wantSnapshot = true;
                 result = null;
                 break;
+            case "read": {
+                waitLoadedNow(tab, Math.min(softLeft(), 8000));
+                JSONObject r = readPage(tab, req, 12000);
+                out.put("url", r.optString("url", tab.url));
+                out.put("title", r.optString("title", tab.title));
+                out.put("text", r.optString("text", ""));
+                out.put("length", r.optInt("length", r.optString("text", "").length()));
+                out.put("truncated", r.optBoolean("truncated", false));
+                if (r.has("links")) out.put("links", r.optJSONArray("links"));
+                wantSnapshot = req.optBoolean("snapshot", false);
+                result = "已提取正文（" + out.optInt("length") + " 字" + (out.optBoolean("truncated") ? "，已截断" : "") + "）";
+                break;
+            }
             case "click":
             case "tap": {
                 int seq = tab.navSeq;
                 String before = tab.url;
                 result = click(win, tab, req);
-                settle(tab, seq, out);
+                if (wantSettle) settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
                 break;
             }
@@ -482,7 +495,7 @@ public final class BrowserAgent {
                 int seq = tab.navSeq;
                 String before = tab.url;
                 result = type(win, tab, req);
-                settle(tab, seq, out);
+                if (wantSettle) settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
                 break;
             }
@@ -493,7 +506,7 @@ public final class BrowserAgent {
                 JSONObject r = evalAgent(tab, "A.select(" + JSONObject.quote(fieldOf(req)) + "," + JSONObject.quote(req.optString("value", "")) + ")", 5000);
                 if (!r.optBoolean("ok")) return err(agentErr(r, "选择失败"));
                 result = r.optString("result");
-                settle(tab, seq, out);
+                if (wantSettle) settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
                 break;
             }
@@ -505,7 +518,7 @@ public final class BrowserAgent {
                 if (!loc.optBoolean("ok")) return err(agentErr(loc, "定位失败"));
                 evalJson(tab, HOVER_JS, 3000);
                 result = "已悬停 " + tgt + (loc.optString("label").isEmpty() ? "" : "（" + loc.optString("label") + "）");
-                sleep(150);
+                if (wantSettle) sleep(150);
                 break;
             }
             case "scroll_into_view": {
@@ -526,7 +539,7 @@ public final class BrowserAgent {
                 String before = tab.url;
                 pressKey(win, tab, key, code);
                 result = "已按 " + key;
-                settle(tab, seq, out);
+                if (wantSettle) settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
                 break;
             }
@@ -538,7 +551,7 @@ public final class BrowserAgent {
                 result = r.optString("result");
                 if (r.has("moved") && !r.optBoolean("moved", true)) result += "（页面没有移动）";
                 else if (r.optBoolean("atEnd", false)) result += "（已到尽头）";
-                sleep(250);
+                if (wantSettle) sleep(250);
                 break;
             }
             case "batch":
@@ -641,7 +654,7 @@ public final class BrowserAgent {
                 int seq = tab.navSeq;
                 onMain(() -> { win.runMenuCommand(tab, sid, cid); return null; }, 5000);
                 result = "已执行菜单命令 " + cid + "（脚本 " + sid + "）";
-                settle(tab, seq, out);
+                if (wantSettle) settle(tab, seq, out);
                 break;
             }
             case "console":
@@ -748,33 +761,66 @@ public final class BrowserAgent {
     }
 
     /**
-     * 操作后等页面稳定：轮询 A.waitStable(300, 3000)，最多 3 秒；A.waitStable 不存在时退回固定等待。
+     * 操作后等页面稳定：先调用 A.markAction() 重置静默计时并记录 mutCount 基线，再 sleep(60)，
+     * 然后轮询 A.waitStable(180, SETTLE_MAX)（步长 60ms）。
+     * 首次判定稳定必须满足 elapsed >= 120ms；若 settle 期间 mutCount 变化过，必须严格走满 quietMs=180 静默窗。
      * 若操作触发了整页导航，再等加载完成并写 loaded / http_status / load_error。
      */
     private static void settle(FloatingApps.Tab tab, int seqBefore, JSONObject out) throws Exception {
         long start = SystemClock.uptimeMillis();
-        sleep(120);
         boolean fallback = false;
-        while (SystemClock.uptimeMillis() - start < SETTLE_MAX) {
-            checkStop();
-            if (tab.loading) break;
-            JSONObject r;
+        int firstMut = -2;
+        boolean sawMutDuringSettle = false;
+        if (!tab.loading && tab.navSeq == seqBefore) {
             try {
-                r = evalAgent(tab, "(typeof A.waitStable==='function')?A.waitStable(300," + SETTLE_MAX + "):{nofn:1}", 2000);
+                JSONObject mk = evalAgent(tab, "(typeof A.markAction==='function')?A.markAction():{}", 1000);
+                if (mk != null && mk.has("mutCount")) firstMut = mk.optInt("mutCount", -2);
             } catch (AbortException a) {
                 throw a;
-            } catch (Exception e) {
-                r = null;
+            } catch (Exception ignored) {}
+        }
+        sleep(60);
+        if (!tab.loading && tab.navSeq == seqBefore) {
+            while (SystemClock.uptimeMillis() - start < SETTLE_MAX) {
+                checkStop();
+                if (tab.loading || tab.navSeq != seqBefore) break;
+                JSONObject r;
+                try {
+                    r = evalAgent(tab, "(typeof A.waitStable==='function')?A.waitStable(180," + SETTLE_MAX + "):{nofn:1}", 2000);
+                } catch (AbortException a) {
+                    throw a;
+                } catch (Exception e) {
+                    r = null;
+                }
+                if (r != null && r.optBoolean("nofn")) { fallback = true; break; }
+                if (r != null) {
+                    int mc = r.optInt("mutCount", -1);
+                    if (firstMut == -2 && mc >= 0) firstMut = mc;
+                    if (firstMut >= 0 && mc > firstMut) sawMutDuringSettle = true;
+                    long elapsed = SystemClock.uptimeMillis() - start;
+                    int pending = r.optInt("pending", 1);
+                    int mutAge = r.optInt("mutAge", r.optInt("idleMs", 0));
+                    boolean noDomMut = !sawMutDuringSettle && (firstMut >= 0 && mc == firstMut) && elapsed >= 120 && mutAge >= 120;
+                    boolean stableReached = r.optBoolean("stable") && elapsed >= 120 && (!sawMutDuringSettle || mutAge >= 180);
+                    if (stableReached || (pending == 0 && noDomMut) || (pending == 0 && elapsed >= 700)) break;
+                }
+                sleep(60);
             }
-            if (r != null && r.optBoolean("nofn")) { fallback = true; break; }
-            if (r != null && (r.optBoolean("stable")
-                    || (r.optInt("pending", 1) == 0 && SystemClock.uptimeMillis() - start >= 700))) break;
-            sleep(150);
         }
         if (fallback) {
             long spent = SystemClock.uptimeMillis() - start;
-            if (spent < 500) sleep(500 - spent);
+            if (spent < 350) sleep(350 - spent);
         }
+        finishNavIfNeeded(tab, seqBefore, out, fallback);
+    }
+
+    /** 轻量稳定等待：仅用于 batch 中间不会触发提交的填表/选择步骤 */
+    private static void settleLight(FloatingApps.Tab tab, int seqBefore, JSONObject out) throws Exception {
+        sleep(30);
+        finishNavIfNeeded(tab, seqBefore, out, false);
+    }
+
+    private static void finishNavIfNeeded(FloatingApps.Tab tab, int seqBefore, JSONObject out, boolean fallback) throws Exception {
         if (tab.loading || tab.finishedSeq != tab.navSeq || tab.navSeq != seqBefore) {
             boolean full = tab.loading || tab.finishedSeq != tab.navSeq;
             boolean loaded = waitLoadedNow(tab, softLeft());
@@ -786,7 +832,7 @@ public final class BrowserAgent {
                 }
             }
         } else if (fallback) {
-            sleep(200);
+            sleep(150);
         }
     }
 
@@ -886,20 +932,26 @@ public final class BrowserAgent {
         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
         if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
         String label = loc.optString("label");
-        boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab), 2000));
-        if (!active) waitFrame(tab, 600); // 后台标签刚变可见，等它画出一帧再触摸
-        else sleep(120);
         boolean useJs = req.optBoolean("js", false);
         boolean nativeOk = false;
         String note = "";
         String coveredBy = loc.optString("coveredBy", "");
         if (!useJs) {
-            // 触摸前重新量一次（scrollIntoView 之后可能还有动画/布局变化）
-            JSONObject rl = evalAgent(tab, "(typeof A.relocate==='function')?A.relocate():{nofn:1}", 3000);
-            if (!rl.optBoolean("nofn")) {
-                if (!rl.optBoolean("ok")) throw new IllegalStateException(rl.optString("error", "元素位置已变化、重新定位失败，请重新 snapshot"));
-                loc = rl;
-                if (rl.has("coveredBy")) coveredBy = rl.optString("coveredBy", "");
+            boolean scrolled = loc.optBoolean("scrolled", true);
+            boolean hasCoords = !Double.isNaN(loc.optDouble("x", Double.NaN))
+                    && !Double.isNaN(loc.optDouble("y", Double.NaN))
+                    && loc.optDouble("vw", 0) > 0;
+            boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab), 2000));
+            if (!active) waitFrame(tab, 600); // 后台标签刚变可见，无论是否滚动都先等一帧画出来再触摸
+            if (scrolled || !hasCoords) {
+                if (active) sleep(120);
+                // 触摸前重新量一次（scrollIntoView 之后可能还有动画/布局变化）
+                JSONObject rl = evalAgent(tab, "(typeof A.relocate==='function')?A.relocate():{nofn:1}", 3000);
+                if (!rl.optBoolean("nofn")) {
+                    if (!rl.optBoolean("ok")) throw new IllegalStateException(rl.optString("error", "元素位置已变化、重新定位失败，请重新 snapshot"));
+                    loc = rl;
+                    if (rl.has("coveredBy")) coveredBy = rl.optString("coveredBy", "");
+                }
             }
             final double x = loc.optDouble("x"), y = loc.optDouble("y"), vw = loc.optDouble("vw");
             checkUser(tab);
@@ -907,11 +959,11 @@ public final class BrowserAgent {
             int seq = tab.navSeq;
             nativeOk = Boolean.TRUE.equals(onMain(() -> nativeTap(win, tab, x, y, vw), 4000));
             if (nativeOk && armed) {
-                // 触摸事件在渲染进程里异步分发：最多等 500ms 看目标是否收到
+                // 触摸事件在渲染进程里异步分发：最多等 450ms 看目标是否收到
                 int hit = 0;
-                long until = SystemClock.uptimeMillis() + 1000;
+                long until = SystemClock.uptimeMillis() + 450;
                 while (true) {
-                    sleep(60);
+                    sleep(30);
                     if (tab.navSeq != seq || tab.loading) { hit = -1; break; }
                     hit = readHit(tab);
                     if (hit != 0 || SystemClock.uptimeMillis() >= until) break;
@@ -2036,44 +2088,81 @@ public final class BrowserAgent {
                 .put("result", found ? "页面已出现" + what : "等待超时（" + tmo + "ms），页面没有出现" + what);
     }
 
+    private static JSONObject readPage(FloatingApps.Tab tab, JSONObject req, int defaultMaxChars) throws Exception {
+        int mc = clamp(req.optInt("max_chars", req.optInt("maxChars", defaultMaxChars)), 200, 40000);
+        String sel = req.optString("selector", "").trim();
+        boolean incLinks = req.has("include_links") ? req.optBoolean("include_links", true) : req.optBoolean("includeLinks", true);
+        StringBuilder opts = new StringBuilder("{maxChars:").append(mc).append(",includeLinks:").append(incLinks);
+        if (!sel.isEmpty()) opts.append(",selector:").append(JSONObject.quote(sel));
+        opts.append("}");
+        long tmo = Math.max(1000, Math.min(10000, hardLeft()));
+        JSONObject r = evalAgent(tab, "A.read(" + opts + ")", tmo);
+        if (!r.optBoolean("ok")) {
+            throw new IllegalStateException(agentErr(r, "提取正文失败"));
+        }
+        return r;
+    }
+
     /**
      * batch：一次执行多步页面操作，少一次次往返。steps:[{action,target?,value?,key?,ms?,...}]，stopOnError 默认 true。
-     * 支持的 action：click/tap、type/fill、select、press/key、hover、scroll、scroll_into_view、wait（ms 或 text）、wait_for、snapshot。
-     * 返回 {steps:[每步结果], stopped_at?, 末尾若有 snapshot 则把 snapshot/url/title/refs 提到顶层}。
+     * 支持的 action：click/tap、type/fill、select、press/key、hover、scroll、scroll_into_view、wait（ms 或 text）、wait_for、snapshot、read。
+     * 返回 {steps:[每步结果], stopped_at?, 末尾若有 snapshot/read 则把对应字段提到顶层}。
      */
     private static JSONObject batch(FloatingApps win, FloatingApps.Tab tab, JSONObject req, JSONObject out) throws Exception {
         JSONArray steps = req.optJSONArray("steps");
         if (steps == null || steps.length() == 0) return err("batch 需要 steps（数组）");
         boolean stopOnError = req.optBoolean("stopOnError", true);
+        boolean batchSettle = req.optBoolean("settle", true);
         JSONArray results = new JSONArray();
         int stoppedAt = -1;
         JSONObject lastSnap = null;
+        JSONObject lastRead = null;
         for (int i = 0; i < steps.length(); i++) {
             checkStop();
             checkUser(tab);
             JSONObject st = steps.optJSONObject(i);
             if (st == null) { results.put(new JSONObject().put("i", i).put("ok", false).put("error", "步骤不是对象")); if (stopOnError) { stoppedAt = i; break; } else continue; }
             String act = st.optString("action", st.optString("op", "")).trim().toLowerCase();
+            boolean stepSettle = st.has("settle") ? st.optBoolean("settle", true) : batchSettle;
+            boolean isLast = i == steps.length() - 1;
             JSONObject sr = new JSONObject().put("i", i).put("action", act);
             try {
                 int seq = tab.navSeq;
                 String before = tab.url;
                 switch (act) {
                     case "click": case "tap":
-                        sr.put("result", click(win, tab, st)); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
+                        sr.put("result", click(win, tab, st));
+                        if (stepSettle) settle(tab, seq, sr);
+                        markChanged(sr, tab, seq, before);
+                        break;
                     case "type": case "fill":
-                        sr.put("result", type(win, tab, st)); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
+                        sr.put("result", type(win, tab, st));
+                        if (stepSettle) {
+                            if (!st.has("settle") && !isLast && !st.optBoolean("submit", false)) settleLight(tab, seq, sr);
+                            else settle(tab, seq, sr);
+                        }
+                        markChanged(sr, tab, seq, before);
+                        break;
                     case "select": {
                         JSONObject r = evalAgent(tab, "A.select(" + JSONObject.quote(fieldOf(st)) + "," + JSONObject.quote(st.optString("value", "")) + ")", 5000);
                         if (!r.optBoolean("ok")) throw new IllegalStateException(agentErr(r, "选择失败"));
-                        sr.put("result", r.optString("result")); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
+                        sr.put("result", r.optString("result"));
+                        if (stepSettle) {
+                            if (!st.has("settle") && !isLast) settleLight(tab, seq, sr);
+                            else settle(tab, seq, sr);
+                        }
+                        markChanged(sr, tab, seq, before);
+                        break;
                     }
                     case "press": case "key": {
                         String key = st.optString("key", "Enter");
                         int code = keyCode(key);
                         if (code == 0) throw new IllegalStateException("不支持的按键 " + key);
                         pressKey(win, tab, key, code);
-                        sr.put("result", "已按 " + key); settle(tab, seq, sr); markChanged(sr, tab, seq, before); break;
+                        sr.put("result", "已按 " + key);
+                        if (stepSettle) settle(tab, seq, sr);
+                        markChanged(sr, tab, seq, before);
+                        break;
                     }
                     case "hover": {
                         String tgt = targetOf(st);
@@ -2081,12 +2170,16 @@ public final class BrowserAgent {
                         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + "," + JSONObject.quote("") + ")", 5000);
                         if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
                         evalJson(tab, HOVER_JS, 3000);
-                        sr.put("result", "已悬停 " + tgt); sleep(120); break;
+                        sr.put("result", "已悬停 " + tgt);
+                        if (stepSettle) sleep(120);
+                        break;
                     }
                     case "scroll": {
                         JSONObject r = evalAgent(tab, "A.scroll(" + JSONObject.quote(fieldOf(st)) + "," + JSONObject.quote(st.optString("direction", "down")) + "," + st.optDouble("amount", 0.8) + ")", 5000);
                         if (!r.optBoolean("ok")) throw new IllegalStateException(agentErr(r, "滚动失败"));
-                        sr.put("result", r.optString("result")); sleep(200); break;
+                        sr.put("result", r.optString("result"));
+                        if (stepSettle) sleep(200);
+                        break;
                     }
                     case "scroll_into_view": {
                         String tgt = targetOf(st);
@@ -2105,10 +2198,21 @@ public final class BrowserAgent {
                         JSONObject w = waitFor(tab, st);
                         sr.put("result", w.optString("result")).put("found", w.optBoolean("found")); break;
                     }
-                    case "snapshot": case "read": {
+                    case "snapshot": {
                         JSONObject snap = snapshot(tab, st.optInt("max_chars", req.optInt("max_chars", 12000)), scopeOf(st));
                         sr.put("result", "快照").put("snapshot", snap.optString("text"));
                         lastSnap = snap; break;
+                    }
+                    case "read": {
+                        JSONObject r = readPage(tab, st, req.optInt("max_chars", req.optInt("maxChars", 12000)));
+                        int len = r.optInt("length", r.optString("text", "").length());
+                        boolean trunc = r.optBoolean("truncated", false);
+                        sr.put("result", "已提取正文（" + len + " 字" + (trunc ? "，已截断" : "") + "）")
+                                .put("text", r.optString("text", ""))
+                                .put("length", len)
+                                .put("truncated", trunc);
+                        if (r.has("links")) sr.put("links", r.optJSONArray("links"));
+                        lastRead = r; break;
                     }
                     default:
                         throw new IllegalStateException("batch 不支持的 action：" + act);
@@ -2131,6 +2235,16 @@ public final class BrowserAgent {
             out.put("url", lastSnap.optString("url", tab.url));
             out.put("title", lastSnap.optString("title", tab.title));
             if (lastSnap.has("refs")) out.put("refs", lastSnap.opt("refs"));
+        }
+        if (lastRead != null) {
+            out.put("text", lastRead.optString("text", ""));
+            out.put("length", lastRead.optInt("length", lastRead.optString("text", "").length()));
+            out.put("truncated", lastRead.optBoolean("truncated", false));
+            if (lastRead.has("links")) out.put("links", lastRead.optJSONArray("links"));
+            if (lastSnap == null) {
+                out.put("url", lastRead.optString("url", tab.url));
+                out.put("title", lastRead.optString("title", tab.title));
+            }
         }
         out.put("result", "执行了 " + results.length() + "/" + steps.length() + " 步" + (stoppedAt >= 0 ? "，在第 " + stoppedAt + " 步出错停止" : ""));
         return out;
