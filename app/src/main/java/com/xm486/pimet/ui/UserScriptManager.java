@@ -790,10 +790,9 @@ public final class UserScriptManager {
             + "W.__pimetGMmenu=function(id,cmdId){var m=RT.menus[id];var f=m&&m[cmdId];if(f){try{f()}catch(e){console.error('[PiMet 菜单命令]',e)}}};\n"
             + "}\n";
 
-    /** 每个脚本独立作用域的 GM API；依赖外层的 W, RT, ID, V, R, INFO。 */
-    private static final String SHIM =
-            "var B=W.PiMetGM||null;\n"
-            + "function nb(m){if(!B||typeof B[m]!=='function'){return false}return true}\n"
+    /** 每个脚本独立作用域的 GM API；依赖外层的 W, RT, ID, V, R, INFO, B。 */
+    private static final String SHIM_BODY =
+            "function nb(m){if(!B||typeof B[m]!=='function'){return false}return true}\n"
             + "function cp(v){if(v===undefined||v===null||typeof v!=='object')return v;try{return JSON.parse(JSON.stringify(v))}catch(e){return v}}\n"
             + "function abs(u){try{return new URL(String(u),location.href).href}catch(e){return String(u)}}\n"
             + "function b64ToBytes(b){var s=atob(b||'');var a=new Uint8Array(s.length);for(var i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a}\n"
@@ -870,6 +869,189 @@ public final class UserScriptManager {
             + "GMo.download=function(a,b){return Promise.resolve(API.GM_download(a,b))};\n"
             + "GMo.log=function(){return Promise.resolve(API.GM_log.apply(null,arguments))};\n"
             + "API.GM=GMo;\n";
+
+    private static final String SHIM = "var B=W.PiMetGM||null;\n" + SHIM_BODY;
+
+    private String buildIsolatedRunnerObject(Script s) {
+        String id = s.id == null ? "" : s.id;
+        String name = s.name == null ? id : s.name;
+        String qid = JSONObject.quote(id);
+        StringBuilder req = new StringBuilder();
+        JSONObject res = new JSONObject();
+        JSONObject info = new JSONObject();
+        List<String> missing = new ArrayList<>();
+        prepareBundleAssets(s, "", req, res, info, missing);
+        if (!missing.isEmpty()) fetchInBackground(missing);
+        String code = s.code.startsWith("\uFEFF") ? s.code.substring(1) : s.code;
+        String quotedCode = quoteJsString(req.toString() + code + "\n");
+
+        StringBuilder runner = new StringBuilder(quotedCode.length() + 4096);
+        runner.append("{\n");
+        runner.append("  id:").append(qid).append(",\n");
+        runner.append("  name:").append(JSONObject.quote(name)).append(",\n");
+        runner.append("  noframes:").append(s.noframes).append(",\n");
+        runner.append("  runAt:").append(JSONObject.quote(s.runAt == null ? RUN_IDLE : s.runAt)).append(",\n");
+        runner.append("  matches:").append(new JSONArray(s.matches)).append(",\n");
+        runner.append("  includes:").append(new JSONArray(s.includes)).append(",\n");
+        runner.append("  excludes:").append(new JSONArray(s.excludes)).append(",\n");
+        runner.append("  run:function(W,RT,B,D){\n");
+        runner.append("    var ID=").append(qid).append(";\n");
+        runner.append("    if(D[ID])return;D[ID]=1;\n");
+        runner.append("    var V=").append(getValues(id).toString()).append(";\n");
+        runner.append("    var R=").append(res.toString()).append(";\n");
+        runner.append("    var INFO=").append(info.toString()).append(";\n");
+        if (!missing.isEmpty()) {
+            runner.append("    try{console.warn('[PiMet 用户脚本 '+INFO.script.name+'] 依赖尚未缓存，刷新页面后生效：'+")
+                    .append(JSONObject.quote(String.join(", ", missing))).append(")}catch(e){}\n");
+        }
+        runner.append(SHIM_BODY);
+        runner.append("    var CODE=").append(quotedCode).append(";\n");
+        runner.append("    try{\n");
+        runner.append("      var fn=new Function('GM_info','unsafeWindow','GM_getValue','GM_setValue','GM_deleteValue','GM_listValues',")
+                .append("'GM_addValueChangeListener','GM_removeValueChangeListener','GM_addStyle','GM_addElement',")
+                .append("'GM_xmlhttpRequest','GM_openInTab','GM_setClipboard','GM_notification','GM_registerMenuCommand',")
+                .append("'GM_unregisterMenuCommand','GM_getResourceText','GM_getResourceURL','GM_download','GM_log','GM',CODE);\n");
+        runner.append("      fn.call(W,API.GM_info,W,API.GM_getValue,API.GM_setValue,API.GM_deleteValue,API.GM_listValues,")
+                .append("API.GM_addValueChangeListener,API.GM_removeValueChangeListener,API.GM_addStyle,API.GM_addElement,")
+                .append("API.GM_xmlhttpRequest,API.GM_openInTab,API.GM_setClipboard,API.GM_notification,API.GM_registerMenuCommand,")
+                .append("API.GM_unregisterMenuCommand,API.GM_getResourceText,API.GM_getResourceURL,API.GM_download,API.GM_log,API.GM);\n");
+        runner.append("    }catch(e){try{console.error('[PiMet 用户脚本 '+INFO.script.name+']',e)}catch(e2){}}\n");
+        runner.append("  }\n");
+        runner.append("}");
+        return runner.toString();
+    }
+
+    private static String quoteJsString(String s) {
+        return JSONObject.quote(s == null ? "" : s)
+                .replace("\u2028", "\\u2028")
+                .replace("\u2029", "\\u2029");
+    }
+
+    /**
+     * 隔离容器专用统一 DocumentStart 闭包运行时（主框架 + 子框架），通过 postFrame({type:'gm_call',...}) 通信：
+     * 1. 无启用脚本时返回 ""（零代码注入）；
+     * 2. 不向 window 暴露 PiMetGM / __pimetGMcb / __pimetGMmenu / __pimetGMrt / __pimetUSdone。
+     */
+    public String buildIsolatedRuntime() {
+        List<Script> all = list();
+        List<Script> active = new ArrayList<>();
+        for (Script s : all) {
+            if (s != null && s.enabled && s.code != null) active.add(s);
+        }
+        if (active.isEmpty()) return "";
+
+        StringBuilder runners = new StringBuilder();
+        runners.append("[\n");
+        boolean first = true;
+        for (Script s : active) {
+            if (!first) runners.append(",\n");
+            first = false;
+            runners.append(buildIsolatedRunnerObject(s));
+        }
+        runners.append("\n]");
+
+        return String.join("\n",
+                "(function(postFrame){",
+                "  var W=window;",
+                "  var href=String((W.location&&W.location.href)||'');",
+                "  var proto=String((W.location&&W.location.protocol)||'').toLowerCase();",
+                "  var noop={onMessage:function(){}};",
+                "  if(proto!=='http:'&&proto!=='https:'&&proto!=='file:')return noop;",
+                "  var runners=" + runners + ";",
+                "  if(!runners||!runners.length)return noop;",
+                "  var RT={cbs:{},menus:{},seq:0,ftag:(W===W.top?'m_':('f'+(Math.random().toString(36)+'0000').slice(2,6)+'_'))};",
+                "  var D={};",
+                "  var B={",
+                "    setValue:function(id,k,j){postFrame({type:'gm_call',op:'setValue',scriptId:id,key:k,valueJson:j});},",
+                "    deleteValue:function(id,k){postFrame({type:'gm_call',op:'deleteValue',scriptId:id,key:k});},",
+                "    xhr:function(id,reqJson){postFrame({type:'gm_call',op:'xhr',scriptId:id,reqJson:reqJson});},",
+                "    openInTab:function(u,bg){postFrame({type:'gm_call',op:'openInTab',url:u,background:!!bg});},",
+                "    setClipboard:function(t){postFrame({type:'gm_call',op:'setClipboard',text:String(t)});},",
+                "    notify:function(id,title,text){postFrame({type:'gm_call',op:'notify',scriptId:id,title:title,text:text});},",
+                "    registerMenu:function(id,cmdId,cap){postFrame({type:'gm_call',op:'registerMenu',scriptId:id,cmdId:cmdId,caption:cap});},",
+                "    unregisterMenu:function(id,cmdId){postFrame({type:'gm_call',op:'unregisterMenu',scriptId:id,cmdId:cmdId});},",
+                "    download:function(u,n){postFrame({type:'gm_call',op:'download',url:u,name:n});},",
+                "    log:function(id,t){postFrame({type:'gm_call',op:'log',scriptId:id,text:t});}",
+                "  };",
+                SUBFRAME_URL_MATCHER_JS,
+                "  var startList=[],endList=[],idleList=[];",
+                "  for(var i=0;i<runners.length;i++){",
+                "    var sc=runners[i];",
+                "    if(sc.noframes&&W!==W.top)continue;",
+                "    if(!urlMatches(sc,href))continue;",
+                "    if(sc.runAt==='document-start')startList.push(sc);",
+                "    else if(sc.runAt==='document-end')endList.push(sc);",
+                "    else idleList.push(sc);",
+                "  }",
+                "  function execOne(sc){try{sc.run(W,RT,B,D);}catch(e){try{console.error('[PiMet 用户脚本 '+sc.name+']',e);}catch(e2){}}}",
+                "  function runList(arr){for(var k=0;k<arr.length;k++)execOne(arr[k]);}",
+                "  if(startList.length)runList(startList);",
+                "  if(endList.length){",
+                "    if(document.readyState==='interactive'||document.readyState==='complete'){runList(endList);}",
+                "    else{",
+                "      var endDone=false;",
+                "      var flushEnd=function(){if(endDone)return;endDone=true;runList(endList);};",
+                "      document.addEventListener('DOMContentLoaded',flushEnd,{once:true});",
+                "      W.addEventListener('load',flushEnd,{once:true});",
+                "    }",
+                "  }",
+                "  if(idleList.length){",
+                "    if(document.readyState==='complete'){setTimeout(function(){runList(idleList);},0);}",
+                "    else{",
+                "      var idleDone=false;",
+                "      var flushIdle=function(){if(idleDone)return;idleDone=true;setTimeout(function(){runList(idleList);},0);};",
+                "      W.addEventListener('load',flushIdle,{once:true});",
+                "    }",
+                "  }",
+                "  return {",
+                "    onMessage:function(msg){",
+                "      if(!msg)return;",
+                "      if(msg.type==='gm_cb'){",
+                "        var f=RT.cbs[msg.callId];if(!f)return;delete RT.cbs[msg.callId];",
+                "        var r=msg.resultJson;if(typeof r==='string'){try{r=JSON.parse(r);}catch(e){r={error:String(r)};}}",
+                "        try{f(r||{});}catch(e){console.error(e);}",
+                "      }else if(msg.type==='gm_menu'){",
+                "        var m=RT.menus[msg.scriptId];var fn=m&&m[msg.cmdId];",
+                "        if(fn){try{fn();}catch(e){console.error('[PiMet 菜单命令]',e);}}",
+                "      }",
+                "    }",
+                "  };",
+                "})"
+        );
+    }
+
+    /** 隔离容器单次立即注入（不向 window 暴露任何 __pimet* / PiMetGM 全局变量） */
+    public String buildIsolatedOneShot(Script s, String tabKey) {
+        if (s == null || s.code == null) return "void 0";
+        String id = s.id == null ? "" : s.id;
+        String qid = JSONObject.quote(id);
+        StringBuilder req = new StringBuilder();
+        JSONObject res = new JSONObject();
+        JSONObject info = new JSONObject();
+        List<String> missing = new ArrayList<>();
+        prepareBundleAssets(s, tabKey, req, res, info, missing);
+        if (!missing.isEmpty()) fetchInBackground(missing);
+        String code = s.code.startsWith("\uFEFF") ? s.code.substring(1) : s.code;
+        StringBuilder js = new StringBuilder(code.length() + req.length() + 4096);
+        js.append("(function(){\n");
+        js.append("var W=window,RT={cbs:{},menus:{},seq:0,ftag:''},B=null;\n");
+        js.append("var ID=").append(qid).append(";\n");
+        js.append("var V=").append(getValues(id).toString()).append(";\n");
+        js.append("var R=").append(res.toString()).append(";\n");
+        js.append("var INFO=").append(info.toString()).append(";\n");
+        js.append(SHIM_BODY);
+        js.append("(function(GM_info,unsafeWindow,GM_getValue,GM_setValue,GM_deleteValue,GM_listValues,")
+                .append("GM_addValueChangeListener,GM_removeValueChangeListener,GM_addStyle,GM_addElement,")
+                .append("GM_xmlhttpRequest,GM_openInTab,GM_setClipboard,GM_notification,GM_registerMenuCommand,")
+                .append("GM_unregisterMenuCommand,GM_getResourceText,GM_getResourceURL,GM_download,GM_log,GM){\n");
+        js.append("try{\n").append(req).append(code).append("\n}catch(e){console.error('[PiMet 用户脚本 '+GM_info.script.name+']',e)}\n");
+        js.append("}).call(W,API.GM_info,W,API.GM_getValue,API.GM_setValue,API.GM_deleteValue,API.GM_listValues,")
+                .append("API.GM_addValueChangeListener,API.GM_removeValueChangeListener,API.GM_addStyle,API.GM_addElement,")
+                .append("API.GM_xmlhttpRequest,API.GM_openInTab,API.GM_setClipboard,API.GM_notification,API.GM_registerMenuCommand,")
+                .append("API.GM_unregisterMenuCommand,API.GM_getResourceText,API.GM_getResourceURL,API.GM_download,API.GM_log,API.GM);\n");
+        js.append("})();");
+        return js.toString();
+    }
 
     // ------------------------------------------------------------------ 依赖缓存
 

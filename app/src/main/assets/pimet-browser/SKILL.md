@@ -70,7 +70,7 @@ PiMet 内置的「Pi 浏览器」是独立全屏 Android WebView，用户实时�
 | `b.batch(steps, {stopOnError?})` | 一次执行多步，有失败步且未禁用时抛错 |
 | `b.js(fn, ...args)` | 在页面里执行函数（`args` 经 JSON 传入），**禁止直接引用 `run` 外部变量** |
 | `b.tool("站点/工具名", args)` | 调用 `/root/pimet-browser/sites/<站点>/tools/<名>.mjs` |
-| `b.newTab(url, {container})` / `b.tab(id)` / `b.closeTab()` / `b.tabs()` | 标签页切换与管理 |
+| `b.newTab(url, {container, profile})` / `b.containerProfile(opts)` / `b.tab(id)` / `b.closeTab()` / `b.tabs()` | 标签页与容器指纹隔离切换与管理 |
 | `b.back()` / `b.forward()` / `b.reload()` / `b.url()` / `b.screenshot()` / `b.sleep(ms)` / `b.log(...)` | 导航、截图（最多 3 张）、等待、日志 |
 | `b.find(text)` / `b.console(max)` / `b.scripts()` / `b.inject(js, persist?)` / `b.ui.*` / `b.call(action, p)` | 调试、油猴、ui.json 读写与任意 action 透传 |
 
@@ -101,9 +101,15 @@ return await b.extract(".result-item", { title: "h3", url: "a@href" }, { limit: 
 - **读错轨迹**：`run` 失败会返回 `出错位置（run 第 N 行 或 工具.mjs 第 N 行）`、`当前网址` 和 `最后 5 步`（`#序号 动作 · 耗时 · ✓/✗`）；从当前网址修复后继续即可。
 - **致命中断**：遇到 `⛔ 已叫停` 或 `用户正在操作标签（user_takeover）`，所有 `b.*` 会立即中止；立刻停手并汇报当前进度。
 
-## 容器、标签、历史与工具规范
+## 容器、指纹隔离、标签、历史与工具规范
 
-- **容器登录态**：`tab_new` 默认 `container: "new"`（全新干净环境）；需要用户已登录账号时用 `container: "same"`（沿用用户当前标签容器）或用户指定容器；用 `container_keep {name, keep: true}` 保留容器（先问用户）。
+- **容器登录态与指纹隔离（防风控）**：
+  - `tab_new` 默认 `container: "new"`（独立 Cookie/Storage 与独立 `auto` 设备指纹，自动去除 `; wv`、`X-Requested-With` 与全局 `window.PiMet*` 桥暴露）。
+  - 需要特定国家/地区环境时，在建标签时直接传入 `profile`（推荐建前就定好环境，避免旧会话污染）：
+    - 例：`tab_new(url, container: "new", profile: "ca-en")`（`ca-en` / `us-en` / `us-west` / `uk-en` / `au-en` / `jp-ja` / `cn-zh` / `auto` / `native`），或对象 `{preset, timezone, locale, languages, device, desktop, seed, webrtc}`。
+    - `run` 里可用 `await b.newTab(url, { profile: "ca-en" })`。
+  - 查询/修改现有容器环境用 `container_profile {name?, profile?, randomize?, reload?}`（或 `b.containerProfile(...)`）；若容器已有打开页面，改完环境会返回 `warning`，防风控场景强烈建议直接 `tab_new` 新建容器。
+  - `Default` 容器始终为 `native`（不伪装，保持原有登录态）；需要复用用户当前标签登录态时用 `container: "same"`；用 `container_keep {name, keep: true}` 保留容器（先征得用户同意）。
 - **不打断用户**：不传 `tab` 时只操作 Pi 标签；仅当用户明确要求操作当前页才传 `tab: "user"`；不要擅自 `show` / `tab_switch`。
 - **历史与下载**：`history {q?, limit?, offset?}` 查最近访问；`downloads` 查下载进度；`history_delete` / `history_clear` / `clear_data` / `script_remove` / `ui_reset` **须先征得用户同意**。
 - **站点工具规范**：文件路径 `/root/pimet-browser/sites/<站点>/tools/<工具名>.mjs`（仅用 `A-Za-z0-9._-`），**第一行写 `// 一句话说明与参数`**，默认导出 `async (b, args) => { ... }`。

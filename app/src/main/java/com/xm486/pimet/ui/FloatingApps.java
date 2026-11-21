@@ -706,11 +706,22 @@ public final class FloatingApps {
         volatile JSONObject site;
         /** 站点规则改过 UA（null = 没改）、开了深色 */
         String siteUa;
+        String siteUaMode;
         boolean siteDark;
         /** 容器（WebView Profile）名；ContainerManager.DEFAULT = 共享容器 */
         volatile String container = ContainerManager.DEFAULT;
         /** 该容器的 CookieManager（主线程建 WebView 时取好，后台线程直接用） */
         volatile android.webkit.CookieManager cookies;
+        /** Per-Container 环境配置与 DocumentStart 句柄 */
+        volatile ContainerEnv.Profile envProfile = ContainerEnv.NATIVE;
+        ScriptHandler envDocStartHandler;
+        boolean bridgesAttached = false;
+        String lastAppliedEnvKey;
+        volatile boolean transAnnouncePending = false;
+
+        boolean isIsolated() {
+            return envProfile != null && envProfile.isIsolated();
+        }
 
         /** 每个标签独立的跨框架消息鉴权密钥（随机 UUID，仅存于 document-start 闭包与 Java 端，绝不暴露给页面或用户脚本） */
         final String frameSecret = UUID.randomUUID().toString();
@@ -770,11 +781,14 @@ public final class FloatingApps {
     private Tab newTab(boolean pi, String container) {
         Tab t = new Tab("t" + (++tabSeq), pi);
         t.container = container == null || container.isEmpty() ? ContainerManager.DEFAULT : container;
-        t.web = createWebView(t);
-        if (!pi && uiObj("defaults").optBoolean("desktopMode", false)) {
-            t.desktop = true;
-            t.web.getSettings().setUserAgentString(desktopUa());
+        try {
+            t.envProfile = containers().getProfile(t.container);
+        } catch (Throwable e) {
+            t.envProfile = ContainerEnv.NATIVE;
         }
+        boolean defDesktop = !pi && uiObj("defaults").optBoolean("desktopMode", false);
+        t.desktop = (t.envProfile != null && t.envProfile.desktop) || defDesktop;
+        t.web = createWebView(t);
         t.web.setVisibility(View.INVISIBLE);
         webFrame.addView(t.web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         tabs.add(t);
@@ -841,12 +855,13 @@ public final class FloatingApps {
         releaseContainer(t.container); // 旧 WebView 的 apply 计数还回去；下面 createWebView 会对新 WebView 再 apply
         t.loading = false;
         t.translated = false;
+        try { t.envProfile = containers().getProfile(t.container); } catch (Throwable ignored) {}
         t.web = createWebView(t);
         webFrame.addView(t.web, Math.max(0, idx), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         if (active == t) web = t.web;
         applyVisibility();
         String u = t.url;
-        if (u != null && !u.isEmpty() && !u.startsWith("about:")) t.web.loadUrl(u);
+        if (u != null && !u.isEmpty() && !u.startsWith("about:")) loadUrlWithEnv(t, u, null);
         else goHome(t, false);
         if (active == t) {
             updateProgress();
@@ -1184,7 +1199,8 @@ public final class FloatingApps {
         txt.addView(title);
         TextView sub = new TextView(vctx);
         String host = isLauncher(x.url) ? "" : x.url.replaceFirst("^https?://", "");
-        sub.setText((ContainerManager.supported() ? containerLabel(x.container) + "  " : "") + host);
+        String badge = ContainerEnv.badgeEmoji(x.envProfile);
+        sub.setText((ContainerManager.supported() ? badge + " " + containerLabel(x.container) + "  " : "") + host);
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
@@ -1243,7 +1259,8 @@ public final class FloatingApps {
             stl.rightMargin = dp(6);
             head.addView(strip, stl);
             TextView badge = new TextView(vctx);
-            badge.setText(containerLabel(x.container) + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : ""));
+            badge.setText(ContainerEnv.badgeEmoji(x.envProfile) + " " + containerLabel(x.container)
+                    + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : ""));
             badge.setSingleLine(true);
             badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             badge.setTextColor(x == active ? Color.WHITE : containerColor(x.container));
@@ -1749,17 +1766,12 @@ public final class FloatingApps {
         WebSettings ws = t.web.getSettings();
         if (sDefaultUa == null) sDefaultUa = WebSettings.getDefaultUserAgent(ctx);
         t.desktop = !t.desktop;
-        if (t.desktop) {
-            String ver = "120.0.0.0";
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("Chrome/([\\d.]+)").matcher(sDefaultUa);
-            if (m.find()) ver = m.group(1);
-            ws.setUserAgentString("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + ver + " Safari/537.36");
-        } else {
-            ws.setUserAgentString(customUa());
-        }
+        t.siteUaMode = null;
+        t.siteUa = null;
+        applyContainerEnv(t, t.web, false);
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
- applyZoom(t);
+        applyZoom(t);
         t.web.reload();
         if (toast) Toast.makeText(ctx, t.desktop ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
     }
@@ -1853,6 +1865,11 @@ public final class FloatingApps {
         } catch (Throwable e) {
             Log.w(TAG, "apply container " + t.container + " failed", e);
         }
+        try {
+            t.envProfile = containers().getProfile(t.container);
+        } catch (Throwable e) {
+            t.envProfile = ContainerEnv.NATIVE;
+        }
         t.cookies = cookiesFor(t.container);
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -1878,15 +1895,10 @@ public final class FloatingApps {
         if (sDefaultUa == null) {
             try { sDefaultUa = WebSettings.getDefaultUserAgent(ctx); } catch (Throwable ignored) {}
         }
-        String cua = customUa();
-        if (cua != null) ws.setUserAgentString(cua);
         w.setBackgroundColor(pageColor);
-        w.addJavascriptInterface(new Bridge(t), "PiMetNative");
-        w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
-        w.addJavascriptInterface(new ThemeBridge(t), "PiMetTheme");
-        w.addJavascriptInterface(new GMBridge(t), "PiMetGM");
         com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, new TabTranslationDelegate(t));
         setupCrossFrameSupport(t, w);
+        applyContainerEnv(t, w, true);
         w.setDownloadListener((url, ua, contentDisposition, mime, length) -> {
             if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
             startDownload(t, url, ua, contentDisposition, mime);
@@ -1904,7 +1916,7 @@ public final class FloatingApps {
                     String r = uiRedirect(u);
                     if (r != null) {
                         applySiteSettings(t, r, true);
-                        view.loadUrl(r);
+                        loadUrlWithEnv(t, r, null);
                         return true;
                     }
                     applySiteSettings(t, u, true);
@@ -2329,6 +2341,25 @@ public final class FloatingApps {
         pendingBlobs.put(nonce, pb);
         rec.status = "下载中";
         Toast.makeText(ctx, "开始下载：" + name, Toast.LENGTH_SHORT).show();
+        if (t.isIsolated()) {
+            FrameSession targetFs = findBlobFrameSession(t, url);
+            if (targetFs != null && targetFs.replyProxy != null) {
+                try {
+                    String payload = new JSONObject()
+                            .put("type", "blob_download")
+                            .put("nonce", nonce)
+                            .put("url", url)
+                            .toString();
+                    targetFs.replyProxy.postMessage(payload);
+                    return;
+                } catch (Throwable e) {
+                    onBlobChunk(nonce, "", true, "下载通道发送失败: " + e.getMessage());
+                    return;
+                }
+            }
+            onBlobChunk(nonce, "", true, "当前页面下载通道未就绪");
+            return;
+        }
         String js = "(function(u,n){fetch(u).then(function(r){return r.blob()}).then(function(b){"
                 + "var CH=393216,off=0;function next(){var part=b.slice(off,off+CH);var fr=new FileReader();"
                 + "fr.onload=function(){var s=String(fr.result),i=s.indexOf(',');off+=CH;var last=off>=b.size;"
@@ -2338,6 +2369,30 @@ public final class FloatingApps {
                 + "}).catch(function(e){PiMetNative.saveChunk(n,'',true,'读取失败: '+e+'（网页可能已释放这个 blob）')});})("
                 + JSONObject.quote(url) + "," + JSONObject.quote(nonce) + ")";
         t.web.evaluateJavascript(js, null);
+    }
+
+    private FrameSession findBlobFrameSession(Tab t, String url) {
+        if (t == null || t.frames.isEmpty()) return null;
+        String blobOrigin = null;
+        if (url != null && url.startsWith("blob:")) {
+            try {
+                java.net.URI u = java.net.URI.create(url.substring(5));
+                if (u.getScheme() != null && u.getHost() != null) {
+                    blobOrigin = u.getScheme() + "://" + u.getAuthority();
+                }
+            } catch (Throwable ignored) {}
+        }
+        FrameSession mainFs = null;
+        FrameSession originFs = null;
+        for (FrameSession fs : t.frames.values()) {
+            if (fs == null || fs.replyProxy == null) continue;
+            if (fs.isMainFrame && mainFs == null) mainFs = fs;
+            if (blobOrigin != null && fs.url != null && fs.url.startsWith(blobOrigin)) {
+                if (fs.isMainFrame) return fs;
+                if (originFs == null) originFs = fs;
+            }
+        }
+        return originFs != null ? originFs : mainFs;
     }
 
     private static String UUID_NONCE() {
@@ -2561,7 +2616,7 @@ public final class FloatingApps {
         if (r != null) url = r;
         if (openInSiteContainer(t, url)) return;
         applySiteSettings(t, url, true);
-        t.web.loadUrl(url);
+        loadUrlWithEnv(t, url, null);
     }
 
     private void updateProgress() {
@@ -2912,6 +2967,11 @@ public final class FloatingApps {
 
     private void cleanupTabFrames(Tab t, WebView w) {
         if (t == null) return;
+        if (t.envDocStartHandler != null) {
+            try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
+            t.envDocStartHandler = null;
+        }
+        t.lastAppliedEnvKey = null;
         if (t.transDocStartHandler != null) {
             try { t.transDocStartHandler.remove(); } catch (Throwable ignored) {}
             t.transDocStartHandler = null;
@@ -2920,6 +2980,7 @@ public final class FloatingApps {
         t.frames.clear();
         t.subframeInjectedIds.clear();
         t.translatingAllFrames = false;
+        t.transAnnouncePending = false;
         t.resetMainTransStats();
         if (w != null) com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, null);
     }
@@ -2946,10 +3007,139 @@ public final class FloatingApps {
                     (view, message, sourceOrigin, isMainFrame, replyProxy) ->
                             handleFrameMessage(t, view, message, isMainFrame, replyProxy)
             );
-            installTransDocStartScript(t, w);
-            installScriptDocStartScripts(t, w);
         } catch (Throwable e) {
             Log.w(TAG, "setupCrossFrameSupport failed, falling back to main-frame only", e);
+        }
+    }
+
+    /** 应用/刷新容器环境：UA、UserAgentMetadata、X-Requested-With 消除、JS 接口隔离与 DocumentStart 反指纹 */
+    private void applyContainerEnv(Tab t, WebView w, boolean forceReinstall) {
+        if (t == null || w == null) return;
+        try {
+            t.envProfile = containers().getProfile(t.container);
+        } catch (Throwable e) {
+            t.envProfile = ContainerEnv.NATIVE;
+        }
+
+        boolean effectiveDesktop = t.desktop;
+        String overrideUa = customUa();
+        if (t.siteUaMode != null && !t.siteUaMode.isEmpty()) {
+            if ("desktop".equalsIgnoreCase(t.siteUaMode)) {
+                effectiveDesktop = true;
+                overrideUa = null;
+            } else if ("mobile".equalsIgnoreCase(t.siteUaMode)) {
+                effectiveDesktop = false;
+            } else {
+                overrideUa = t.siteUaMode;
+            }
+        }
+
+        if (t.isIsolated()) {
+            if (t.bridgesAttached) {
+                try {
+                    w.removeJavascriptInterface("PiMetNative");
+                    w.removeJavascriptInterface("PiMetTranslator");
+                    w.removeJavascriptInterface("PiMetTheme");
+                    w.removeJavascriptInterface("PiMetGM");
+                } catch (Throwable ignored) {}
+                t.bridgesAttached = false;
+            }
+            String effectiveUa = ContainerEnv.buildEffectiveUa(ctx, t.envProfile, effectiveDesktop, overrideUa);
+            ContainerEnv.applyToWebSettings(ctx, w.getSettings(), t.envProfile, effectiveDesktop, overrideUa);
+            String key = t.envProfile.preset + "|" + t.envProfile.timezone + "|" + t.envProfile.locale
+                    + "|" + t.envProfile.acceptLanguage + "|" + t.envProfile.device + "|" + effectiveDesktop
+                    + "|" + t.envProfile.seed + "|" + t.envProfile.webrtc + "|" + effectiveUa;
+            if (forceReinstall || t.envDocStartHandler == null || !key.equals(t.lastAppliedEnvKey)) {
+                if (t.envDocStartHandler != null) {
+                    try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
+                    t.envDocStartHandler = null;
+                }
+                if (t.transDocStartHandler != null) {
+                    try { t.transDocStartHandler.remove(); } catch (Throwable ignored) {}
+                    t.transDocStartHandler = null;
+                }
+                clearScriptDocStartHandlers(t);
+                if (crossFrameSupported()) {
+                    String antiJs = AntiDetectJs.build(ctx, t.envProfile, effectiveDesktop, effectiveUa, appsUrlPrefix());
+                    if (antiJs != null && !antiJs.isEmpty()) {
+                        try {
+                            t.envDocStartHandler = WebViewCompat.addDocumentStartJavaScript(w, antiJs, Collections.singleton("*"));
+                        } catch (Throwable e) {
+                            Log.w(TAG, "addDocumentStartJavaScript (anti-detect) failed", e);
+                        }
+                    }
+                    installTransDocStartScript(t, w);
+                }
+                t.lastAppliedEnvKey = key;
+            }
+        } else {
+            if (t.envDocStartHandler != null) {
+                try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
+                t.envDocStartHandler = null;
+            }
+            t.lastAppliedEnvKey = null;
+            if (overrideUa != null && !overrideUa.isEmpty()) {
+                w.getSettings().setUserAgentString(overrideUa);
+            } else if (effectiveDesktop) {
+                w.getSettings().setUserAgentString(desktopUa());
+            } else {
+                w.getSettings().setUserAgentString(null);
+            }
+            if (!t.bridgesAttached) {
+                w.addJavascriptInterface(new Bridge(t), "PiMetNative");
+                w.addJavascriptInterface(new TranslatorBridge(t), "PiMetTranslator");
+                w.addJavascriptInterface(new ThemeBridge(t), "PiMetTheme");
+                w.addJavascriptInterface(new GMBridge(t), "PiMetGM");
+                t.bridgesAttached = true;
+            }
+            if (forceReinstall) {
+                installTransDocStartScript(t, w);
+                installScriptDocStartScripts(t, w);
+            }
+        }
+    }
+
+    /** 刷新指定容器下所有打开标签的环境（供 UI 与 BrowserAgent 调用） */
+    int applyContainerEnvForContainer(String containerName, boolean reloadTabs) {
+        if (containerName == null) return 0;
+        int affected = 0;
+        for (Tab t : new ArrayList<>(tabs)) {
+            if (t == null || t.closed || t.web == null) continue;
+            if (!containerName.equals(t.container)) continue;
+            try {
+                t.envProfile = containers().getProfile(containerName);
+                t.desktop = (t.envProfile != null && t.envProfile.desktop) || (!t.pi && uiObj("defaults").optBoolean("desktopMode", false));
+                t.siteUaMode = null;
+                t.siteUa = null;
+            } catch (Throwable ignored) {}
+            applyContainerEnv(t, t.web, true);
+            affected++;
+            if (reloadTabs) {
+                String u = t.url;
+                if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
+                    t.web.reload();
+                }
+            }
+        }
+        refreshTabs();
+        if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
+        return affected;
+    }
+
+    private void loadUrlWithEnv(Tab t, String url, Map<String, String> baseHeaders) {
+        if (t == null || t.web == null || url == null) return;
+        Map<String, String> extra = ContainerEnv.extraHeaders(t.envProfile);
+        if ((baseHeaders == null || baseHeaders.isEmpty()) && (extra == null || extra.isEmpty())) {
+            t.web.loadUrl(url);
+            return;
+        }
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            Map<String, String> merged = new java.util.LinkedHashMap<>();
+            if (extra != null) merged.putAll(extra);
+            if (baseHeaders != null) merged.putAll(baseHeaders);
+            t.web.loadUrl(url, merged);
+        } else {
+            t.web.loadUrl(url);
         }
     }
 
@@ -2970,6 +3160,7 @@ public final class FloatingApps {
     private void installScriptDocStartScripts(Tab t, WebView w) {
         if (t == null || t.closed || w == null || !crossFrameSupported()) return;
         clearScriptDocStartHandlers(t);
+        if (t.isIsolated()) return;
         List<UserScriptManager.SubframeScriptEntry> entries;
         try {
             entries = scripts().buildSubframeScriptEntries(t.frameSecret);
@@ -3000,22 +3191,42 @@ public final class FloatingApps {
         if (!crossFrameSupported()) return;
         for (Tab t : new ArrayList<>(tabs)) {
             if (t != null && !t.closed && t.web != null) {
-                installScriptDocStartScripts(t, t.web);
+                if (t.isIsolated()) {
+                    installTransDocStartScript(t, t.web);
+                } else {
+                    installScriptDocStartScripts(t, t.web);
+                }
             }
         }
     }
 
     private String buildTransDocumentStartScript(Tab t) {
+        boolean isolated = t != null && t.isIsolated();
         String subframeTrans = com.xm486.pimet.translation.TranslationScript.buildSubframeRuntime();
+        String mainTrans = isolated ? com.xm486.pimet.translation.TranslationScript.buildMainRuntime() : "null";
+        String isolatedGm = "";
+        if (isolated) {
+            try {
+                isolatedGm = scripts().buildIsolatedRuntime();
+            } catch (Throwable e) {
+                Log.w(TAG, "buildIsolatedRuntime failed", e);
+            }
+        }
         String secretQuoted = JSONObject.quote(t.frameSecret);
+        String appsPrefixQuoted = JSONObject.quote(appsUrlPrefix());
         String[] head = {
                 "(function(){",
                 "  var W = window;",
                 "  var pm = W.__pimetFrameMsg;",
                 "  try { delete W.__pimetFrameMsg; } catch (e) {}",
                 "  var SECRET = " + secretQuoted + ";",
+                "  var APPS_PREFIX = " + appsPrefixQuoted + ";",
+                "  var ISOLATED = " + isolated + ";",
                 "  var IS_TOP = (W === W.top);",
                 "  var FRAME_ID = 'f_' + Math.random().toString(36).slice(2) + '_' + Date.now().toString(36);",
+                "  var href = ''; try { href = String((W.location && W.location.href) || ''); } catch (e) {}",
+                "  var isAppsPage = !!(APPS_PREFIX && href.indexOf(APPS_PREFIX) === 0);",
+                "  var isLocalPage = !!(href.indexOf('file://') === 0 || /^https?:\\/\\/(127\\.0\\.0\\.1|localhost)(:\\d+)?(\\/|$)/i.test(href));",
                 "  function postFrame(obj) {",
                 "    if (!pm || !obj || typeof obj !== 'object') return;",
                 "    try {",
@@ -3024,35 +3235,89 @@ public final class FloatingApps {
                 "      pm.postMessage(JSON.stringify(obj));",
                 "    } catch (e) {}",
                 "  }",
-                "  var transCtrl = !IS_TOP ? (" + subframeTrans + ")(postFrame) : null;",
+                "  if (ISOLATED && IS_TOP && isAppsPage) {",
+                "    W.PiMetNative = {",
+                "      exec: function(cmd, cbId, timeoutSec) { postFrame({ type: 'native_exec', cmd: String(cmd || ''), cbId: String(cbId || ''), timeoutSec: timeoutSec | 0 }); },",
+                "      askPi: function(text, send) { postFrame({ type: 'native_askpi', text: String(text || ''), send: !!send }); },",
+                "      toast: function(msg) { postFrame({ type: 'native_toast', msg: String(msg || '') }); },",
+                "      openExternal: function(url) { postFrame({ type: 'native_open_external', url: String(url || '') }); },",
+                "      close: function() { postFrame({ type: 'native_close' }); }",
+                "    };",
+                "  }",
+                "  if (ISOLATED && IS_TOP && isLocalPage) {",
+                "    W.PiMetTheme = {",
+                "      onWebTheme: function(themeId) { postFrame({ type: 'web_theme', themeId: String(themeId || '') }); }",
+                "    };",
+                "  }",
+                "  var mainTransCtrl = (ISOLATED && IS_TOP && !isAppsPage) ? (" + mainTrans + ")(postFrame) : null;",
+                "  var subTransCtrl = (!IS_TOP && !isAppsPage) ? (" + subframeTrans + ")(postFrame) : null;",
+                (isolatedGm != null && !isolatedGm.isEmpty()
+                        ? "  var gmCtrl = null; try { if (ISOLATED && !isAppsPage) gmCtrl = (" + isolatedGm + ")(postFrame); } catch (e) { try { console.error('[PiMet GM init]', e); } catch (e2) {} }"
+                        : "  var gmCtrl = null;"),
                 "  if (pm) {",
                 "    pm.addEventListener('message', function(ev) {",
                 "      var msg;",
                 "      try { msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch (e) { return; }",
                 "      if (!msg || typeof msg !== 'object') return;",
-                "      if (msg.type === 'gm_cb') {",
-                "        if (typeof W.__pimetGMcb === 'function') { try { W.__pimetGMcb(msg.callId, msg.resultJson); } catch (e) {} }",
+                "      if (msg.type === 'blob_download') {",
+                "        (function(dlNonce, dlUrl) {",
+                "          if (!dlNonce || !dlUrl) return;",
+                "          fetch(dlUrl).then(function(r) { return r.blob(); }).then(function(b) {",
+                "            var CH = 262144, off = 0;",
+                "            function next() {",
+                "              var part = b.slice(off, off + CH);",
+                "              var fr = new FileReader();",
+                "              fr.onload = function() {",
+                "                var s = String(fr.result || ''), idx = s.indexOf(',');",
+                "                var b64 = idx >= 0 ? s.slice(idx + 1) : '';",
+                "                off += CH;",
+                "                var last = off >= b.size;",
+                "                postFrame({ type: 'blob_chunk', nonce: dlNonce, b64: b64, last: last, err: '' });",
+                "                if (!last) setTimeout(next, 0);",
+                "              };",
+                "              fr.onerror = function() { postFrame({ type: 'blob_chunk', nonce: dlNonce, b64: '', last: true, err: '读取失败' }); };",
+                "              fr.readAsDataURL(part);",
+                "            }",
+                "            if (b.size === 0) postFrame({ type: 'blob_chunk', nonce: dlNonce, b64: '', last: true, err: '' });",
+                "            else next();",
+                "          }).catch(function(e) {",
+                "            postFrame({ type: 'blob_chunk', nonce: dlNonce, b64: '', last: true, err: '读取失败: ' + e + '（网页可能已释放这个 blob）' });",
+                "          });",
+                "        })(String(msg.nonce || ''), String(msg.url || ''));",
                 "        return;",
                 "      }",
-                "      if (msg.type === 'gm_menu') {",
-                "        if (typeof W.__pimetGMmenu === 'function') { try { W.__pimetGMmenu(msg.scriptId, msg.cmdId); } catch (e) {} }",
+                "      if (msg.type === 'gm_cb' || msg.type === 'gm_menu') {",
+                "        if (gmCtrl) { try { gmCtrl.onMessage(msg); } catch (e) {} return; }",
+                "        if (!ISOLATED) {",
+                "          if (msg.type === 'gm_cb' && typeof W.__pimetGMcb === 'function') { try { W.__pimetGMcb(msg.callId, msg.resultJson); } catch (e) {} }",
+                "          else if (msg.type === 'gm_menu' && typeof W.__pimetGMmenu === 'function') { try { W.__pimetGMmenu(msg.scriptId, msg.cmdId); } catch (e) {} }",
+                "        }",
                 "        return;",
                 "      }",
                 "      if (IS_TOP && msg.type === 'trans_summary') {",
-                "        if (typeof W.__pimet_apply_summary === 'function') { try { W.__pimet_apply_summary(msg); } catch (e) {} }",
+                "        if (mainTransCtrl) { try { mainTransCtrl.applySummary(msg); } catch (e) {} }",
+                "        else if (typeof W.__pimet_apply_summary === 'function') { try { W.__pimet_apply_summary(msg); } catch (e) {} }",
                 "        return;",
                 "      }",
-                "      if (!IS_TOP && transCtrl) {",
-                "        if (msg.type === 'trans_start') { transCtrl.start(msg); return; }",
-                "        if (msg.type === 'trans_restore') { transCtrl.restore(true); return; }",
-                "        if (msg.type === 'trans_retry') { transCtrl.retry(); return; }",
+                "      if (IS_TOP && mainTransCtrl) {",
+                "        if (msg.type === 'trans_start') { mainTransCtrl.start(msg); return; }",
+                "        if (msg.type === 'trans_restore') { mainTransCtrl.restore(true); return; }",
+                "        if (msg.type === 'trans_retry') { mainTransCtrl.retry(); return; }",
                 "        if (msg.type === 'trans_batch_result') {",
-                "          transCtrl.receiveBatch(msg.batchId, msg.translationsJson, !!msg.isError, msg.errMsg || '');",
+                "          mainTransCtrl.receiveBatch(msg.batchId, msg.translationsJson, !!msg.isError, msg.errMsg || '');",
+                "          return;",
+                "        }",
+                "      }",
+                "      if (!IS_TOP && subTransCtrl) {",
+                "        if (msg.type === 'trans_start') { subTransCtrl.start(msg); return; }",
+                "        if (msg.type === 'trans_restore') { subTransCtrl.restore(true); return; }",
+                "        if (msg.type === 'trans_retry') { subTransCtrl.retry(); return; }",
+                "        if (msg.type === 'trans_batch_result') {",
+                "          subTransCtrl.receiveBatch(msg.batchId, msg.translationsJson, !!msg.isError, msg.errMsg || '');",
                 "          return;",
                 "        }",
                 "      }",
                 "    });",
-                "    var href = ''; try { href = String((W.location && W.location.href) || ''); } catch (e) {}",
                 "    postFrame({ type: 'hello', url: href });",
                 "  }",
                 "})();"
@@ -3103,6 +3368,126 @@ public final class FloatingApps {
                     sendTransStartToFrame(t, fs);
                     updateAggregatedTranslationUi(t);
                 }
+                break;
+            }
+            case "native_exec": {
+                if (!isMainFrame || !isTrusted(t.url)) return;
+                String cmd = msg.optString("cmd", "");
+                String cbId = msg.optString("cbId", "");
+                int timeout = Math.max(1, Math.min(msg.optInt("timeoutSec", 60), 600));
+                new Thread(() -> runCommand(t, cmd, cbId, timeout), "pimet-apps-exec").start();
+                break;
+            }
+            case "native_askpi": {
+                if (!isMainFrame || !isTrusted(t.url)) return;
+                String text = msg.optString("text", "");
+                boolean send = msg.optBoolean("send", true);
+                MAIN.post(() -> {
+                    if (sPiBridge != null) sPiBridge.askPi(text, send);
+                    else Toast.makeText(ctx, "工作台未就绪", Toast.LENGTH_SHORT).show();
+                });
+                break;
+            }
+            case "native_toast": {
+                if (!isMainFrame || !isTrusted(t.url)) return;
+                String m = msg.optString("msg", "");
+                MAIN.post(() -> Toast.makeText(ctx, m, Toast.LENGTH_SHORT).show());
+                break;
+            }
+            case "native_open_external": {
+                if (!isMainFrame || !isTrusted(t.url)) return;
+                String u = msg.optString("url", "");
+                MAIN.post(() -> {
+                    try {
+                        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        ctx.startActivity(i);
+                    } catch (Throwable ignored) {}
+                });
+                break;
+            }
+            case "native_close": {
+                if (!isMainFrame || !isTrusted(t.url)) return;
+                MAIN.post(FloatingApps.this::dismiss);
+                break;
+            }
+            case "web_theme": {
+                if (!isMainFrame || !WebPinchZoom.isLocal(t.url)) return;
+                String themeId = msg.optString("themeId", "");
+                MAIN.post(() -> {
+                    Activity h = host;
+                    if (h != null) new ThemeManager.WebThemeBridge(h, FloatingApps.this::onThemeChanged).onWebTheme(themeId);
+                });
+                break;
+            }
+            case "trans_open_settings": {
+                if (!isMainFrame) return;
+                MAIN.post(() -> {
+                    Activity h = host;
+                    if (h != null && !h.isFinishing() && t.web != null) {
+                        com.xm486.pimet.translation.WebTranslationDialog.show(h, t.web);
+                    }
+                });
+                break;
+            }
+            case "trans_main_state": {
+                if (!isMainFrame) return;
+                boolean isTranslated = msg.optBoolean("translated", false);
+                MAIN.post(() -> {
+                    if (!isTranslated) {
+                        if (t.web != null) com.xm486.pimet.translation.WebTranslationManager.clearSession(t.web);
+                        restoreTabSubframes(t);
+                    } else {
+                        t.translated = true;
+                        refreshBall();
+                    }
+                });
+                break;
+            }
+            case "trans_main_progress": {
+                if (!isMainFrame) return;
+                t.mainTransDone = Math.max(0, msg.optInt("done", 0));
+                t.mainTransTotal = Math.max(0, msg.optInt("total", 0));
+                t.mainTransFailed = Math.max(0, msg.optInt("failed", 0));
+                t.mainTransActive = msg.optBoolean("active", false);
+                t.mainTransPending = Math.max(0, msg.optInt("pending", 0));
+                t.mainTransError = msg.optString("lastError", "");
+                t.mainTransHasDomIframes = msg.optBoolean("hasDomIframes", false);
+                MAIN.post(() -> updateAggregatedTranslationUi(t));
+                break;
+            }
+            case "trans_main_retry": {
+                if (!isMainFrame) return;
+                MAIN.post(() -> retryTabSubframes(t));
+                break;
+            }
+            case "trans_main_init_result": {
+                if (!isMainFrame) return;
+                final String status = msg.optString("status", "");
+                final boolean autoFlag = msg.optBoolean("auto", false);
+                final boolean announce = t.transAnnouncePending;
+                t.transAnnouncePending = false;
+                MAIN.post(() -> {
+                    if (t.closed) return;
+                    if (status.startsWith("ok:")) {
+                        if (announce) com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "正在翻译网页（" + status.substring(3) + " 段）...");
+                    } else if ("subframes".equals(status)) {
+                        if (announce) com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "正在翻译网页子框架...");
+                    } else if ("zh".equals(status)) {
+                        if (t.hasNonMainFrames()) {
+                            if (announce) com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "正在翻译网页子框架...");
+                        } else {
+                            t.translatingAllFrames = false;
+                            t.translated = false;
+                            refreshBall();
+                            if (!autoFlag) com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "本页已是中文");
+                        }
+                    } else if ("busy".equals(status)) {
+                        if (!autoFlag) com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "上一次翻译还在进行中");
+                    } else if ("nobody".equals(status) && !autoFlag) {
+                        com.xm486.pimet.translation.WebTranslationManager.toast(ctx, "网页翻译失败：页面还没加载完成");
+                    }
+                });
                 break;
             }
             case "trans_batch": {
@@ -3176,6 +3561,164 @@ public final class FloatingApps {
                 updateAggregatedTranslationUi(t);
                 break;
             }
+            case "gm_call": {
+                if (!t.isIsolated() || isLauncher(t.url) || isTrusted(t.url)) return;
+                FrameSession fs = t.frames.get(frameId);
+                if (fs == null) return;
+                fs.replyProxy = replyProxy;
+                handleIsolatedGmCall(t, fs, msg);
+                break;
+            }
+            case "blob_chunk": {
+                if (!t.isIsolated()) return;
+                String nonce = msg.optString("nonce", "");
+                if (nonce.isEmpty()) return;
+                String b64 = msg.optString("b64", "");
+                boolean last = msg.optBoolean("last", false);
+                String err = msg.optString("err", "");
+                onBlobChunk(nonce, b64, last, err.isEmpty() ? null : err);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    private void handleIsolatedGmCall(Tab t, FrameSession fs, JSONObject msg) {
+        String op = msg.optString("op", "");
+        String scriptId = msg.optString("scriptId", "");
+        UserScriptManager.Script s = null;
+        if (!scriptId.isEmpty()) {
+            try {
+                s = scripts().get(scriptId);
+            } catch (Throwable ignored) {}
+            if (s == null || !s.enabled || (!fs.isMainFrame && s.noframes)) return;
+            String checkUrl = (fs.url != null && !fs.url.isEmpty()) ? fs.url : t.url;
+            if (!scripts().urlMatches(s, checkUrl)) return;
+        } else {
+            // 无 scriptId 的操作（openInTab / setClipboard / download）：至少有一个启用且匹配当前文档的脚本
+            boolean any = false;
+            try {
+                String checkUrl = (fs.url != null && !fs.url.isEmpty()) ? fs.url : t.url;
+                List<UserScriptManager.Script> matched = scripts().matching(checkUrl, null);
+                if (matched != null) {
+                    for (UserScriptManager.Script ms : matched) {
+                        if (ms != null && ms.enabled && (fs.isMainFrame || !ms.noframes)) { any = true; break; }
+                    }
+                }
+            } catch (Throwable ignored) {}
+            if (!any) return;
+        }
+
+        switch (op) {
+            case "setValue": {
+                if (s == null) return;
+                String key = msg.optString("key", "");
+                if (key.isEmpty()) return;
+                try { scripts().setValue(s.id, key, msg.optString("valueJson", "null")); } catch (Throwable ignored) {}
+                break;
+            }
+            case "deleteValue": {
+                if (s == null) return;
+                String key = msg.optString("key", "");
+                if (key.isEmpty()) return;
+                try { scripts().deleteValue(s.id, key); } catch (Throwable ignored) {}
+                break;
+            }
+            case "xhr": {
+                if (s == null) return;
+                JSONObject reqObj;
+                try { reqObj = new JSONObject(msg.optString("reqJson", "{}")); } catch (Throwable e) { reqObj = new JSONObject(); }
+                String callId = reqObj.optString("callId", "");
+                if (callId.isEmpty()) callId = "x" + System.nanoTime();
+                final String cid = callId;
+                final JSONObject r = reqObj;
+                final UserScriptManager.Script script = s;
+                final String pageUrl = t.url;
+                new Thread(() -> deliverGm(t, cid, doGmXhr(t, script, pageUrl, r)), "pimet-gm-xhr").start();
+                break;
+            }
+            case "openInTab": {
+                String rawUrl = msg.optString("url", "");
+                boolean bg = msg.optBoolean("background", false);
+                final String target;
+                try {
+                    target = t.url != null && !t.url.isEmpty() ? new java.net.URL(new java.net.URL(t.url), rawUrl).toString() : rawUrl;
+                } catch (Throwable e) { return; }
+                if (!(target.startsWith("http://") || target.startsWith("https://"))) return;
+                MAIN.post(() -> {
+                    Tab nt = newTab(false, t.container);
+                    loadIn(nt, target, false);
+                    if (!bg && host != null) switchTo(nt);
+                    refreshTabs();
+                });
+                break;
+            }
+            case "setClipboard": {
+                String text = msg.optString("text", "");
+                MAIN.post(() -> {
+                    try {
+                        ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("PiMet", text));
+                    } catch (Throwable ignored) {}
+                });
+                break;
+            }
+            case "notify": {
+                if (s == null) return;
+                String title = msg.optString("title", "");
+                String text = msg.optString("text", "");
+                String head = !title.isEmpty() ? title : (s.name != null ? s.name : s.id);
+                String out = text.isEmpty() ? head : head + "：" + text;
+                MAIN.post(() -> Toast.makeText(ctx, out, Toast.LENGTH_LONG).show());
+                break;
+            }
+            case "registerMenu": {
+                if (s == null) return;
+                String cmdId = msg.optString("cmdId", "");
+                String cap = msg.optString("caption", "");
+                if (cmdId.isEmpty()) return;
+                synchronized (t.menus) {
+                    java.util.LinkedHashMap<String, String> m = t.menus.get(s.id);
+                    if (m == null) { m = new java.util.LinkedHashMap<>(); t.menus.put(s.id, m); }
+                    m.put(cmdId, cap.isEmpty() ? cmdId : cap);
+                }
+                break;
+            }
+            case "unregisterMenu": {
+                if (s == null) return;
+                String cmdId = msg.optString("cmdId", "");
+                if (cmdId.isEmpty()) return;
+                synchronized (t.menus) {
+                    java.util.LinkedHashMap<String, String> m = t.menus.get(s.id);
+                    if (m != null) {
+                        m.remove(cmdId);
+                        if (m.isEmpty()) t.menus.remove(s.id);
+                    }
+                }
+                break;
+            }
+            case "download": {
+                String rawUrl = msg.optString("url", "");
+                String name = msg.optString("name", "");
+                final String target;
+                try {
+                    target = t.url != null && !t.url.isEmpty() && !rawUrl.startsWith("blob:") && !rawUrl.startsWith("data:")
+                            ? new java.net.URL(new java.net.URL(t.url), rawUrl).toString() : rawUrl;
+                } catch (Throwable e) { return; }
+                String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                String cd = safe.isEmpty() ? null : "attachment; filename=\"" + safe + "\"";
+                MAIN.post(() -> {
+                    String ua = t.web != null ? t.web.getSettings().getUserAgentString() : null;
+                    startDownload(t, target, ua, cd, null);
+                });
+                break;
+            }
+            case "log": {
+                if (s == null) return;
+                addConsole(t, "log", msg.optString("text", ""), "GM:" + (s.name != null ? s.name : s.id), 0);
+                break;
+            }
             default:
                 break;
         }
@@ -3212,7 +3755,7 @@ public final class FloatingApps {
         try {
             String payload = new JSONObject().put("type", "trans_restore").toString();
             for (FrameSession fs : t.frames.values()) {
-                if (!fs.isMainFrame) {
+                if (!fs.isMainFrame || t.isIsolated()) {
                     fs.transDone = 0;
                     fs.transTotal = 0;
                     fs.transFailed = 0;
@@ -3286,7 +3829,7 @@ public final class FloatingApps {
                     .toString();
             if (mainFs != null && mainFs.replyProxy != null) {
                 mainFs.replyProxy.postMessage(summaryJson);
-            } else if (t.web != null) {
+            } else if (!t.isIsolated() && t.web != null) {
                 t.web.evaluateJavascript("if(window.__pimet_apply_summary)window.__pimet_apply_summary(" + summaryJson + ");", null);
             }
         } catch (Throwable ignored) {}
@@ -3307,6 +3850,57 @@ public final class FloatingApps {
         @Override
         public boolean isTranslated() {
             return tab != null && (tab.translated || tab.translatingAllFrames);
+        }
+
+        @Override
+        public boolean isIsolatedMode() {
+            return tab != null && tab.isIsolated();
+        }
+
+        @Override
+        public void startIsolatedTranslation(String mode, boolean auto, int batchMax, int charMax,
+                                             String accent, String bg, String border, String textColor,
+                                             boolean announce) {
+            if (tab == null || tab.closed) return;
+            tab.translatingAllFrames = true;
+            tab.translated = true;
+            tab.transMode = mode;
+            tab.transAuto = auto;
+            tab.transBatchMax = batchMax;
+            tab.transCharMax = charMax;
+            tab.transAccent = accent;
+            tab.transAnnouncePending = announce;
+            tab.resetMainTransStats();
+            refreshBall();
+            boolean hasSub = tab.hasNonMainFrames();
+            FrameSession mainFs = null;
+            for (FrameSession fs : tab.frames.values()) {
+                if (fs.isMainFrame) mainFs = fs;
+                else sendTransStartToFrame(tab, fs);
+            }
+            if (mainFs != null && mainFs.replyProxy != null) {
+                try {
+                    String payload = new JSONObject()
+                            .put("type", "trans_start")
+                            .put("mode", mode)
+                            .put("auto", auto)
+                            .put("batchMax", batchMax)
+                            .put("charMax", charMax)
+                            .put("accent", accent)
+                            .put("bg", bg)
+                            .put("border", border)
+                            .put("text", textColor)
+                            .put("hasSubframes", hasSub)
+                            .toString();
+                    mainFs.replyProxy.postMessage(payload);
+                } catch (Throwable ignored) {}
+            }
+            updateAggregatedTranslationUi(tab);
+        }
+
+        @Override
+        public void restoreIsolatedTranslation(boolean announce) {
+            restoreTabSubframes(tab);
         }
 
         @Override
@@ -3340,9 +3934,10 @@ public final class FloatingApps {
      * 按 run-at 注入匹配的脚本。document-start 在 onPageStarted 注入（并在 onPageCommitVisible 再补一次，防止落在旧文档里），
      * document-end 在 onPageCommitVisible（onPageFinished 再补一次），document-idle 在 onPageFinished。
      * buildInjection 自带防重复守卫，所以补的那一次在已经执行过的文档里不会重复运行。
+     * 隔离容器的用户脚本由统一 DocumentStart 闭包运行，此处跳过。
      */
     private void injectScripts(Tab t, WebView view, String url, String runAt) {
-        if (t == null || view == null || !injectableUrl(url) || isLauncher(url) || isTrusted(url)) return;
+        if (t == null || t.isIsolated() || view == null || !injectableUrl(url) || isLauncher(url) || isTrusted(url)) return;
         try {
             List<UserScriptManager.Script> list = scripts().matching(url, runAt);
             if (list == null || list.isEmpty()) return;
@@ -3454,7 +4049,9 @@ public final class FloatingApps {
     /** 给 BrowserAgent / 面板：执行一个 GM 菜单命令（主线程） */
     void runMenuCommand(Tab t, String scriptId, String cmdId) {
         if (t == null || t.closed || t.web == null || scriptId == null || cmdId == null) return;
-        t.web.evaluateJavascript("window.__pimetGMmenu&&window.__pimetGMmenu(" + JSONObject.quote(scriptId) + "," + JSONObject.quote(cmdId) + ")", null);
+        if (!t.isIsolated()) {
+            t.web.evaluateJavascript("window.__pimetGMmenu&&window.__pimetGMmenu(" + JSONObject.quote(scriptId) + "," + JSONObject.quote(cmdId) + ")", null);
+        }
         try {
             String frameMsg = new JSONObject()
                     .put("type", "gm_menu")
@@ -3462,7 +4059,7 @@ public final class FloatingApps {
                     .put("cmdId", cmdId)
                     .toString();
             for (FrameSession fs : t.frames.values()) {
-                if (!fs.isMainFrame && fs.replyProxy != null) {
+                if ((t.isIsolated() || !fs.isMainFrame) && fs.replyProxy != null) {
                     try { fs.replyProxy.postMessage(frameMsg); } catch (Throwable ignored) {}
                 }
             }
@@ -3663,7 +4260,8 @@ public final class FloatingApps {
     private void deliverGm(Tab t, String callId, JSONObject res) {
         if (t == null || t.closed) return;
         final String resStr = res.toString();
-        final String js = "window.__pimetGMcb&&window.__pimetGMcb(" + JSONObject.quote(callId) + "," + JSONObject.quote(resStr) + ")";
+        final boolean isolated = t.isIsolated();
+        final String js = isolated ? null : ("window.__pimetGMcb&&window.__pimetGMcb(" + JSONObject.quote(callId) + "," + JSONObject.quote(resStr) + ")");
         String framePayload = null;
         try {
             framePayload = new JSONObject()
@@ -3675,10 +4273,10 @@ public final class FloatingApps {
         final String frameMsg = framePayload;
         MAIN.post(() -> {
             if (t.closed) return;
-            if (t.web != null) t.web.evaluateJavascript(js, null);
+            if (!isolated && t.web != null && js != null) t.web.evaluateJavascript(js, null);
             if (frameMsg != null) {
                 for (FrameSession fs : t.frames.values()) {
-                    if (!fs.isMainFrame && fs.replyProxy != null) {
+                    if ((isolated || !fs.isMainFrame) && fs.replyProxy != null) {
                         try { fs.replyProxy.postMessage(frameMsg); } catch (Throwable ignored) {}
                     }
                 }
@@ -3770,7 +4368,7 @@ public final class FloatingApps {
                 c.setConnectTimeout(Math.min(timeout, 30000));
                 c.setReadTimeout(timeout);
                 setMethod(c, method);
-                boolean hasCookie = false, hasUa = false;
+                boolean hasCookie = false, hasUa = false, hasAl = false;
                 if (headers != null) {
                     java.util.Iterator<String> it = headers.keys();
                     while (it.hasNext()) {
@@ -3778,6 +4376,7 @@ public final class FloatingApps {
                         String v = headers.optString(k, "");
                         if (k.equalsIgnoreCase("cookie")) hasCookie = true;
                         if (k.equalsIgnoreCase("user-agent")) hasUa = true;
+                        if (k.equalsIgnoreCase("accept-language")) hasAl = true;
                         c.setRequestProperty(k, v);
                     }
                 }
@@ -3785,7 +4384,18 @@ public final class FloatingApps {
                     String ck = tabCookies(t).getCookie(url.toString());
                     if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
                 }
-                if (!hasUa && sDefaultUa != null) c.setRequestProperty("User-Agent", sDefaultUa);
+                if (!hasUa) {
+                    if (t.isIsolated()) {
+                        String overrideUa = (t.siteUaMode != null && !"desktop".equalsIgnoreCase(t.siteUaMode) && !"mobile".equalsIgnoreCase(t.siteUaMode))
+                                ? t.siteUaMode : customUa();
+                        c.setRequestProperty("User-Agent", ContainerEnv.buildEffectiveUa(ctx, t.envProfile, t.desktop, overrideUa));
+                    } else if (sDefaultUa != null) {
+                        c.setRequestProperty("User-Agent", sDefaultUa);
+                    }
+                }
+                if (!anonymous && !hasAl && t.isIsolated() && t.envProfile != null && !t.envProfile.acceptLanguage.isEmpty()) {
+                    c.setRequestProperty("Accept-Language", t.envProfile.acceptLanguage);
+                }
                 if (body != null && !method.equals("GET") && !method.equals("HEAD")) {
                     c.setDoOutput(true);
                     c.setFixedLengthStreamingMode(body.length);
@@ -4616,7 +5226,9 @@ public final class FloatingApps {
         for (Tab t : tabs) {
             if (t.web == null) continue;
             t.desktop = false;
-            t.web.getSettings().setUserAgentString(ua.isEmpty() ? null : ua);
+            t.siteUaMode = null;
+            t.siteUa = null;
+            applyContainerEnv(t, t.web, false);
             applyZoom(t);
             t.web.reload();
         }
@@ -4850,7 +5462,7 @@ public final class FloatingApps {
         pm.show();
     }
 
-    /** 标签卡片长按：保留容器、重命名、在同容器新建、关闭 */
+    /** 标签卡片长按：保留容器、重命名、伪装环境、在同容器新建、关闭 */
     private void showTabMenu(Tab x, View anchor) {
         if (host == null || x == null) return;
         PopupMenu pm = new PopupMenu(host, anchor);
@@ -4860,6 +5472,7 @@ public final class FloatingApps {
         if (sup && !isDefault) {
             m.add(0, 1, 0, "保留此容器（关闭后不删数据）").setCheckable(true).setChecked(containerKeep(x.container));
             m.add(0, 2, 0, "重命名容器…");
+            m.add(0, 5, 0, "伪装环境：" + ContainerEnv.summary(x.envProfile));
         }
         if (sup) m.add(0, 3, 0, "在此容器新建标签");
         m.add(0, 4, 0, "关闭标签");
@@ -4876,6 +5489,9 @@ public final class FloatingApps {
                 }
                 case 2:
                     renameContainer(x.container);
+                    break;
+                case 5:
+                    showContainerProfileDialog(x.container);
                     break;
                 case 3:
                     closeSwitcher();
@@ -4894,6 +5510,48 @@ public final class FloatingApps {
             return true;
         });
         pm.show();
+    }
+
+    private void showContainerProfileDialog(String containerName) {
+        if (host == null || containerName == null || ContainerManager.DEFAULT.equals(containerName)) return;
+        final List<String> presets = ContainerEnv.presetIds();
+        final List<String> labels = new ArrayList<>();
+        ContainerEnv.Profile cur = ContainerEnv.NATIVE;
+        try { cur = containers().getProfile(containerName); } catch (Throwable ignored) {}
+        for (String pid : presets) {
+            String lbl = ContainerEnv.presetDisplayLabel(pid);
+            if (pid.equals(cur.preset)) lbl += "  ✓";
+            labels.add(lbl);
+        }
+        labels.add("🎲 随机更换设备指纹与 Seed");
+        new AlertDialog.Builder(host)
+                .setTitle("伪装环境 · " + containerLabel(containerName) + "\n" + ContainerEnv.summary(cur))
+                .setItems(labels.toArray(new String[0]), (d, which) -> {
+                    try {
+                        ContainerEnv.Profile next;
+                        if (which == presets.size()) {
+                            next = containers().randomizeProfile(containerName);
+                        } else {
+                            next = containers().setProfile(containerName, presets.get(which));
+                        }
+                        int n = applyContainerEnvForContainer(containerName, false);
+                        if (n > 0) {
+                            new AlertDialog.Builder(host)
+                                    .setTitle("已更新容器环境")
+                                    .setMessage("当前环境：" + ContainerEnv.summary(next)
+                                            + "\n\n注意：该容器已有打开的页面，旧页面 JS 上下文可能残留旧指纹或旧会话 Cookie；建议立即刷新，或新建容器访问目标站更安全。")
+                                    .setPositiveButton("立即刷新该容器标签", (d2, w2) -> applyContainerEnvForContainer(containerName, true))
+                                    .setNegativeButton("稍后手动刷新", null)
+                                    .show();
+                        } else {
+                            Toast.makeText(ctx, "已切换为：" + ContainerEnv.summary(next), Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (Throwable e) {
+                        Toast.makeText(ctx, "设置失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
     }
 
     private void renameContainer(String name) {
@@ -5962,17 +6620,19 @@ public final class FloatingApps {
         }
         String mode = s.optString("ua", "");
         if (!mode.isEmpty()) {
-            String target = "desktop".equalsIgnoreCase(mode) ? desktopUa() : "mobile".equalsIgnoreCase(mode) ? customUa() : mode;
-            String key = target == null ? "" : target;
-            if (!key.equals(t.siteUa)) {
-                t.siteUa = key;
-                t.desktop = "desktop".equalsIgnoreCase(mode);
-                ws.setUserAgentString(target);
+            if (!mode.equals(t.siteUaMode)) {
+                t.siteUaMode = mode;
+                t.siteUa = mode;
+                if ("desktop".equalsIgnoreCase(mode)) t.desktop = true;
+                else if ("mobile".equalsIgnoreCase(mode)) t.desktop = false;
+                applyContainerEnv(t, t.web, false);
             }
-        } else if (t.siteUa != null) {
+        } else if (t.siteUaMode != null) {
+            t.siteUaMode = null;
             t.siteUa = null;
-            t.desktop = uiObj("defaults").optBoolean("desktopMode", false) && !t.pi;
-            ws.setUserAgentString(t.desktop ? desktopUa() : customUa());
+            t.desktop = (t.envProfile != null && t.envProfile.desktop)
+                    || (uiObj("defaults").optBoolean("desktopMode", false) && !t.pi);
+            applyContainerEnv(t, t.web, false);
         }
         if (!beforeNav) applyZoom(t);
     }
@@ -6014,7 +6674,7 @@ public final class FloatingApps {
         Tab nt = newTab(false, name);
         switchTo(nt);
         applySiteSettings(nt, url, true);
-        nt.web.loadUrl(url);
+        loadUrlWithEnv(nt, url, null);
         if (blank && tabs.size() > 1) closeTab(t);
         Toast.makeText(ctx, "已在容器「" + containerLabel(name) + "」打开", Toast.LENGTH_SHORT).show();
         return true;
@@ -6366,7 +7026,10 @@ public final class FloatingApps {
             int cnt = 0;
             for (Tab x : tabs) if (n.equals(x.container)) cnt++;
             names.add(n);
-            labels.add(containerLabel(n) + (c.optBoolean("keep") && !ContainerManager.DEFAULT.equals(n) ? " 📌" : "") + "  · " + cnt + " 个标签");
+            ContainerEnv.Profile ep = ContainerEnv.NATIVE;
+            try { ep = containers().getProfile(n); } catch (Throwable ignored) {}
+            labels.add(containerLabel(n) + (c.optBoolean("keep") && !ContainerManager.DEFAULT.equals(n) ? " 📌" : "")
+                    + "  (" + ContainerEnv.summary(ep) + ") · " + cnt + " 个标签");
         }
         names.add("new");
         labels.add("＋ 新容器");

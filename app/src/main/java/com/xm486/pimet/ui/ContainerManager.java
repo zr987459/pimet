@@ -98,8 +98,16 @@ public final class ContainerManager {
         if (!meta.containsKey(DEFAULT)) meta.put(DEFAULT, makeMeta("共享容器", "#9E9E9E", true));
     }
 
-    /** 生成 "c&lt;递增数字&gt;"，分配颜色和中文标签，返回 name。 */
+    /** 生成 "c&lt;递增数字&gt;"，分配颜色、中文标签与默认 auto 环境，返回 name。 */
     public String newContainer() {
+        return newContainer(null);
+    }
+
+    /** 生成 "c&lt;递增数字&gt;"，按 profileSpec（null 时为 auto）固化环境并同步落盘，返回 name。 */
+    public String newContainer(Object profileSpec) {
+        ContainerEnv.Profile envProfile = profileSpec == null
+                ? ContainerEnv.createAuto()
+                : ContainerEnv.fromSpec(profileSpec, ContainerEnv.createAuto());
         synchronized (lock) {
             if (supported()) {
                 try {
@@ -110,10 +118,84 @@ public final class ContainerManager {
             String name = "c" + n;
             while (meta.containsKey(name)) name = "c" + (++n);
             noteName(name);
-            meta.put(name, makeMeta("容器 " + n, COLORS[(n - 1) % COLORS.length], false));
+            JSONObject m = makeMeta("容器 " + n, COLORS[(n - 1) % COLORS.length], false);
+            try {
+                m.put("profile", ContainerEnv.toJson(envProfile));
+            } catch (Exception ignored) {}
+            meta.put(name, m);
             saveLocked();
             return name;
         }
+    }
+
+    public ContainerEnv.Profile getProfile(String name) {
+        if (name == null || name.isEmpty() || DEFAULT.equalsIgnoreCase(name)) return ContainerEnv.NATIVE;
+        synchronized (lock) {
+            return getProfileLocked(name);
+        }
+    }
+
+    public ContainerEnv.Profile setProfile(String name, Object profileSpec) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalArgumentException("容器名不能为空");
+        }
+        String n = name.trim();
+        if (DEFAULT.equalsIgnoreCase(n)) {
+            ContainerEnv.Profile req = ContainerEnv.fromSpec(profileSpec, ContainerEnv.NATIVE);
+            if (req.isIsolated()) {
+                throw new IllegalArgumentException("Default 共享容器始终为 native，禁止设为隔离环境");
+            }
+            return ContainerEnv.NATIVE;
+        }
+        synchronized (lock) {
+            if (!meta.containsKey(n)) {
+                throw new IllegalArgumentException("没有容器 " + n);
+            }
+            ContainerEnv.Profile cur = getProfileLocked(n);
+            ContainerEnv.Profile next = ContainerEnv.fromSpec(profileSpec, cur);
+            JSONObject m = meta.get(n);
+            try {
+                m.put("profile", ContainerEnv.toJson(next));
+            } catch (Exception ignored) {}
+            saveLocked();
+            return next;
+        }
+    }
+
+    public ContainerEnv.Profile randomizeProfile(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalArgumentException("容器名不能为空");
+        }
+        String n = name.trim();
+        if (DEFAULT.equalsIgnoreCase(n)) {
+            throw new IllegalArgumentException("Default 共享容器始终为 native，不可随机化环境");
+        }
+        synchronized (lock) {
+            if (!meta.containsKey(n)) {
+                throw new IllegalArgumentException("没有容器 " + n);
+            }
+            ContainerEnv.Profile cur = getProfileLocked(n);
+            ContainerEnv.Profile next = ContainerEnv.randomize(cur);
+            JSONObject m = meta.get(n);
+            try {
+                m.put("profile", ContainerEnv.toJson(next));
+            } catch (Exception ignored) {}
+            saveLocked();
+            return next;
+        }
+    }
+
+    public boolean isIsolated(String name) {
+        return getProfile(name).isIsolated();
+    }
+
+    private ContainerEnv.Profile getProfileLocked(String name) {
+        if (name == null || name.isEmpty() || DEFAULT.equalsIgnoreCase(name)) return ContainerEnv.NATIVE;
+        JSONObject m = meta.get(name);
+        if (m == null) return ContainerEnv.NATIVE;
+        JSONObject p = m.optJSONObject("profile");
+        if (p == null) return ContainerEnv.NATIVE; // 兼容历史旧容器：无 profile 字段视为 native
+        return ContainerEnv.fromJson(p);
     }
 
     /** 在 loadUrl 之前调用：支持多 Profile 时 WebViewCompat.setProfile(wv, name)；不支持时什么都不做。 */
@@ -284,6 +366,7 @@ public final class ContainerManager {
             o.put("keep", DEFAULT.equals(n) || m.optBoolean("keep", false));
             o.put("createdAt", m.optLong("createdAt", 0));
             o.put("tabs", 0);
+            o.put("profile", ContainerEnv.toSummaryJson(getProfileLocked(n)));
         } catch (Exception ignored) {}
         return o;
     }

@@ -624,7 +624,9 @@ public final class BrowserAgent {
                 out.put("ua_mode", mode).put("user_agent", uaNow == null ? "" : uaNow).put("zoom", zoom);
                 boolean csup = ContainerManager.supported();
                 String cont = onMain(() -> win.containerOf(tab), 3000);
-                out.put("container", nz(cont)).put("containers_supported", csup);
+                ContainerEnv.Profile ep = onMain(() -> tab.envProfile, 3000);
+                out.put("container", nz(cont)).put("containers_supported", csup)
+                        .put("profile", ContainerEnv.toSummaryJson(ep));
                 try {
                     BrowserCustomizer cz = cust(win);
                     JSONObject cfg = cz.config();
@@ -637,7 +639,8 @@ public final class BrowserAgent {
                     out.put("ui_version", -1).put("panels", -1);
                 }
                 result += "；用户脚本 " + out.optInt("scripts") + " 个（当前页生效 " + out.optInt("scripts_matching") + " 个）；UA " + mode
-                        + "；缩放 " + zoom + "%；容器 " + (nz(cont).isEmpty() ? "-" : cont) + (csup ? "" : "（系统不支持多容器）");
+                        + "；缩放 " + zoom + "%；容器 " + (nz(cont).isEmpty() ? "-" : cont) + "（" + ContainerEnv.summary(ep) + "）"
+                        + (csup ? "" : "（系统不支持多容器）");
                 break;
             }
             case "menu_commands": {
@@ -1563,6 +1566,8 @@ public final class BrowserAgent {
                 onMain(() -> { if (win.containers() != null) win.containers().rename(name, label); return null; }, 3000);
                 return ok().put("name", name).put("label", label).put("result", "已把容器 " + name + " 改名为「" + label + "」");
             }
+            case "container_profile":
+                return containerProfile(win, req);
             case "history": {
                 HistoryStore h = onMain(win::history, 3000);
                 if (h == null) return err("历史记录不可用");
@@ -1823,27 +1828,129 @@ public final class BrowserAgent {
         return a == null ? 0 : a.length();
     }
 
-    /** tab_new {url?, container?:"new"|"same"|"Default"|<name>, background?}；默认 container=new、background=true（Pi 在自己的后台标签里干活） */
+    /** container_profile {name?, profile?, randomize?, reload?} */
+    private static JSONObject containerProfile(FloatingApps win, JSONObject req) throws Exception {
+        String name = req.optString("name", "").trim();
+        if (name.isEmpty()) {
+            FloatingApps.Tab t = peekTab(win, req);
+            name = t != null ? nz(onMain(() -> win.containerOf(t), 3000)) : ContainerManager.DEFAULT;
+            if (name.isEmpty()) name = ContainerManager.DEFAULT;
+        }
+        if (!containerExists(win, name)) {
+            return err("没有容器 " + name + "，用 containers 查看");
+        }
+        final String targetName = name;
+        boolean randomize = req.optBoolean("randomize", false);
+        boolean hasProfile = req.has("profile") && !req.isNull("profile");
+        boolean reload = req.optBoolean("reload", false);
+
+        if (!hasProfile && !randomize) {
+            ContainerEnv.Profile cur = onMain(() -> win.containers().getProfile(targetName), 3000);
+            return ok().put("name", targetName)
+                    .put("profile", ContainerEnv.toSummaryJson(cur))
+                    .put("result", "容器 " + targetName + " 当前环境：" + ContainerEnv.summary(cur));
+        }
+
+        final Object profileSpec = hasProfile ? req.opt("profile") : null;
+        ContainerEnv.Profile next;
+        int affected;
+        try {
+            Object[] res = onMain(() -> {
+                ContainerManager cm = win.containers();
+                ContainerEnv.Profile np = randomize ? cm.randomizeProfile(targetName) : cm.setProfile(targetName, profileSpec);
+                int cnt = win.applyContainerEnvForContainer(targetName, reload);
+                return new Object[]{np, cnt};
+            }, 5000);
+            next = (ContainerEnv.Profile) res[0];
+            affected = (Integer) res[1];
+        } catch (IllegalArgumentException iae) {
+            return err(iae.getMessage());
+        }
+
+        JSONObject out = ok().put("name", targetName)
+                .put("profile", ContainerEnv.toSummaryJson(next))
+                .put("reloaded", reload)
+                .put("tabs_affected", affected)
+                .put("result", "已更新容器 " + targetName + " 环境为：" + ContainerEnv.summary(next)
+                        + (reload && affected > 0 ? "（已刷新 " + affected + " 个标签）" : ""));
+        if (affected > 0) {
+            out.put("warning", "容器 " + targetName + " 已有 " + affected + " 个打开的标签，旧页面会话/Cookie 可能残留；防风控建议用 tab_new(container:\"new\", profile:...) 新建容器");
+        }
+        return out;
+    }
+
+    /** tab_new {url?, container?:"new"|"same"|"Default"|<name>, profile?, background?}；默认 container=new、background=true（Pi 在自己的后台标签里干活） */
     private static JSONObject tabNew(FloatingApps win, JSONObject req) throws Exception {
         String url = normalize(req.optString("url", ""));
         String container = req.optString("container", "new").trim();
         if (container.isEmpty()) container = "new";
         boolean background = req.optBoolean("background", true);
-        final String spec = mapContainer(container);
+        boolean hasProfile = req.has("profile") && !req.isNull("profile");
+        final Object profileSpec = hasProfile ? req.opt("profile") : null;
+
+        if (hasProfile) {
+            try {
+                ContainerEnv.fromSpec(profileSpec, ContainerEnv.createAuto());
+            } catch (IllegalArgumentException iae) {
+                return err(iae.getMessage());
+            }
+        }
+
+        String spec = mapContainer(container);
         if (spec != null && !spec.equalsIgnoreCase("same") && ContainerManager.supported() && !containerExists(win, spec)) {
             return err("没有容器 " + spec + "，用 containers 查看（新容器用 container:\"new\"）");
         }
+
+        if (hasProfile) {
+            String targetCont;
+            if (spec == null) {
+                if (ContainerManager.supported()) {
+                    targetCont = onMain(() -> win.containers().newContainer(profileSpec), 3000);
+                } else {
+                    targetCont = ContainerManager.DEFAULT;
+                }
+            } else if ("same".equalsIgnoreCase(spec)) {
+                FloatingApps.Tab curTab = onMain(() -> win.active, 2000);
+                targetCont = curTab != null ? nz(curTab.container) : ContainerManager.DEFAULT;
+                if (targetCont.isEmpty()) targetCont = ContainerManager.DEFAULT;
+            } else {
+                targetCont = spec;
+            }
+            if (ContainerManager.DEFAULT.equalsIgnoreCase(targetCont)) {
+                ContainerEnv.Profile reqProf = ContainerEnv.fromSpec(profileSpec, ContainerEnv.NATIVE);
+                if (reqProf.isIsolated()) {
+                    return err("Default 共享容器始终为 native，禁止设置隔离 profile");
+                }
+            } else if (spec != null) {
+                try {
+                    final String tc = targetCont;
+                    onMain(() -> {
+                        win.containers().setProfile(tc, profileSpec);
+                        win.applyContainerEnvForContainer(tc, false);
+                        return null;
+                    }, 3000);
+                } catch (IllegalArgumentException iae) {
+                    return err(iae.getMessage());
+                }
+            }
+            spec = targetCont;
+        }
+
+        final String finalSpec = spec;
         final boolean bg = background;
         FloatingApps.Tab t;
         synchronized (WINDOW_LOCK) {
             // 先开 about:blank，再像 new_tab 一样等它落定后导航，避免把 about:blank 的加载当成目标页完成
-            t = onMain(() -> win.newTabInContainer(null, spec, bg), 6000);
+            t = onMain(() -> win.newTabInContainer(null, finalSpec, bg), 6000);
         }
         if (t == null) return err("新建标签失败");
         CUR.get().tab = t;
         String cont = onMain(() -> win.containerOf(t), 3000);
-        JSONObject out = ok().put("tab", t.id).put("container", nz(cont));
-        if (url.isEmpty()) return out.put("url", nz(t.url)).put("result", "已新建标签 " + t.id + "（容器 " + nz(cont) + "）");
+        ContainerEnv.Profile ep = onMain(() -> t.envProfile, 3000);
+        JSONObject out = ok().put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
+        if (url.isEmpty()) {
+            return out.put("url", nz(t.url)).put("result", "已新建标签 " + t.id + "（容器 " + nz(cont) + " · " + ContainerEnv.summary(ep) + "）");
+        }
         ReentrantLock lk = lockOf(t);
         acquire(lk, t);
         try {
@@ -1853,8 +1960,8 @@ public final class BrowserAgent {
             String before = t.url;
             onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
             boolean loaded = navWait(t, seq, before, softLeft());
-            JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + " 新建标签 " + t.id + " 并打开 " + url);
-            if (bad != null) return bad.put("tab", t.id).put("container", nz(cont));
+            JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + "（" + ContainerEnv.summary(ep) + "）新建标签 " + t.id + " 并打开 " + url);
+            if (bad != null) return bad.put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
             return out.put("url", nz(t.url)).put("title", nz(t.title));
         } finally {
             lk.unlock();
@@ -1984,9 +2091,10 @@ public final class BrowserAgent {
         boolean ran = false;
         if (matchingIds(m, tab.url).contains(s.id)) {
             checkUser(tab);
-            String code = m.buildInjection(s, tab.id);
+            boolean isolated = tab.isIsolated();
+            String code = isolated ? m.buildIsolatedOneShot(s, tab.id) : m.buildInjection(s, tab.id);
             if (code != null && !code.isEmpty()) {
-                tab.injectedIds.add(s.id); // 否则 PiMetGM 会拒绝这次注入里的 GM 调用
+                if (!isolated) tab.injectedIds.add(s.id); // 否则 PiMetGM 会拒绝这次注入里的 GM 调用
                 evalRawSafe(tab, code, 5000);
                 ran = true;
             }

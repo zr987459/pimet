@@ -701,6 +701,11 @@ public class WebTranslationManager {
         boolean isTranslated();
         void onTranslationStarted(String mode, boolean auto, int batchMax, int charMax, String accent);
         void onTranslationRestored();
+        default boolean isIsolatedMode() { return false; }
+        default void startIsolatedTranslation(String mode, boolean auto, int batchMax, int charMax,
+                                              String accent, String bg, String border, String textColor,
+                                              boolean announce) {}
+        default void restoreIsolatedTranslation(boolean announce) {}
     }
 
     private static final java.util.Map<WebView, FrameTranslationDelegate> DELEGATES =
@@ -736,6 +741,18 @@ public class WebTranslationManager {
                 return;
             }
             final FrameTranslationDelegate delegate = DELEGATES.get(webView);
+            if (delegate != null && delegate.isIsolatedMode()) {
+                if (delegate.isTranslated()) {
+                    delegate.restoreIsolatedTranslation(true);
+                    SESSION.remove(webView);
+                    toast(context, "已还原网页原文");
+                } else {
+                    String host = TranslationSites.hostOf(url);
+                    if (host != null) SESSION.put(webView, host);
+                    startIsolated(context, delegate, true, false);
+                }
+                return;
+            }
             String checkJs = "(function(){return window.__pimet_is_translated===true;})()";
             webView.evaluateJavascript(checkJs, value -> {
                 if (value == null) {
@@ -781,6 +798,12 @@ public class WebTranslationManager {
                 String now = webView.getUrl();
                 if (now == null || !host.equals(TranslationSites.hostOf(now))) return;
                 final FrameTranslationDelegate delegate = DELEGATES.get(webView);
+                if (delegate != null && delegate.isIsolatedMode()) {
+                    if (!delegate.isTranslated()) {
+                        startIsolated(context, delegate, false, true);
+                    }
+                    return;
+                }
                 webView.evaluateJavascript("(function(){return window.__pimet_is_translated===true;})()", v -> {
                     if (!"true".equals(v) && (delegate == null || !delegate.isTranslated())) {
                         inject(webView, context, false, true);
@@ -790,6 +813,18 @@ public class WebTranslationManager {
         } catch (Throwable t) {
             Log.w(TAG, "maybeAutoTranslate failed: " + t.getMessage());
         }
+    }
+
+    private static void startIsolated(Context context, FrameTranslationDelegate delegate, boolean announce, boolean auto) {
+        final String mode = TranslationScript.displayMode(context);
+        final int batchMax = TranslationScript.batchMax(context);
+        final int charMax = TranslationScript.charMax(context);
+        com.xm486.pimet.ThemeManager.ThemePalette palette = com.xm486.pimet.ThemeManager.getEffectivePalette(context);
+        final String bg = String.format("#%06X", (0xFFFFFF & palette.bgPanel));
+        final String border = String.format("#%06X", (0xFFFFFF & palette.border));
+        final String accent = String.format("#%06X", (0xFFFFFF & palette.accent));
+        final String text = String.format("#%06X", (0xFFFFFF & palette.text));
+        delegate.startIsolatedTranslation(mode, auto, batchMax, charMax, accent, bg, border, text, announce);
     }
 
     /** 注入翻译脚本，按脚本返回的状态给出提示（auto=自动翻译时不打扰） */
@@ -862,6 +897,11 @@ public class WebTranslationManager {
     public static void refreshTranslation(WebView webView, Context context) {
         if (webView == null || context == null) return;
         final FrameTranslationDelegate delegate = DELEGATES.get(webView);
+        if (delegate != null && delegate.isIsolatedMode()) {
+            delegate.restoreIsolatedTranslation(false);
+            startIsolated(context, delegate, false, false);
+            return;
+        }
         webView.evaluateJavascript("if (window.__pimet_restore) window.__pimet_restore(true);", null);
         if (delegate != null) delegate.onTranslationRestored();
         inject(webView, context, false, false);
