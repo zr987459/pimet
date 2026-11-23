@@ -147,6 +147,9 @@ public final class FloatingApps {
     private final ProgressBar progress;
     private final LinearLayout piBanner;
     private final TextView piBannerText, piBannerView, piBannerStop;
+    private final LinearLayout proxyBanner;
+    private final TextView proxyBannerText, proxyBannerBtn;
+    private ContainerProxyManager proxyMgr;
     private final LinearLayout customStrip;
     private final android.widget.HorizontalScrollView customScroll;
     /** 标签页网格（点标签数按钮打开） */
@@ -310,7 +313,7 @@ public final class FloatingApps {
         if (f.switcher.getVisibility() == View.VISIBLE) { f.closeSwitcher(); return true; }
         if (f.fullscreen) { f.setFullscreen(false); return true; }
         if (f.urlField.hasFocus()) { f.hideIme(); f.showUrl(f.active, f.currentUrl()); return true; }
-        if (f.web != null && !f.isHomeUrl(f.currentUrl()) && f.web.canGoBack()) { f.web.goBack(); return true; }
+        if (f.active != null && f.web != null && !f.isHomeUrl(f.currentUrl()) && f.web.canGoBack()) { f.goBackTab(f.active); return true; }
         if (f.active != null && !f.isHomeUrl(f.currentUrl()) && !f.active.pi) { f.goHome(); return true; }
         return false;
     }
@@ -538,6 +541,33 @@ public final class FloatingApps {
         piBanner.setVisibility(View.GONE);
         column.addView(piBanner, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
 
+        // ---- 容器代理状态条：代理生效中 / 切换中 / 当前标签冻结时出现
+        proxyBanner = new LinearLayout(vctx);
+        proxyBanner.setOrientation(LinearLayout.HORIZONTAL);
+        proxyBanner.setGravity(Gravity.CENTER_VERTICAL);
+        proxyBanner.setPadding(dp(12), 0, dp(6), 0);
+        proxyBannerText = new TextView(vctx);
+        proxyBannerText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        proxyBannerText.setSingleLine(true);
+        proxyBannerText.setEllipsize(TextUtils.TruncateAt.END);
+        proxyBanner.addView(proxyBannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        proxyBannerBtn = barBtn("切回本页代理", "切换全局代理回当前标签所在容器", 12);
+        proxyBannerBtn.setPadding(dp(8), 0, dp(8), 0);
+        proxyBannerBtn.setOnClickListener(v -> {
+            Tab t = active;
+            if (t == null || t.closed) return;
+            ensureTabProxyAsync(t, () -> {
+                if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+                if (!isHomeUrl(t.url) && !t.url.startsWith("about:")) {
+                    if (t.errorCode != 0 || t.url.isEmpty()) loadUrlWithEnv(t, t.url, null);
+                    else t.web.reload();
+                }
+            });
+        });
+        proxyBanner.addView(proxyBannerBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
+        proxyBanner.setVisibility(View.GONE);
+        column.addView(proxyBanner, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
         // ---- 扩展按钮栏（config.json 里 "showButtonBar": true 时显示在地址栏下方）
         customScroll = new android.widget.HorizontalScrollView(vctx);
         customScroll.setHorizontalScrollBarEnabled(false);
@@ -714,6 +744,10 @@ public final class FloatingApps {
         volatile android.webkit.CookieManager cookies;
         /** Per-Container 环境配置与 DocumentStart 句柄 */
         volatile ContainerEnv.Profile envProfile = ContainerEnv.NATIVE;
+        volatile String proxySignature = "DIRECT";
+        volatile String proxySummary = "直连";
+        volatile boolean proxyFrozen = false;
+        volatile String pendingRecoverUrl = null;
         ScriptHandler envDocStartHandler;
         boolean bridgesAttached = false;
         String lastAppliedEnvKey;
@@ -786,6 +820,9 @@ public final class FloatingApps {
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
+        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
+        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
+        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
         boolean defDesktop = !pi && uiObj("defaults").optBoolean("desktopMode", false);
         t.desktop = (t.envProfile != null && t.envProfile.desktop) || defDesktop;
         t.web = createWebView(t);
@@ -861,8 +898,23 @@ public final class FloatingApps {
         if (active == t) web = t.web;
         applyVisibility();
         String u = t.url;
-        if (u != null && !u.isEmpty() && !u.startsWith("about:")) loadUrlWithEnv(t, u, null);
-        else goHome(t, false);
+        if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
+            if (isLocalUrl(u)) {
+                loadUrlWithEnv(t, u, null);
+            } else if (t == active) {
+                ensureTabProxyAsync(t, () -> {
+                    if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+                    loadUrlWithEnv(t, u, null);
+                });
+            } else if (!t.proxyFrozen && proxyManager().matchesActive(t.proxySignature)) {
+                loadUrlWithEnv(t, u, null);
+            } else {
+                // 后台冻结标签保持冻结，不主动发起外网请求，等切到该标签时再恢复
+                t.pendingRecoverUrl = u;
+            }
+        } else {
+            goHome(t, false);
+        }
         if (active == t) {
             updateProgress();
             refreshBall();
@@ -885,6 +937,20 @@ public final class FloatingApps {
             showUrl(t, u);
         }
         syncUrlPill();
+        if (!proxyManager().matchesActive(t.proxySignature) || t.proxyFrozen) {
+            ensureTabProxyAsync(t, () -> {
+                if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+                String pending = t.pendingRecoverUrl;
+                if (pending != null && !pending.isEmpty()) {
+                    t.pendingRecoverUrl = null;
+                    loadUrlWithEnv(t, pending, null);
+                }
+            });
+        } else if (t.pendingRecoverUrl != null && !t.pendingRecoverUrl.isEmpty()) {
+            String pending = t.pendingRecoverUrl;
+            t.pendingRecoverUrl = null;
+            loadUrlWithEnv(t, pending, null);
+        }
         refreshTabs();
     }
 
@@ -996,7 +1062,10 @@ public final class FloatingApps {
         for (Tab x : tabs) {
             a.put(new JSONObject().put("id", x.id).put("kind", x.pi ? "pi" : "user").put("active", x == active)
                     .put("busy", x.busy > 0).put("url", x.url).put("title", x.title)
-                    .put("container", x.container).put("containerLabel", containerLabel(x.container)));
+                    .put("container", x.container).put("containerLabel", containerLabel(x.container))
+                    .put("proxyFrozen", x.proxyFrozen)
+                    .put("proxySignature", x.proxySignature)
+                    .put("proxySummary", x.proxySummary));
         }
         return a;
     }
@@ -1078,6 +1147,31 @@ public final class FloatingApps {
             piBannerStop.setText(sPiStopped ? "▶ 允许 Pi" : "⏹ 停止");
         }
         piBanner.setVisibility(showBanner ? View.VISIBLE : View.GONE);
+
+        // 容器代理状态条：全局代理生效 / 切换中 / 当前标签被冻结
+        if (proxyBanner != null) {
+            ContainerProxyManager pm = proxyManager();
+            Tab cur = active;
+            boolean frozen = cur != null && (cur.proxyFrozen || !pm.matchesActive(cur.proxySignature));
+            boolean showProxyBanner = !fullscreen && (pm.isSwitching() || frozen || !pm.isDirect());
+            if (showProxyBanner) {
+                if (pm.isSwitching()) {
+                    proxyBanner.setBackgroundColor(blend(cBar, Color.parseColor("#D29922"), 0.22f));
+                    proxyBannerText.setText("⏳ 正在切换容器代理…");
+                    proxyBannerBtn.setVisibility(View.GONE);
+                } else if (frozen) {
+                    proxyBanner.setBackgroundColor(blend(cBar, Color.parseColor("#D29922"), 0.24f));
+                    proxyBannerText.setText("⏸ 已冻结（全局：" + pm.getActiveSummary() + "，本页需：" + cur.proxySummary + "）");
+                    proxyBannerBtn.setVisibility(View.VISIBLE);
+                } else {
+                    proxyBanner.setBackgroundColor(blend(cBar, cAccent, 0.12f));
+                    proxyBannerText.setText("🌐 代理：" + pm.getActiveSummary() + "（" + pm.getActiveLabel() + "）");
+                    proxyBannerBtn.setVisibility(View.GONE);
+                }
+            }
+            proxyBanner.setVisibility(showProxyBanner ? View.VISIBLE : View.GONE);
+        }
+
         if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
     }
 
@@ -1136,6 +1230,16 @@ public final class FloatingApps {
         switcherStop.setVisibility(anyPi || sPiStopped ? View.VISIBLE : View.GONE);
         switcherStop.setText(sPiStopped ? "▶ 允许 Pi" : "⏹ 停止 Pi");
         switcherStop.setTextColor(sPiStopped ? Color.parseColor("#D73A49") : cFg);
+
+        ContainerProxyManager pm = proxyManager();
+        TextView proxyStatusRow = new TextView(vctx);
+        proxyStatusRow.setText((pm.isSwitching() ? "⏳ 切换代理中…" : "🌐 当前全局代理：" + pm.getActiveSummary())
+                + "（" + pm.getActiveLabel() + "）");
+        proxyStatusRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        proxyStatusRow.setTextColor(pm.isDirect() ? cDim : cAccent);
+        proxyStatusRow.setPadding(dp(8), dp(2), dp(8), dp(6));
+        switcherGrid.addView(proxyStatusRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         if ("list".equalsIgnoreCase(uiObj("theme").optString("tabStyle", "bar"))) {
             // ui.json theme.tabStyle = list：一行一个标签（不带缩略图）
             for (Tab x : tabs) {
@@ -1191,7 +1295,7 @@ public final class FloatingApps {
         String tt = x.title;
         if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "新标签页" : x.url.replaceFirst("^https?://", "");
         TextView title = new TextView(vctx);
-        title.setText((x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
+        title.setText((x.proxyFrozen ? "⏸ " : "") + (x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -1200,7 +1304,8 @@ public final class FloatingApps {
         TextView sub = new TextView(vctx);
         String host = isLauncher(x.url) ? "" : x.url.replaceFirst("^https?://", "");
         String badge = ContainerEnv.badgeEmoji(x.envProfile);
-        sub.setText((ContainerManager.supported() ? badge + " " + containerLabel(x.container) + "  " : "") + host);
+        String proxyTag = x.proxyFrozen ? "⏸ 已冻结(" + x.proxySummary + ")" : ("直连".equals(x.proxySummary) ? "" : "🌐 " + x.proxySummary);
+        sub.setText((ContainerManager.supported() ? badge + " " + containerLabel(x.container) + (proxyTag.isEmpty() ? "" : " · " + proxyTag) + "  " : "") + host);
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
@@ -1248,7 +1353,7 @@ public final class FloatingApps {
         TextView title = new TextView(vctx);
         String tt = x.title;
         if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "新标签页" : x.url.replaceFirst("^https?://", "");
-        title.setText((x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
+        title.setText((x.proxyFrozen ? "⏸ " : "") + (x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
         if (ContainerManager.supported()) {
             View strip = new View(vctx);
             GradientDrawable sd = new GradientDrawable();
@@ -1260,7 +1365,8 @@ public final class FloatingApps {
             head.addView(strip, stl);
             TextView badge = new TextView(vctx);
             badge.setText(ContainerEnv.badgeEmoji(x.envProfile) + " " + containerLabel(x.container)
-                    + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : ""));
+                    + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : "")
+                    + (x.proxyFrozen ? " ⏸" : (!"直连".equals(x.proxySummary) ? " 🌐" : "")));
             badge.setSingleLine(true);
             badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             badge.setTextColor(x == active ? Color.WHITE : containerColor(x.container));
@@ -1870,6 +1976,9 @@ public final class FloatingApps {
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
+        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
+        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
+        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
         t.cookies = cookiesFor(t.container);
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -1899,6 +2008,9 @@ public final class FloatingApps {
         com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, new TabTranslationDelegate(t));
         setupCrossFrameSupport(t, w);
         applyContainerEnv(t, w, true);
+        if (t.proxyFrozen) {
+            try { w.onPause(); } catch (Throwable ignored) {}
+        }
         w.setDownloadListener((url, ua, contentDisposition, mime, length) -> {
             if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
             startDownload(t, url, ua, contentDisposition, mime);
@@ -1935,11 +2047,24 @@ public final class FloatingApps {
                 return true;
             }
 
-            /** rules.block：命中的请求返回空响应 */
+            /** rules.block & 单活代理熔断：绝不代理正常流量，仅拦截匹配 rules.block 或代理不匹配/切换中的外网请求 */
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 String u = req != null && req.getUrl() != null ? req.getUrl().toString() : null;
                 if (uiBlocked(u)) return new android.webkit.WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                if (u != null && (u.startsWith("http://") || u.startsWith("https://")) && !isLoopbackUrl(u)) {
+                    ContainerProxyManager pm = proxyManager();
+                    if (pm.isSwitching() || !pm.matchesActive(t.proxySignature)) {
+                        return new android.webkit.WebResourceResponse(
+                                "text/plain",
+                                "utf-8",
+                                503,
+                                "Proxy Mismatch Frozen",
+                                Collections.singletonMap("Cache-Control", "no-store"),
+                                new java.io.ByteArrayInputStream(new byte[0])
+                        );
+                    }
+                }
                 return null;
             }
 
@@ -2615,8 +2740,17 @@ public final class FloatingApps {
         String r = uiRedirect(url);
         if (r != null) url = r;
         if (openInSiteContainer(t, url)) return;
-        applySiteSettings(t, url, true);
-        loadUrlWithEnv(t, url, null);
+        final String targetUrl = url;
+        if (isLocalUrl(targetUrl)) {
+            applySiteSettings(t, targetUrl, true);
+            loadUrlWithEnv(t, targetUrl, null);
+            return;
+        }
+        ensureTabProxyAsync(t, () -> {
+            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+            applySiteSettings(t, targetUrl, true);
+            loadUrlWithEnv(t, targetUrl, null);
+        });
     }
 
     private void updateProgress() {
@@ -2631,14 +2765,40 @@ public final class FloatingApps {
     }
 
     private void reload() {
-        if (isHomeUrl(currentUrl())) goHome();
-        else web.reload();
+        String u = currentUrl();
+        if (isHomeUrl(u)) goHome();
+        else if (active != null && active.web != null) {
+            if (isLocalUrl(u)) active.web.reload();
+            else {
+                Tab cur = active;
+                ensureTabProxyAsync(cur, () -> {
+                    if (cur.closed || cur.web == null || !proxyManager().matchesActive(cur.proxySignature)) return;
+                    cur.web.reload();
+                });
+            }
+        }
     }
 
     private void goBack() {
-        if (web != null && !isHomeUrl(currentUrl()) && web.canGoBack()) web.goBack();
+        if (active != null && web != null && !isHomeUrl(currentUrl()) && web.canGoBack()) goBackTab(active);
         else if (!isHomeUrl(currentUrl())) goHome();
         else agentMinimize();
+    }
+
+    private void goBackTab(Tab t) {
+        if (t == null || t.closed || t.web == null || !t.web.canGoBack()) return;
+        ensureTabProxyAsync(t, () -> {
+            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+            if (t.web.canGoBack()) t.web.goBack();
+        });
+    }
+
+    private void goForwardTab(Tab t) {
+        if (t == null || t.closed || t.web == null || !t.web.canGoForward()) return;
+        ensureTabProxyAsync(t, () -> {
+            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
+            if (t.web.canGoForward()) t.web.goForward();
+        });
     }
 
     private boolean isLauncher(String url) {
@@ -3020,6 +3180,9 @@ public final class FloatingApps {
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
+        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
+        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
+        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
 
         boolean effectiveDesktop = t.desktop;
         String overrideUa = customUa();
@@ -3103,6 +3266,7 @@ public final class FloatingApps {
     int applyContainerEnvForContainer(String containerName, boolean reloadTabs) {
         if (containerName == null) return 0;
         int affected = 0;
+        List<Tab> matched = new ArrayList<>();
         for (Tab t : new ArrayList<>(tabs)) {
             if (t == null || t.closed || t.web == null) continue;
             if (!containerName.equals(t.container)) continue;
@@ -3113,11 +3277,33 @@ public final class FloatingApps {
                 t.siteUa = null;
             } catch (Throwable ignored) {}
             applyContainerEnv(t, t.web, true);
+            matched.add(t);
             affected++;
-            if (reloadTabs) {
+        }
+        ContainerProxyManager pm = proxyManager();
+        boolean needSwitch = (active != null && containerName.equals(active.container))
+                || containerName.equals(pm.getActiveContainer());
+        if (needSwitch && !matched.isEmpty()) {
+            Tab pivot = (active != null && containerName.equals(active.container)) ? active : matched.get(0);
+            ensureTabProxyAsync(pivot, () -> {
+                if (reloadTabs) {
+                    for (Tab t : matched) {
+                        if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) continue;
+                        String u = t.url;
+                        if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
+                            t.web.reload();
+                        }
+                    }
+                }
+            });
+        } else if (reloadTabs) {
+            for (Tab t : matched) {
+                if (t.closed || t.web == null) continue;
                 String u = t.url;
                 if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
-                    t.web.reload();
+                    if (isLocalUrl(u) || proxyManager().matchesActive(t.proxySignature)) {
+                        t.web.reload();
+                    }
                 }
             }
         }
@@ -3126,8 +3312,45 @@ public final class FloatingApps {
         return affected;
     }
 
+    synchronized ContainerProxyManager proxyManager() {
+        if (proxyMgr == null) {
+            proxyMgr = new ContainerProxyManager(ctx, () -> MAIN.post(this::refreshTabs));
+        }
+        return proxyMgr;
+    }
+
+    void ensureTabProxyAsync(Tab t, Runnable onReady) {
+        if (t == null || t.closed) {
+            if (onReady != null) onReady.run();
+            return;
+        }
+        try {
+            t.envProfile = containers().getProfile(t.container);
+            t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
+            t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
+        } catch (Throwable ignored) {}
+        proxyManager().applyForContainer(t.container, containerLabel(t.container), t.envProfile, tabs, onReady);
+    }
+
+    private static boolean isLoopbackUrl(String u) {
+        if (u == null) return false;
+        if (!(u.startsWith("http://") || u.startsWith("https://"))) return false;
+        try {
+            return ContainerProxyManager.isLoopbackHost(Uri.parse(u).getHost());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private boolean isLocalUrl(String u) {
+        if (u == null || u.isEmpty()) return true;
+        if (isHomeUrl(u) || isLoopbackUrl(u)) return true;
+        return u.startsWith("file://") || u.startsWith("about:") || u.startsWith("data:") || u.startsWith("blob:") || WebPinchZoom.isLocal(u);
+    }
+
     private void loadUrlWithEnv(Tab t, String url, Map<String, String> baseHeaders) {
         if (t == null || t.web == null || url == null) return;
+        t.pendingRecoverUrl = null;
         Map<String, String> extra = ContainerEnv.extraHeaders(t.envProfile);
         if ((baseHeaders == null || baseHeaders.isEmpty()) && (extra == null || extra.isEmpty())) {
             t.web.loadUrl(url);
@@ -4363,7 +4586,7 @@ public final class FloatingApps {
             String rt = req.optString("responseType", "text").toLowerCase(java.util.Locale.ROOT);
 
             for (int hop = 0; hop < 6; hop++) {
-                c = (java.net.HttpURLConnection) url.openConnection();
+                c = proxyManager().openConnection(t, url);
                 c.setInstanceFollowRedirects(false);
                 c.setConnectTimeout(Math.min(timeout, 30000));
                 c.setReadTimeout(timeout);
@@ -4525,10 +4748,11 @@ public final class FloatingApps {
         lastInstallUrl = url;
         lastInstallAt = now;
         Toast.makeText(ctx, "正在读取用户脚本…", Toast.LENGTH_SHORT).show();
-        final android.webkit.CookieManager ck = tabCookies(active);
+        final Tab fetchTab = active;
+        final android.webkit.CookieManager ck = tabCookies(fetchTab);
         new Thread(() -> {
             try {
-                String code = httpGetText(url, ck);
+                String code = httpGetText(fetchTab, url, ck);
                 UserScriptManager.Script s = UserScriptManager.parse(code);
                 MAIN.post(() -> showInstallDialog(code, s, url));
             } catch (Throwable e) {
@@ -4592,11 +4816,11 @@ public final class FloatingApps {
         }, "pimet-us-install").start();
     }
 
-    /** 下载文本（带浏览器 Cookie，跟随跨协议重定向，最大 5MB），后台线程调用 */
-    private static String httpGetText(String u, android.webkit.CookieManager cookies) throws Exception {
+    /** 下载文本（带浏览器 Cookie 与容器代理，跟随跨协议重定向，最大 5MB），后台线程调用 */
+    private String httpGetText(Tab t, String u, android.webkit.CookieManager cookies) throws Exception {
         java.net.URL url = new java.net.URL(u);
         for (int hop = 0; hop < 6; hop++) {
-            java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+            java.net.HttpURLConnection c = proxyManager().openConnection(t, url);
             try {
                 c.setInstanceFollowRedirects(false);
                 c.setConnectTimeout(15000);
@@ -5473,6 +5697,7 @@ public final class FloatingApps {
             m.add(0, 1, 0, "保留此容器（关闭后不删数据）").setCheckable(true).setChecked(containerKeep(x.container));
             m.add(0, 2, 0, "重命名容器…");
             m.add(0, 5, 0, "伪装环境：" + ContainerEnv.summary(x.envProfile));
+            m.add(0, 6, 0, "🌐 代理设置：" + x.proxySummary);
         }
         if (sup) m.add(0, 3, 0, "在此容器新建标签");
         m.add(0, 4, 0, "关闭标签");
@@ -5492,6 +5717,9 @@ public final class FloatingApps {
                     break;
                 case 5:
                     showContainerProfileDialog(x.container);
+                    break;
+                case 6:
+                    showContainerProxyDialog(x.container);
                     break;
                 case 3:
                     closeSwitcher();
@@ -5552,6 +5780,204 @@ public final class FloatingApps {
                 })
                 .setNegativeButton("关闭", null)
                 .show();
+    }
+
+    private void showContainerProxyDialog(String containerName) {
+        if (host == null || host.isFinishing()) return;
+        if (containerName == null || ContainerManager.DEFAULT.equalsIgnoreCase(containerName)) {
+            Toast.makeText(ctx, "Default 共享容器始终为直连，禁止配置代理", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ContainerEnv.Profile curProf = ContainerEnv.NATIVE;
+        try { curProf = containers().getProfile(containerName); } catch (Throwable ignored) {}
+        final ContainerEnv.Profile cur = curProf;
+        final ContainerEnv.ProxySpec curProxy = cur.proxy;
+        final String origUpstreamDisp = (curProxy != null && curProxy.upstream != null)
+                ? curProxy.upstream.endpointDisplay() : "";
+
+        ThemeManager.ThemePalette p = ThemeManager.getEffectivePalette(host);
+        ScrollView scroll = new ScrollView(host);
+        LinearLayout col = new LinearLayout(host);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(18), dp(14), dp(18), dp(8));
+
+        if (!proxyManager().isProxySupported()) {
+            TextView warn = panelText("⚠ 当前系统 WebView 不支持 PROXY_OVERRIDE，代理设置无法生效", 12f, Color.parseColor("#D29922"), false);
+            col.addView(warn);
+        }
+
+        android.widget.CheckBox enableCb = new android.widget.CheckBox(host);
+        enableCb.setText("启用代理");
+        enableCb.setTextColor(p.text);
+        enableCb.setChecked(curProxy == null || curProxy.enabled);
+        col.addView(enableCb);
+
+        android.widget.RadioGroup typeGroup = new android.widget.RadioGroup(host);
+        typeGroup.setOrientation(LinearLayout.HORIZONTAL);
+        android.widget.RadioButton rbHttp = new android.widget.RadioButton(host);
+        rbHttp.setText("HTTP");
+        rbHttp.setTextColor(p.text);
+        android.widget.RadioButton rbSocks5 = new android.widget.RadioButton(host);
+        rbSocks5.setText("SOCKS5");
+        rbSocks5.setTextColor(p.text);
+        typeGroup.addView(rbHttp);
+        typeGroup.addView(rbSocks5);
+        if (curProxy != null && "socks5".equals(curProxy.type)) rbSocks5.setChecked(true);
+        else rbHttp.setChecked(true);
+        col.addView(typeGroup);
+
+        EditText hostEt = new EditText(host);
+        hostEt.setSingleLine(true);
+        hostEt.setHint("主机 / IP（如 127.0.0.1）");
+        hostEt.setTextColor(p.text);
+        hostEt.setHintTextColor(p.textDim);
+        if (curProxy != null) hostEt.setText(curProxy.host);
+        col.addView(hostEt);
+
+        EditText portEt = new EditText(host);
+        portEt.setSingleLine(true);
+        portEt.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        portEt.setHint("端口（1..65535）");
+        portEt.setTextColor(p.text);
+        portEt.setHintTextColor(p.textDim);
+        if (curProxy != null && curProxy.port > 0) portEt.setText(String.valueOf(curProxy.port));
+        col.addView(portEt);
+
+        EditText userEt = new EditText(host);
+        userEt.setSingleLine(true);
+        userEt.setHint("用户名（可选）");
+        userEt.setTextColor(p.text);
+        userEt.setHintTextColor(p.textDim);
+        if (curProxy != null) userEt.setText(curProxy.username);
+        col.addView(userEt);
+
+        // 绝不回显明文密码：密码框永远初始为空
+        EditText passEt = new EditText(host);
+        passEt.setSingleLine(true);
+        passEt.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passEt.setText("");
+        passEt.setHint((curProxy != null && !curProxy.password.isEmpty()) ? "密码（已保存，留空保留原密码）" : "密码（可选）");
+        passEt.setTextColor(p.text);
+        passEt.setHintTextColor(p.textDim);
+        col.addView(passEt);
+
+        EditText upstreamEt = new EditText(host);
+        upstreamEt.setSingleLine(true);
+        upstreamEt.setHint("前置代理 upstream（可选，如 http://127.0.0.1:7890）");
+        upstreamEt.setTextColor(p.text);
+        upstreamEt.setHintTextColor(p.textDim);
+        if (!origUpstreamDisp.isEmpty()) upstreamEt.setText(origUpstreamDisp);
+        col.addView(upstreamEt);
+
+        LinearLayout testRow = new LinearLayout(host);
+        testRow.setOrientation(LinearLayout.HORIZONTAL);
+        testRow.setGravity(Gravity.CENTER_VERTICAL);
+        testRow.setPadding(0, dp(8), 0, dp(4));
+        TextView testBtn = panelButton("测试连通性", p, null);
+        TextView testStatusTv = panelText("", 12f, p.textDim, false);
+        testStatusTv.setPadding(dp(10), 0, 0, 0);
+        testRow.addView(testBtn);
+        testRow.addView(testStatusTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        col.addView(testRow);
+
+        scroll.addView(col);
+
+        final java.util.concurrent.Callable<ContainerEnv.ProxySpec> buildSpec = () -> {
+            boolean enabled = enableCb.isChecked();
+            String type = rbSocks5.isChecked() ? "socks5" : "http";
+            String h = hostEt.getText().toString().trim();
+            String portStr = portEt.getText().toString().trim();
+            int port = 0;
+            if (!portStr.isEmpty()) {
+                try { port = Integer.parseInt(portStr); } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("端口格式无效");
+                }
+            }
+            String u = userEt.getText().toString();
+            String pwIn = passEt.getText().toString();
+            String pw;
+            if (!pwIn.isEmpty()) {
+                pw = pwIn;
+            } else if (curProxy != null && !curProxy.password.isEmpty() && (!u.isEmpty() || curProxy.username.isEmpty())) {
+                pw = curProxy.password;
+            } else {
+                pw = "";
+            }
+            String upText = upstreamEt.getText().toString().trim();
+            ContainerEnv.ProxyEndpoint up;
+            if (upText.isEmpty()) {
+                up = null;
+            } else if (!origUpstreamDisp.isEmpty() && upText.equals(origUpstreamDisp) && curProxy != null) {
+                up = curProxy.upstream;
+            } else {
+                up = ContainerEnv.parseProxyEndpoint(upText);
+            }
+            if (enabled) {
+                if (h.isEmpty()) throw new IllegalArgumentException("请输入代理主机");
+                if (port < 1 || port > 65535) throw new IllegalArgumentException("端口必须在 1..65535 之间");
+            } else if (h.isEmpty() && port == 0 && up == null) {
+                return null;
+            }
+            return new ContainerEnv.ProxySpec(enabled, type, h, port, u, pw, up);
+        };
+
+        testBtn.setOnClickListener(v -> {
+            ContainerEnv.ProxySpec candidate;
+            try {
+                candidate = buildSpec.call();
+            } catch (Throwable t) {
+                testStatusTv.setTextColor(Color.parseColor("#F85149"));
+                testStatusTv.setText("❌ " + t.getMessage());
+                return;
+            }
+            if (candidate == null || !candidate.isActive()) {
+                testStatusTv.setTextColor(Color.parseColor("#D29922"));
+                testStatusTv.setText("请先勾选启用并填写有效主机端口");
+                return;
+            }
+            testStatusTv.setTextColor(p.textDim);
+            testStatusTv.setText("⏳ 测试中…");
+            proxyManager().testProxyAsync(candidate, res -> {
+                if (res.ok) {
+                    testStatusTv.setTextColor(Color.parseColor("#3FB950"));
+                    testStatusTv.setText("✅ HTTP " + res.statusCode + " · " + res.latencyMs + "ms");
+                } else {
+                    testStatusTv.setTextColor(Color.parseColor("#F85149"));
+                    testStatusTv.setText("❌ " + res.error + " (" + res.latencyMs + "ms)");
+                }
+            });
+        });
+
+        AlertDialog dlg = new AlertDialog.Builder(host)
+                .setTitle("🌐 代理设置 · " + containerLabel(containerName))
+                .setView(scroll)
+                .setPositiveButton("保存", null)
+                .setNeutralButton("清除代理（直连）", (d, w) -> {
+                    try {
+                        JSONObject spec = new JSONObject().put("proxy", JSONObject.NULL);
+                        containers().setProfile(containerName, spec);
+                        applyContainerEnvForContainer(containerName, false);
+                        Toast.makeText(ctx, "已清除代理（直连）", Toast.LENGTH_SHORT).show();
+                    } catch (Throwable t) {
+                        Toast.makeText(ctx, "清除失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .create();
+        dlg.setOnShowListener(di -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            try {
+                ContainerEnv.ProxySpec candidate = buildSpec.call();
+                JSONObject spec = new JSONObject()
+                        .put("proxy", candidate == null ? JSONObject.NULL : candidate.toStorageJson());
+                ContainerEnv.Profile next = containers().setProfile(containerName, spec);
+                applyContainerEnvForContainer(containerName, false);
+                Toast.makeText(ctx, "已保存代理：" + (next.hasActiveProxy() ? next.proxy.summary() : "直连"), Toast.LENGTH_SHORT).show();
+                dlg.dismiss();
+            } catch (Throwable t) {
+                Toast.makeText(ctx, "保存失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+            }
+        }));
+        dlg.show();
     }
 
     private void renameContainer(String name) {
@@ -6384,8 +6810,8 @@ public final class FloatingApps {
         String src = vars != null ? vars.get("src") : null;
         String target = link != null && !link.isEmpty() ? link : src;
         switch (id == null ? "" : id) {
-            case "back": if (t != null && t.web != null && t.web.canGoBack()) t.web.goBack(); else goBack(); break;
-            case "forward": if (t != null && t.web != null && t.web.canGoForward()) t.web.goForward(); break;
+            case "back": if (t != null && t.web != null && t.web.canGoBack()) goBackTab(t); else goBack(); break;
+            case "forward": goForwardTab(t); break;
             case "reload": case "refresh": reload(); break;
             case "stop": if (t != null && t.web != null) t.web.stopLoading(); break;
             case "home": goHome(t, true); break;
@@ -6673,8 +7099,11 @@ public final class FloatingApps {
         boolean blank = t.url == null || t.url.isEmpty() || isLauncher(t.url) || t.url.startsWith("about:");
         Tab nt = newTab(false, name);
         switchTo(nt);
-        applySiteSettings(nt, url, true);
-        loadUrlWithEnv(nt, url, null);
+        ensureTabProxyAsync(nt, () -> {
+            if (nt.closed || nt.web == null || !proxyManager().matchesActive(nt.proxySignature)) return;
+            applySiteSettings(nt, url, true);
+            loadUrlWithEnv(nt, url, null);
+        });
         if (blank && tabs.size() > 1) closeTab(t);
         Toast.makeText(ctx, "已在容器「" + containerLabel(name) + "」打开", Toast.LENGTH_SHORT).show();
         return true;
@@ -7028,14 +7457,66 @@ public final class FloatingApps {
             names.add(n);
             ContainerEnv.Profile ep = ContainerEnv.NATIVE;
             try { ep = containers().getProfile(n); } catch (Throwable ignored) {}
+            String ps = ep.hasActiveProxy() ? ep.proxy.summary() : "直连";
             labels.add(containerLabel(n) + (c.optBoolean("keep") && !ContainerManager.DEFAULT.equals(n) ? " 📌" : "")
-                    + "  (" + ContainerEnv.summary(ep) + ") · " + cnt + " 个标签");
+                    + "\n  " + ContainerEnv.summary(ep) + " · 🌐 " + ps + " · " + cnt + " 个标签");
         }
         names.add("new");
         labels.add("＋ 新容器");
-        new AlertDialog.Builder(host).setTitle("🗂 容器（点按在其中开新标签）")
+        AlertDialog dlg = new AlertDialog.Builder(host)
+                .setTitle("🗂 容器（全局代理：" + proxyManager().getActiveSummary() + "）")
                 .setItems(labels.toArray(new String[0]), (d, w) -> newUserTabIn(names.get(w)))
-                .setNegativeButton("关闭", null).show();
+                .setNegativeButton("关闭", null)
+                .create();
+        dlg.setOnShowListener(di -> {
+            android.widget.ListView lv = dlg.getListView();
+            if (lv != null) {
+                lv.setOnItemLongClickListener((parent, view, pos, id) -> {
+                    if (pos < 0 || pos >= names.size()) return false;
+                    String cname = names.get(pos);
+                    if ("new".equals(cname)) return false;
+                    if (ContainerManager.DEFAULT.equals(cname)) {
+                        Toast.makeText(ctx, "Default 共享容器始终为直连，禁止配置代理或环境", Toast.LENGTH_SHORT).show();
+                        return true;
+                    }
+                    dlg.dismiss();
+                    showContainerActionsMenu(cname);
+                    return true;
+                });
+            }
+        });
+        dlg.show();
+    }
+
+    private void showContainerActionsMenu(String containerName) {
+        if (host == null || containerName == null || ContainerManager.DEFAULT.equals(containerName)) return;
+        ContainerEnv.Profile ep = ContainerEnv.NATIVE;
+        try { ep = containers().getProfile(containerName); } catch (Throwable ignored) {}
+        String ps = ep.hasActiveProxy() ? ep.proxy.summary() : "直连";
+        boolean keep = containerKeep(containerName);
+        String[] items = {
+                "🌐 代理设置：" + ps,
+                "🛡 伪装环境：" + ContainerEnv.summary(ep),
+                (keep ? "📌 取消保留容器" : "📌 保留此容器"),
+                "✏️ 重命名容器…",
+                "＋ 在此容器开新标签"
+        };
+        new AlertDialog.Builder(host)
+                .setTitle("容器 · " + containerLabel(containerName))
+                .setItems(items, (d, which) -> {
+                    switch (which) {
+                        case 0: showContainerProxyDialog(containerName); break;
+                        case 1: showContainerProfileDialog(containerName); break;
+                        case 2:
+                            try { containers().setKeep(containerName, !keep); } catch (Throwable ignored) {}
+                            Toast.makeText(ctx, !keep ? "已保留容器" : "已取消保留", Toast.LENGTH_SHORT).show();
+                            break;
+                        case 3: renameContainer(containerName); break;
+                        case 4: newUserTabIn(containerName); break;
+                    }
+                })
+                .setNegativeButton("关闭", null)
+                .show();
     }
 
     private void showFindDialog() {
@@ -8100,6 +8581,10 @@ public final class FloatingApps {
         for (Tab t : tabs) if (t.container != null) used.add(t.container);
         tabs.clear();
         for (String c : used) releaseContainer(c); // 每个标签各 release 一次，与 apply 次数对应
+        if (proxyMgr != null) {
+            proxyMgr.shutdown();
+            proxyMgr = null;
+        }
         if (sInstance == this) sInstance = null;
         if (a != null) {
             try { a.finishAndRemoveTask(); } catch (Throwable ignored) {}

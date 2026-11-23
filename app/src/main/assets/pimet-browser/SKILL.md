@@ -70,7 +70,7 @@ PiMet 内置的「Pi 浏览器」是独立全屏 Android WebView，用户实时�
 | `b.batch(steps, {stopOnError?})` | 一次执行多步，有失败步且未禁用时抛错 |
 | `b.js(fn, ...args)` | 在页面里执行函数（`args` 经 JSON 传入），**禁止直接引用 `run` 外部变量** |
 | `b.tool("站点/工具名", args)` | 调用 `/root/pimet-browser/sites/<站点>/tools/<名>.mjs` |
-| `b.newTab(url, {container, profile})` / `b.containerProfile(opts)` / `b.tab(id)` / `b.closeTab()` / `b.tabs()` | 标签页与容器指纹隔离切换与管理 |
+| `b.newTab(url, {container, profile, proxy, switch_proxy})` / `b.createContainer(opts)` / `b.setContainerProfile(opts)` / `b.containerProfile(opts)` / `b.tab(id)` / `b.closeTab()` / `b.tabs()` | 标签页与容器指纹/代理隔离切换与管理 |
 | `b.back()` / `b.forward()` / `b.reload()` / `b.url()` / `b.screenshot()` / `b.sleep(ms)` / `b.log(...)` | 导航、截图（最多 3 张）、等待、日志 |
 | `b.find(text)` / `b.console(max)` / `b.scripts()` / `b.inject(js, persist?)` / `b.ui.*` / `b.call(action, p)` | 调试、油猴、ui.json 读写与任意 action 透传 |
 
@@ -103,13 +103,15 @@ return await b.extract(".result-item", { title: "h3", url: "a@href" }, { limit: 
 
 ## 容器、指纹隔离、标签、历史与工具规范
 
-- **容器登录态与指纹隔离（防风控）**：
+- **容器登录态、指纹隔离与单活代理（防风控防串线）**：
   - `tab_new` 默认 `container: "new"`（独立 Cookie/Storage 与独立 `auto` 设备指纹，自动去除 `; wv`、`X-Requested-With` 与全局 `window.PiMet*` 桥暴露）。
-  - 需要特定国家/地区环境时，在建标签时直接传入 `profile`（推荐建前就定好环境，避免旧会话污染）：
-    - 例：`tab_new(url, container: "new", profile: "ca-en")`（`ca-en` / `us-en` / `us-west` / `uk-en` / `au-en` / `jp-ja` / `cn-zh` / `auto` / `native`），或对象 `{preset, timezone, locale, languages, device, desktop, seed, webrtc}`。
-    - `run` 里可用 `await b.newTab(url, { profile: "ca-en" })`。
-  - 查询/修改现有容器环境用 `container_profile {name?, profile?, randomize?, reload?}`（或 `b.containerProfile(...)`）；若容器已有打开页面，改完环境会返回 `warning`，防风控场景强烈建议直接 `tab_new` 新建容器。
-  - `Default` 容器始终为 `native`（不伪装，保持原有登录态）；需要复用用户当前标签登录态时用 `container: "same"`；用 `container_keep {name, keep: true}` 保留容器（先征得用户同意）。
+  - 需要特定国家/地区环境与代理时，建议建容器/建标签时一次性配好：
+    - 例：`tab_new(url, container: "new", profile: "ca-en", proxy: "socks5://user:pass@1.2.3.4:1080")` 或对象 `{type:"socks5", host, port, username, password, upstream:"http://127.0.0.1:7890"}`（传 `null` 或 `"direct"` 清除代理）。
+    - 也可先 `create_container {profile, proxy, label?, keep?}` 创建容器，再在其中 `tab_new(url, container: name)`。
+    - `run` 里可用 `await b.newTab(url, { profile: "ca-en", proxy: "http://127.0.0.1:7890" })`、`await b.createContainer(...)`、`await b.setContainerProfile(...)`。
+  - 查询/修改现有容器环境或代理用 `container_profile` / `set_container_profile {name?, profile?, proxy?, randomize?, reload?}`（或 `b.containerProfile(...)`）；若容器已有打开页面，改完环境会返回 `warning`，防风控场景强烈建议直接 `tab_new` 新建容器。
+  - **单活代理防串线**：WebView 进程内同一时刻只能有一个全局代理生效；切换到不同代理容器时会自动更新全局隧道并冻结其余不同代理的标签（`proxyFrozen: true`），页面交互前如需禁止自动切代理可传 `switch_proxy: false`。
+  - `Default` 容器始终为 `native` + 直连（禁止设置隔离或代理）；需要复用用户当前标签登录态时用 `container: "same"`；用 `container_keep {name, keep: true}` 保留容器（先征得用户同意）。
 - **不打断用户**：不传 `tab` 时只操作 Pi 标签；仅当用户明确要求操作当前页才传 `tab: "user"`；不要擅自 `show` / `tab_switch`。
 - **历史与下载**：`history {q?, limit?, offset?}` 查最近访问；`downloads` 查下载进度；`history_delete` / `history_clear` / `clear_data` / `script_remove` / `ui_reset` **须先征得用户同意**。
 - **站点工具规范**：文件路径 `/root/pimet-browser/sites/<站点>/tools/<工具名>.mjs`（仅用 `A-Za-z0-9._-`），**第一行写 `// 一句话说明与参数`**，默认导出 `async (b, args) => { ... }`。

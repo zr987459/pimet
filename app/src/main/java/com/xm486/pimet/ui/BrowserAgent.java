@@ -234,7 +234,13 @@ public final class BrowserAgent {
     }
 
     private static String actionOf(JSONObject req) {
-        return req.optString("browser_action", req.optString("op", "snapshot")).trim().toLowerCase();
+        String ba = req.optString("browser_action", "").trim();
+        if (!ba.isEmpty()) return ba.toLowerCase();
+        String op = req.optString("op", "").trim();
+        if (!op.isEmpty()) return op.toLowerCase();
+        String act = req.optString("action", "").trim();
+        if (!act.isEmpty() && !"browser".equalsIgnoreCase(act)) return act.toLowerCase();
+        return "snapshot";
     }
 
     /** 统一补 elapsed_ms；失败时补 url、title */
@@ -295,10 +301,22 @@ public final class BrowserAgent {
                     } catch (Throwable ignored) {}
                     return a;
                 }, 4000);
-                return ok().put("tabs", tj == null ? new JSONArray() : tj).put("result", onMain(win::agentTabsText, 3000));
+                JSONObject res = ok().put("tabs", tj == null ? new JSONArray() : tj).put("result", onMain(win::agentTabsText, 3000));
+                putProxyStatus(win, res, false);
+                return res;
             }
             case "new_tab": {
+                boolean hasExplicitContainer = req.has("container") && !req.optString("container", "").trim().isEmpty();
+                boolean hasProfile = req.has("profile") && !req.isNull("profile");
+                boolean hasProxy = req.has("proxy");
+                if (hasExplicitContainer || hasProfile || hasProxy) {
+                    JSONObject fwd = new JSONObject(req.toString());
+                    if (!hasExplicitContainer) fwd.put("container", "new");
+                    if (!fwd.has("background")) fwd.put("background", true);
+                    return tabNew(win, fwd);
+                }
                 String url = normalize(req.optString("url", ""));
+                boolean switchProxy = req.optBoolean("switch_proxy", true);
                 FloatingApps.Tab t;
                 synchronized (WINDOW_LOCK) {
                     t = onMain(win::agentNewPiTab, 5000);
@@ -306,10 +324,17 @@ public final class BrowserAgent {
                 if (t == null) return err("新建标签失败");
                 CUR.get().tab = t;
                 JSONObject out = ok().put("tab", t.id);
-                if (url.isEmpty()) return out.put("url", t.url).put("result", "已新建 Pi 标签 " + t.id);
+                if (url.isEmpty()) {
+                    putProxyStatus(win, out, false);
+                    return out.put("url", t.url).put("result", "已新建 Pi 标签 " + t.id);
+                }
                 ReentrantLock lk = lockOf(t);
                 acquire(lk, t);
                 try {
+                    boolean proxySwitched = false;
+                    if (!isLocalUrlForProxy(url)) {
+                        proxySwitched = ensureProxyReadyForTab(win, t, switchProxy);
+                    }
                     // 新标签先加载 about:blank，等它落定，免得把它当成目标页面的加载完成
                     long e = SystemClock.uptimeMillis() + 2000;
                     while (SystemClock.uptimeMillis() < e && (t.navSeq == 0 || t.loading || t.finishedSeq != t.navSeq)) sleep(50);
@@ -318,7 +343,11 @@ public final class BrowserAgent {
                     onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
                     boolean loaded = navWait(t, seq, before, softLeft());
                     JSONObject bad = applyNav(out, t, loaded, "已新建 Pi 标签 " + t.id + " 并打开 " + url);
-                    if (bad != null) return bad.put("tab", t.id);
+                    if (bad != null) {
+                        putProxyStatus(win, bad, proxySwitched);
+                        return bad.put("tab", t.id);
+                    }
+                    putProxyStatus(win, out, proxySwitched);
                     return out.put("url", t.url).put("title", t.title);
                 } finally {
                     lk.unlock();
@@ -413,6 +442,11 @@ public final class BrowserAgent {
     private static JSONObject doTab(FloatingApps win, FloatingApps.Tab tab, String action, JSONObject req, int timeout) throws Exception {
         boolean wantSnapshot = req.optBoolean("snapshot", true);
         boolean wantSettle = req.optBoolean("settle", true);
+        boolean switchProxy = req.optBoolean("switch_proxy", true);
+        boolean proxySwitched = false;
+        if (needsProxyGate(action, req)) {
+            proxySwitched = ensureProxyReadyForTab(win, tab, switchProxy);
+        }
         String result;
         JSONObject out = ok();
         switch (action) {
@@ -426,7 +460,10 @@ public final class BrowserAgent {
                 onMain(() -> { win.agentLoad(tab, url); return null; }, 5000);
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, "已打开 " + url);
-                if (bad != null) return bad;
+                if (bad != null) {
+                    if (proxySwitched) putProxyStatus(win, bad, true);
+                    return bad;
+                }
                 result = null;
                 break;
             }
@@ -436,7 +473,10 @@ public final class BrowserAgent {
                 onMain(() -> { win.agentHome(tab); return null; }, 5000);
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, "已回到首页");
-                if (bad != null) return bad;
+                if (bad != null) {
+                    if (proxySwitched) putProxyStatus(win, bad, true);
+                    return bad;
+                }
                 result = null;
                 break;
             }
@@ -459,7 +499,10 @@ public final class BrowserAgent {
                 }, 5000);
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, action.equals("back") ? "已后退" : action.equals("forward") ? "已前进" : "已刷新");
-                if (bad != null) return bad;
+                if (bad != null) {
+                    if (proxySwitched) putProxyStatus(win, bad, true);
+                    return bad;
+                }
                 result = null;
                 break;
             }
@@ -626,7 +669,11 @@ public final class BrowserAgent {
                 String cont = onMain(() -> win.containerOf(tab), 3000);
                 ContainerEnv.Profile ep = onMain(() -> tab.envProfile, 3000);
                 out.put("container", nz(cont)).put("containers_supported", csup)
-                        .put("profile", ContainerEnv.toSummaryJson(ep));
+                        .put("profile", ContainerEnv.toSummaryJson(ep))
+                        .put("proxyFrozen", tab.proxyFrozen)
+                        .put("proxySignature", nz(tab.proxySignature))
+                        .put("proxySummary", nz(tab.proxySummary));
+                putProxyStatus(win, out, false);
                 try {
                     BrowserCustomizer cz = cust(win);
                     JSONObject cfg = cz.config();
@@ -688,6 +735,9 @@ public final class BrowserAgent {
         }
 
         if (result != null) out.put("result", result);
+        if (proxySwitched) {
+            putProxyStatus(win, out, true);
+        }
         if (wantSnapshot) {
             JSONObject snap = snapshot(tab, req.optInt("max_chars", action.equals("snapshot") ? 12000 : 6000), scopeOf(req));
             out.put("url", snap.optString("url", tab.url));
@@ -1530,6 +1580,9 @@ public final class BrowserAgent {
             case "tab_new":
             case "tab_open":
                 return tabNew(win, req);
+            case "create_container":
+            case "container_create":
+                return createContainer(win, req);
             case "containers": {
                 JSONArray a = onMain(() -> win.containers() == null ? new JSONArray() : win.containers().list(), 3000);
                 if (a == null) a = new JSONArray();
@@ -1546,8 +1599,10 @@ public final class BrowserAgent {
                     }
                     c.put("tabs", cnt);
                 }
-                return ok().put("containers", a).put("supported", ContainerManager.supported())
+                JSONObject res = ok().put("containers", a).put("supported", ContainerManager.supported())
                         .put("result", ContainerManager.supported() ? "共 " + a.length() + " 个容器" : "系统 WebView 不支持多容器，所有标签共享登录");
+                putProxyStatus(win, res, false);
+                return res;
             }
             case "container_keep": {
                 String name = req.optString("name", "").trim();
@@ -1567,6 +1622,7 @@ public final class BrowserAgent {
                 return ok().put("name", name).put("label", label).put("result", "已把容器 " + name + " 改名为「" + label + "」");
             }
             case "container_profile":
+            case "set_container_profile":
                 return containerProfile(win, req);
             case "history": {
                 HistoryStore h = onMain(win::history, 3000);
@@ -1828,7 +1884,187 @@ public final class BrowserAgent {
         return a == null ? 0 : a.length();
     }
 
-    /** container_profile {name?, profile?, randomize?, reload?} */
+    private static boolean isLocalUrlForProxy(String url) {
+        if (url == null || url.isEmpty()) return true;
+        if (url.startsWith("file://") || url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:")) {
+            return true;
+        }
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            try {
+                return ContainerProxyManager.isLoopbackHost(android.net.Uri.parse(url).getHost());
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
+    private static boolean needsProxyGate(String action, JSONObject req) {
+        switch (action) {
+            case "open":
+            case "navigate":
+            case "goto":
+                return !isLocalUrlForProxy(normalize(req.optString("url", "")));
+            case "reload":
+            case "home":
+            case "back":
+            case "forward":
+            case "click":
+            case "tap":
+            case "type":
+            case "fill":
+            case "press":
+            case "key":
+            case "eval":
+            case "js":
+            case "batch":
+            case "wait_for":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static Object mergeProfileAndProxy(JSONObject req) throws Exception {
+        boolean hasProfile = req.has("profile") && !req.isNull("profile");
+        boolean hasProxy = req.has("proxy");
+        if (!hasProfile && !hasProxy) return null;
+        if (!hasProxy) return req.opt("profile");
+
+        Object proxyVal = req.opt("proxy");
+        if (proxyVal == null) proxyVal = JSONObject.NULL;
+
+        if (!hasProfile) {
+            return new JSONObject().put("proxy", proxyVal);
+        }
+        Object profVal = req.opt("profile");
+        if (profVal instanceof JSONObject) {
+            JSONObject merged = new JSONObject(profVal.toString());
+            merged.put("proxy", proxyVal);
+            return merged;
+        }
+        if (profVal instanceof String) {
+            String ps = ((String) profVal).trim();
+            JSONObject merged = new JSONObject();
+            if (!ps.isEmpty()) merged.put("preset", ps);
+            merged.put("proxy", proxyVal);
+            return merged;
+        }
+        throw new IllegalArgumentException("profile 必须是预设名字符串或 JSON 对象");
+    }
+
+    /** 在后台线程等待容器代理切换到与 tab 一致；绝不在主线程调用 */
+    private static boolean ensureProxyReadyForTab(FloatingApps win, FloatingApps.Tab tab, boolean switchProxy) throws Exception {
+        if (win == null || tab == null || tab.closed) return false;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            throw new IllegalStateException("ensureProxyReadyForTab 严禁在主线程阻塞等待");
+        }
+        ContainerProxyManager pm = onMain(win::proxyManager, 3000);
+        if (pm == null) return false;
+        String tabSig = onMain(() -> {
+            ContainerEnv.Profile ep = win.containers().getProfile(tab.container);
+            tab.envProfile = ep;
+            tab.proxySignature = ep != null ? ep.proxySignature() : "DIRECT";
+            tab.proxySummary = (ep != null && ep.hasActiveProxy()) ? ep.proxy.summary() : "直连";
+            return tab.proxySignature;
+        }, 3000);
+        if (tabSig == null || tabSig.isEmpty()) tabSig = "DIRECT";
+
+        if (!pm.isSwitching() && pm.matchesActive(tabSig)) {
+            return false;
+        }
+        if (!switchProxy) {
+            throw new AbortException("标签 " + tab.id + " 代理(" + tab.proxySummary + ")与当前全局代理(" + pm.getActiveSummary()
+                    + ")不一致，且 switch_proxy=false，已阻止访问以防串线");
+        }
+        if (!"DIRECT".equals(tabSig) && !pm.isProxySupported()) {
+            throw new AbortException("当前系统 WebView 不支持 ProxyController (PROXY_OVERRIDE)，无法启用容器代理");
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        MAIN.post(() -> {
+            if (tab.closed) {
+                latch.countDown();
+                return;
+            }
+            win.ensureTabProxyAsync(tab, latch::countDown);
+        });
+
+        long waitMs = Math.min(12_000L, Math.max(1500L, hardLeft()));
+        long end = SystemClock.uptimeMillis() + waitMs;
+        while (!latch.await(100, TimeUnit.MILLISECONDS)) {
+            checkStop();
+            if (SystemClock.uptimeMillis() >= end) {
+                throw new AbortException("切换容器代理超时");
+            }
+        }
+        checkStop();
+        String errMsg = pm.getLastError();
+        if (errMsg != null && !errMsg.isEmpty() && !pm.matchesActive(tabSig)) {
+            throw new AbortException(errMsg);
+        }
+        if (!pm.matchesActive(tabSig)) {
+            throw new AbortException("容器代理未能就绪（当前：" + pm.getActiveSummary() + "，期望：" + tab.proxySummary + "）");
+        }
+        return true;
+    }
+
+    private static void putProxyStatus(FloatingApps win, JSONObject out, boolean proxySwitched) {
+        try {
+            ContainerProxyManager pm = onMain(win::proxyManager, 3000);
+            if (pm != null) {
+                JSONObject st = pm.statusJson(win);
+                out.put("proxySupported", st.optBoolean("proxySupported", false));
+                JSONObject ap = st.optJSONObject("activeProxy");
+                if (ap != null) {
+                    out.put("activeProxy", ap);
+                    out.put("frozenTabs", ap.optInt("frozenTabs", 0));
+                }
+            }
+            if (proxySwitched) out.put("proxySwitched", true);
+        } catch (Throwable ignored) {}
+    }
+
+    /** create_container {profile?, proxy?, label?, keep?} */
+    private static JSONObject createContainer(FloatingApps win, JSONObject req) throws Exception {
+        if (!ContainerManager.supported()) {
+            return err("系统 WebView 不支持多容器（MULTI_PROFILE）");
+        }
+        final Object mergedSpec;
+        try {
+            mergedSpec = mergeProfileAndProxy(req);
+            if (mergedSpec != null) {
+                ContainerEnv.fromSpec(mergedSpec, ContainerEnv.createAuto());
+            }
+        } catch (IllegalArgumentException iae) {
+            return err(iae.getMessage());
+        }
+        final String label = req.has("label") && !req.isNull("label") ? req.optString("label", "").trim() : null;
+        final Boolean keep = req.has("keep") && !req.isNull("keep") ? req.optBoolean("keep", false) : null;
+
+        Object[] created = onMain(() -> {
+            ContainerManager cm = win.containers();
+            String name = cm.newContainer(mergedSpec, label, keep);
+            ContainerEnv.Profile ep = cm.getProfile(name);
+            JSONObject meta = cm.meta(name);
+            return new Object[]{name, ep, meta};
+        }, 4000);
+
+        String name = (String) created[0];
+        ContainerEnv.Profile ep = (ContainerEnv.Profile) created[1];
+        JSONObject meta = (JSONObject) created[2];
+        String actualLabel = meta != null ? meta.optString("label", name) : name;
+        boolean actualKeep = meta != null && meta.optBoolean("keep", false);
+        JSONObject out = ok()
+                .put("name", name)
+                .put("label", actualLabel)
+                .put("keep", actualKeep)
+                .put("profile", ContainerEnv.toSummaryJson(ep))
+                .put("result", "已创建容器 " + name + "（" + actualLabel + " · " + ContainerEnv.summary(ep)
+                        + " · 代理：" + (ep.hasActiveProxy() ? ep.proxy.summary() : "直连") + "）");
+        putProxyStatus(win, out, false);
+        return out;
+    }
+
+    /** container_profile / set_container_profile {name?, profile?, proxy?, randomize?, reload?} */
     private static JSONObject containerProfile(FloatingApps win, JSONObject req) throws Exception {
         String name = req.optString("name", "").trim();
         if (name.isEmpty()) {
@@ -1841,24 +2077,39 @@ public final class BrowserAgent {
         }
         final String targetName = name;
         boolean randomize = req.optBoolean("randomize", false);
+        boolean hasProxy = req.has("proxy");
         boolean hasProfile = req.has("profile") && !req.isNull("profile");
         boolean reload = req.optBoolean("reload", false);
 
-        if (!hasProfile && !randomize) {
+        if (!hasProfile && !hasProxy && !randomize) {
             ContainerEnv.Profile cur = onMain(() -> win.containers().getProfile(targetName), 3000);
-            return ok().put("name", targetName)
+            JSONObject out = ok().put("name", targetName)
                     .put("profile", ContainerEnv.toSummaryJson(cur))
-                    .put("result", "容器 " + targetName + " 当前环境：" + ContainerEnv.summary(cur));
+                    .put("result", "容器 " + targetName + " 当前环境：" + ContainerEnv.summary(cur)
+                            + " · 代理：" + (cur.hasActiveProxy() ? cur.proxy.summary() : "直连"));
+            putProxyStatus(win, out, false);
+            return out;
         }
 
-        final Object profileSpec = hasProfile ? req.opt("profile") : null;
+        final Object mergedSpec;
+        try {
+            mergedSpec = mergeProfileAndProxy(req);
+        } catch (IllegalArgumentException iae) {
+            return err(iae.getMessage());
+        }
         ContainerEnv.Profile next;
         int affected;
         try {
             Object[] res = onMain(() -> {
                 ContainerManager cm = win.containers();
-                ContainerEnv.Profile np = randomize ? cm.randomizeProfile(targetName) : cm.setProfile(targetName, profileSpec);
-                int cnt = win.applyContainerEnvForContainer(targetName, reload);
+                ContainerEnv.Profile np;
+                if (randomize) {
+                    np = cm.randomizeProfile(targetName);
+                    if (mergedSpec != null) np = cm.setProfile(targetName, mergedSpec);
+                } else {
+                    np = cm.setProfile(targetName, mergedSpec);
+                }
+                int cnt = win.applyContainerEnvForContainer(targetName, false);
                 return new Object[]{np, cnt};
             }, 5000);
             next = (ContainerEnv.Profile) res[0];
@@ -1867,28 +2118,83 @@ public final class BrowserAgent {
             return err(iae.getMessage());
         }
 
+        boolean proxySwitched = false;
+        ContainerProxyManager pm = onMain(win::proxyManager, 3000);
+        if (pm != null && (targetName.equals(pm.getActiveContainer())
+                || onMain(() -> win.active != null && targetName.equals(win.active.container), 2000))) {
+            if (next.hasActiveProxy() && !pm.isProxySupported()) {
+                return err("当前系统 WebView 不支持 ProxyController (PROXY_OVERRIDE)，无法启用容器代理");
+            }
+            String targetSig = next.proxySignature();
+            if (!pm.matchesActive(targetSig) || pm.isSwitching()) {
+                CountDownLatch latch = new CountDownLatch(1);
+                String targetLabel = onMain(() -> {
+                    JSONObject m = win.containers().meta(targetName);
+                    return m != null ? m.optString("label", targetName) : targetName;
+                }, 2000);
+                MAIN.post(() -> pm.applyForContainer(targetName, targetLabel, next, win.tabs(), latch::countDown));
+                long waitMs = Math.min(12_000L, Math.max(1500L, hardLeft()));
+                long end = SystemClock.uptimeMillis() + waitMs;
+                while (!latch.await(100, TimeUnit.MILLISECONDS)) {
+                    checkStop();
+                    if (SystemClock.uptimeMillis() >= end) {
+                        return err("切换容器代理超时");
+                    }
+                }
+                checkStop();
+                String errMsg = pm.getLastError();
+                if (errMsg != null && !errMsg.isEmpty() && !pm.matchesActive(targetSig)) {
+                    return err(errMsg);
+                }
+                if (!pm.matchesActive(targetSig)) {
+                    return err("容器代理未能就绪（当前：" + pm.getActiveSummary() + "，期望："
+                            + (next.hasActiveProxy() ? next.proxy.summary() : "直连") + "）");
+                }
+                proxySwitched = true;
+            }
+        }
+        if (reload && affected > 0) {
+            onMain(() -> {
+                for (FloatingApps.Tab t : new ArrayList<>(win.tabs())) {
+                    if (t != null && !t.closed && t.web != null && targetName.equals(t.container)) {
+                        String u = t.url;
+                        if (u != null && !u.isEmpty() && !u.startsWith("about:")) t.web.reload();
+                    }
+                }
+                return null;
+            }, 3000);
+        }
+
         JSONObject out = ok().put("name", targetName)
                 .put("profile", ContainerEnv.toSummaryJson(next))
                 .put("reloaded", reload)
                 .put("tabs_affected", affected)
                 .put("result", "已更新容器 " + targetName + " 环境为：" + ContainerEnv.summary(next)
+                        + " · 代理：" + (next.hasActiveProxy() ? next.proxy.summary() : "直连")
                         + (reload && affected > 0 ? "（已刷新 " + affected + " 个标签）" : ""));
+        putProxyStatus(win, out, proxySwitched);
         if (affected > 0) {
             out.put("warning", "容器 " + targetName + " 已有 " + affected + " 个打开的标签，旧页面会话/Cookie 可能残留；防风控建议用 tab_new(container:\"new\", profile:...) 新建容器");
         }
         return out;
     }
 
-    /** tab_new {url?, container?:"new"|"same"|"Default"|<name>, profile?, background?}；默认 container=new、background=true（Pi 在自己的后台标签里干活） */
+    /** tab_new {url?, container?:"new"|"same"|"Default"|<name>, profile?, proxy?, switch_proxy?, background?}；默认 container=new、background=true */
     private static JSONObject tabNew(FloatingApps win, JSONObject req) throws Exception {
         String url = normalize(req.optString("url", ""));
         String container = req.optString("container", "new").trim();
         if (container.isEmpty()) container = "new";
         boolean background = req.optBoolean("background", true);
-        boolean hasProfile = req.has("profile") && !req.isNull("profile");
-        final Object profileSpec = hasProfile ? req.opt("profile") : null;
+        boolean switchProxy = req.optBoolean("switch_proxy", true);
+        final Object profileSpec;
+        try {
+            profileSpec = mergeProfileAndProxy(req);
+        } catch (IllegalArgumentException iae) {
+            return err(iae.getMessage());
+        }
+        boolean hasProfileSpec = profileSpec != null;
 
-        if (hasProfile) {
+        if (hasProfileSpec) {
             try {
                 ContainerEnv.fromSpec(profileSpec, ContainerEnv.createAuto());
             } catch (IllegalArgumentException iae) {
@@ -1901,7 +2207,7 @@ public final class BrowserAgent {
             return err("没有容器 " + spec + "，用 containers 查看（新容器用 container:\"new\"）");
         }
 
-        if (hasProfile) {
+        if (hasProfileSpec) {
             String targetCont;
             if (spec == null) {
                 if (ContainerManager.supported()) {
@@ -1918,8 +2224,8 @@ public final class BrowserAgent {
             }
             if (ContainerManager.DEFAULT.equalsIgnoreCase(targetCont)) {
                 ContainerEnv.Profile reqProf = ContainerEnv.fromSpec(profileSpec, ContainerEnv.NATIVE);
-                if (reqProf.isIsolated()) {
-                    return err("Default 共享容器始终为 native，禁止设置隔离 profile");
+                if (reqProf.isIsolated() || reqProf.hasActiveProxy()) {
+                    return err("Default 共享容器始终为直连，禁止配置代理或隔离 profile");
                 }
             } else if (spec != null) {
                 try {
@@ -1949,11 +2255,16 @@ public final class BrowserAgent {
         ContainerEnv.Profile ep = onMain(() -> t.envProfile, 3000);
         JSONObject out = ok().put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
         if (url.isEmpty()) {
+            putProxyStatus(win, out, false);
             return out.put("url", nz(t.url)).put("result", "已新建标签 " + t.id + "（容器 " + nz(cont) + " · " + ContainerEnv.summary(ep) + "）");
         }
         ReentrantLock lk = lockOf(t);
         acquire(lk, t);
         try {
+            boolean proxySwitched = false;
+            if (!isLocalUrlForProxy(url)) {
+                proxySwitched = ensureProxyReadyForTab(win, t, switchProxy);
+            }
             long e = SystemClock.uptimeMillis() + 2000;
             while (SystemClock.uptimeMillis() < e && (t.navSeq == 0 || t.loading || t.finishedSeq != t.navSeq)) sleep(50);
             int seq = t.navSeq;
@@ -1961,7 +2272,11 @@ public final class BrowserAgent {
             onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
             boolean loaded = navWait(t, seq, before, softLeft());
             JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + "（" + ContainerEnv.summary(ep) + "）新建标签 " + t.id + " 并打开 " + url);
-            if (bad != null) return bad.put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
+            if (bad != null) {
+                putProxyStatus(win, bad, proxySwitched);
+                return bad.put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
+            }
+            putProxyStatus(win, out, proxySwitched);
             return out.put("url", nz(t.url)).put("title", nz(t.title));
         } finally {
             lk.unlock();

@@ -14,6 +14,8 @@ import androidx.webkit.WebViewFeature;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -115,6 +117,151 @@ public final class ContainerEnv {
         }
     }
 
+    /** 代理端点（不可变，用于前置上游 upstream 或基础端点表示） */
+    public static final class ProxyEndpoint {
+        public final String type;
+        public final String host;
+        public final int port;
+        public final String username;
+        public final String password;
+
+        public ProxyEndpoint(String type, String host, int port, String username, String password) {
+            this.type = normalizeProxyType(type);
+            this.host = host == null ? "" : host.trim();
+            this.port = port;
+            this.username = username == null ? "" : username;
+            this.password = password == null ? "" : password;
+        }
+
+        public boolean isValid() {
+            return !host.isEmpty() && port >= 1 && port <= 65535;
+        }
+
+        public boolean hasAuth() {
+            return !username.isEmpty() || !password.isEmpty();
+        }
+
+        public String credentialHash() {
+            return hasAuth() ? sha256Hex(username + "\u0000" + password) : "";
+        }
+
+        public String endpointDisplay() {
+            if (!isValid()) return "";
+            return type + "://" + formatProxyHost(host) + ":" + port;
+        }
+
+        String canonicalString() {
+            return type + "|" + host.toLowerCase(Locale.ROOT) + "|" + port + "|" + credentialHash();
+        }
+
+        public JSONObject toSummaryJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("type", type);
+                o.put("host", host);
+                o.put("port", port);
+                o.put("hasAuth", hasAuth());
+                o.put("summary", endpointDisplay());
+            } catch (Exception ignored) {}
+            return o;
+        }
+
+        public JSONObject toStorageJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("type", type);
+                o.put("host", host);
+                o.put("port", port);
+                if (!username.isEmpty()) o.put("username", username);
+                if (!password.isEmpty()) o.put("password", password);
+            } catch (Exception ignored) {}
+            return o;
+        }
+    }
+
+    /** 容器代理配置（不可变） */
+    public static final class ProxySpec {
+        public final boolean enabled;
+        public final String type;
+        public final String host;
+        public final int port;
+        public final String username;
+        public final String password;
+        public final ProxyEndpoint upstream;
+
+        public ProxySpec(boolean enabled, String type, String host, int port,
+                         String username, String password, ProxyEndpoint upstream) {
+            this.enabled = enabled;
+            this.type = normalizeProxyType(type);
+            this.host = host == null ? "" : host.trim();
+            this.port = port;
+            this.username = username == null ? "" : username;
+            this.password = password == null ? "" : password;
+            this.upstream = upstream;
+        }
+
+        public boolean hasAuth() {
+            return !username.isEmpty() || !password.isEmpty();
+        }
+
+        public String credentialHash() {
+            return hasAuth() ? sha256Hex(username + "\u0000" + password) : "";
+        }
+
+        public boolean isActive() {
+            return enabled && !host.isEmpty() && port >= 1 && port <= 65535;
+        }
+
+        public String signature() {
+            if (!isActive()) return "DIRECT";
+            String canonical = type + "|" + host.toLowerCase(Locale.ROOT) + "|" + port + "|"
+                    + credentialHash() + "|" + (upstream != null ? upstream.canonicalString() : "");
+            return "PROXY:" + sha256Hex(canonical);
+        }
+
+        public String summary() {
+            if (!isActive()) return "直连";
+            String base = type + "://" + formatProxyHost(host) + ":" + port;
+            if (upstream != null && upstream.isValid()) {
+                return base + " via " + upstream.endpointDisplay();
+            }
+            return base;
+        }
+
+        public JSONObject toSummaryJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("enabled", enabled);
+                o.put("type", type);
+                o.put("host", host);
+                o.put("port", port);
+                o.put("hasAuth", hasAuth());
+                o.put("summary", summary());
+                o.put("signature", signature());
+                if (upstream != null) {
+                    o.put("upstream", upstream.toSummaryJson());
+                }
+            } catch (Exception ignored) {}
+            return o;
+        }
+
+        public JSONObject toStorageJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("enabled", enabled);
+                o.put("type", type);
+                o.put("host", host);
+                o.put("port", port);
+                if (!username.isEmpty()) o.put("username", username);
+                if (!password.isEmpty()) o.put("password", password);
+                if (upstream != null) {
+                    o.put("upstream", upstream.toStorageJson());
+                }
+            } catch (Exception ignored) {}
+            return o;
+        }
+    }
+
     /** 容器环境配置（不可变） */
     public static final class Profile {
         public final String preset;
@@ -126,9 +273,16 @@ public final class ContainerEnv {
         public final boolean desktop;
         public final long seed;
         public final String webrtc;
+        public final ProxySpec proxy;
 
         public Profile(String preset, String timezone, String locale, List<String> languages,
                        String acceptLanguage, String device, boolean desktop, long seed, String webrtc) {
+            this(preset, timezone, locale, languages, acceptLanguage, device, desktop, seed, webrtc, null);
+        }
+
+        public Profile(String preset, String timezone, String locale, List<String> languages,
+                       String acceptLanguage, String device, boolean desktop, long seed, String webrtc,
+                       ProxySpec proxy) {
             this.preset = preset == null || preset.isEmpty() ? PRESET_NATIVE : preset;
             this.timezone = timezone == null ? "" : timezone;
             this.locale = locale == null ? "" : locale;
@@ -140,15 +294,24 @@ public final class ContainerEnv {
             this.webrtc = webrtc == null || webrtc.isEmpty()
                     ? (PRESET_NATIVE.equals(this.preset) ? WEBRTC_NATIVE : WEBRTC_SANITIZE)
                     : webrtc;
+            this.proxy = proxy;
         }
 
         public boolean isIsolated() {
             return !PRESET_NATIVE.equals(preset);
         }
+
+        public boolean hasActiveProxy() {
+            return proxy != null && proxy.isActive();
+        }
+
+        public String proxySignature() {
+            return proxy != null ? proxy.signature() : "DIRECT";
+        }
     }
 
     public static final Profile NATIVE = new Profile(
-            PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE
+            PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, null
     );
 
     public static final DeviceSpec[] MOBILE_DEVICES = {
@@ -287,10 +450,11 @@ public final class ContainerEnv {
     }
 
     public static Profile randomize(Profile base) {
+        ProxySpec proxy = base != null ? base.proxy : null;
         Profile b = (base == null || !base.isIsolated()) ? createAuto() : base;
         return new Profile(
                 b.preset, b.timezone, b.locale, b.languages, b.acceptLanguage,
-                randomMobileDevice().id, b.desktop, nextSeed(), b.webrtc
+                randomMobileDevice().id, b.desktop, nextSeed(), b.webrtc, proxy
         );
     }
 
@@ -327,6 +491,229 @@ public final class ContainerEnv {
         return MOBILE_DEVICES[idx];
     }
 
+    private static String normalizeProxyType(String raw) {
+        String t = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if (t.isEmpty() || "http".equals(t)) return "http";
+        if ("socks5".equals(t) || "socks5h".equals(t)) return "socks5";
+        throw new IllegalArgumentException("不支持的代理类型「" + sanitizeProxyInput(raw) + "」，仅支持 http 或 socks5");
+    }
+
+    static String sanitizeProxyInput(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        int schemeIdx = s.indexOf("://");
+        String prefix = "";
+        String rest = s;
+        if (schemeIdx >= 0) {
+            prefix = s.substring(0, schemeIdx + 3);
+            rest = s.substring(schemeIdx + 3);
+        }
+        int atIdx = rest.lastIndexOf('@');
+        if (atIdx >= 0) {
+            return prefix + "***@" + rest.substring(atIdx + 1);
+        }
+        return s;
+    }
+
+    private static String safeProxyObjectSummary(JSONObject o) {
+        if (o == null) return "";
+        String type = sanitizeProxyInput(o.optString("type", "http"));
+        String host = o.isNull("host") ? "" : sanitizeProxyInput(o.optString("host", "").trim());
+        int port = o.optInt("port", 0);
+        return "type=" + type + ", host=" + host + ", port=" + port;
+    }
+
+    private static String formatProxyHost(String host) {
+        if (host == null) return "";
+        if (host.contains(":") && !host.startsWith("[")) return "[" + host + "]";
+        return host;
+    }
+
+    private static String sha256Hex(String input) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-256").digest((input == null ? "" : input).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(d.length * 2);
+            for (byte b : d) sb.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    /** 容错百分号解码：保留字面 '+' 与非法 '%'，仅将合法 %XX UTF-8 序列还原 */
+    private static String percentDecodeLenient(String raw) {
+        if (raw == null || raw.indexOf('%') < 0) return raw == null ? "" : raw;
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        byte[] out = new byte[bytes.length];
+        int o = 0;
+        for (int i = 0; i < bytes.length; i++) {
+            if (bytes[i] == '%' && i + 2 < bytes.length) {
+                int hi = Character.digit((char) (bytes[i + 1] & 0xFF), 16);
+                int lo = Character.digit((char) (bytes[i + 2] & 0xFF), 16);
+                if (hi >= 0 && lo >= 0) {
+                    out[o++] = (byte) ((hi << 4) | lo);
+                    i += 2;
+                    continue;
+                }
+            }
+            out[o++] = bytes[i];
+        }
+        return new String(out, 0, o, StandardCharsets.UTF_8);
+    }
+
+    private static ProxyEndpoint parseProxyString(String raw) {
+        String s = raw == null ? "" : raw.trim();
+        if (s.isEmpty() || "direct".equalsIgnoreCase(s) || "none".equalsIgnoreCase(s)) return null;
+        String safeRaw = sanitizeProxyInput(s);
+        String type = "http";
+        String rest = s;
+        int schemeIdx = s.indexOf("://");
+        if (schemeIdx >= 0) {
+            type = normalizeProxyType(s.substring(0, schemeIdx));
+            rest = s.substring(schemeIdx + 3);
+        }
+        if (rest.isEmpty()) throw new IllegalArgumentException("代理地址不能为空: " + safeRaw);
+
+        String user = "";
+        String pass = "";
+        String hostPort = rest;
+        int atIdx = rest.lastIndexOf('@');
+        if (atIdx >= 0) {
+            String userInfo = rest.substring(0, atIdx);
+            hostPort = rest.substring(atIdx + 1);
+            int colonIdx = userInfo.indexOf(':');
+            if (colonIdx >= 0) {
+                user = percentDecodeLenient(userInfo.substring(0, colonIdx));
+                pass = percentDecodeLenient(userInfo.substring(colonIdx + 1));
+            } else {
+                user = percentDecodeLenient(userInfo);
+            }
+        }
+        while (hostPort.endsWith("/")) {
+            hostPort = hostPort.substring(0, hostPort.length() - 1);
+        }
+        int slashIdx = hostPort.indexOf('/');
+        if (slashIdx >= 0) {
+            throw new IllegalArgumentException("代理地址不能包含路径: " + safeRaw);
+        }
+        if (hostPort.isEmpty()) throw new IllegalArgumentException("代理缺少主机与端口: " + safeRaw);
+
+        String host;
+        int port;
+        if (hostPort.startsWith("[")) {
+            int close = hostPort.indexOf(']');
+            if (close <= 1) throw new IllegalArgumentException("无效 IPv6 代理地址: " + safeRaw);
+            host = hostPort.substring(1, close).trim();
+            String tail = hostPort.substring(close + 1).trim();
+            if (!tail.startsWith(":") || tail.length() <= 1) {
+                throw new IllegalArgumentException("代理缺少端口: " + safeRaw);
+            }
+            port = parseProxyPort(tail.substring(1).trim(), safeRaw);
+        } else {
+            int firstColon = hostPort.indexOf(':');
+            int lastColon = hostPort.lastIndexOf(':');
+            if (firstColon != lastColon) {
+                throw new IllegalArgumentException("IPv6 代理主机请用方括号括起，如 [::1]:1080: " + safeRaw);
+            }
+            if (lastColon <= 0 || lastColon == hostPort.length() - 1) {
+                throw new IllegalArgumentException("代理格式应为 host:port: " + safeRaw);
+            }
+            host = hostPort.substring(0, lastColon).trim();
+            port = parseProxyPort(hostPort.substring(lastColon + 1).trim(), safeRaw);
+        }
+        validateProxyHost(host, safeRaw);
+        return new ProxyEndpoint(type, host, port, user, pass);
+    }
+
+    private static int parseProxyPort(String s, String safeRaw) {
+        int port;
+        try {
+            port = Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("无效代理端口: " + sanitizeProxyInput(safeRaw));
+        }
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("代理端口超出范围 (1..65535): " + port);
+        }
+        return port;
+    }
+
+    private static void validateProxyHost(String host, String safeRaw) {
+        if (host == null || host.isEmpty()) {
+            throw new IllegalArgumentException("代理主机不能为空: " + sanitizeProxyInput(safeRaw));
+        }
+        for (int i = 0; i < host.length(); i++) {
+            char c = host.charAt(i);
+            if (c <= ' ' || c == '/' || c == '\\' || c == '@') {
+                throw new IllegalArgumentException("代理主机包含非法字符: " + sanitizeProxyInput(host));
+            }
+        }
+    }
+
+    public static ProxyEndpoint parseProxyEndpoint(Object spec) {
+        if (spec == null || spec == JSONObject.NULL) return null;
+        if (spec instanceof String) {
+            return parseProxyString((String) spec);
+        }
+        if (!(spec instanceof JSONObject)) {
+            throw new IllegalArgumentException("upstream 必须是代理字符串或 JSON 对象");
+        }
+        JSONObject o = (JSONObject) spec;
+        String type = normalizeProxyType(o.optString("type", "http"));
+        String host = o.isNull("host") ? "" : o.optString("host", "").trim();
+        if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
+            host = host.substring(1, host.length() - 1).trim();
+        }
+        validateProxyHost(host, safeProxyObjectSummary(o));
+        int port = o.optInt("port", 0);
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("upstream 端口必须在 1..65535 之间");
+        }
+        String user = o.has("username") && !o.isNull("username") ? o.optString("username", "") : "";
+        String pass = o.has("password") && !o.isNull("password") ? o.optString("password", "") : "";
+        return new ProxyEndpoint(type, host, port, user, pass);
+    }
+
+    public static ProxySpec parseProxySpec(Object spec) {
+        if (spec == null || spec == JSONObject.NULL) return null;
+        if (spec instanceof String) {
+            ProxyEndpoint ep = parseProxyString((String) spec);
+            if (ep == null) return null;
+            return new ProxySpec(true, ep.type, ep.host, ep.port, ep.username, ep.password, null);
+        }
+        if (!(spec instanceof JSONObject)) {
+            throw new IllegalArgumentException("proxy 必须是代理字符串、null 或 JSON 对象");
+        }
+        JSONObject o = (JSONObject) spec;
+        boolean enabled = !o.has("enabled") || o.optBoolean("enabled", true);
+        String type = normalizeProxyType(o.optString("type", "http"));
+        String host = o.isNull("host") ? "" : o.optString("host", "").trim();
+        if (host.startsWith("[") && host.endsWith("]") && host.length() > 2) {
+            host = host.substring(1, host.length() - 1).trim();
+        }
+        int port = o.optInt("port", 0);
+        if (enabled) {
+            validateProxyHost(host, safeProxyObjectSummary(o));
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("代理端口必须在 1..65535 之间");
+            }
+        } else {
+            if (host.isEmpty() && port == 0 && !o.has("upstream")) {
+                return null;
+            }
+            if (!host.isEmpty()) validateProxyHost(host, safeProxyObjectSummary(o));
+            if (port < 0 || port > 65535) {
+                throw new IllegalArgumentException("代理端口必须在 1..65535 之间");
+            }
+        }
+        String user = o.has("username") && !o.isNull("username") ? o.optString("username", "") : "";
+        String pass = o.has("password") && !o.isNull("password") ? o.optString("password", "") : "";
+        ProxyEndpoint upstream = o.has("upstream") && !o.isNull("upstream")
+                ? parseProxyEndpoint(o.opt("upstream"))
+                : null;
+        return new ProxySpec(enabled, type, host, port, user, pass, upstream);
+    }
+
     /** 解析外部输入（预设名字符串 或 JSONObject） */
     public static Profile fromSpec(Object spec, Profile base) {
         if (spec == null || spec == JSONObject.NULL) {
@@ -335,7 +722,10 @@ public final class ContainerEnv {
         if (spec instanceof String) {
             String ps = ((String) spec).trim().toLowerCase(Locale.ROOT);
             if (ps.isEmpty()) return base != null ? base : createAuto();
-            if (PRESET_NATIVE.equals(ps)) return NATIVE;
+            ProxySpec keepProxy = base != null ? base.proxy : null;
+            if (PRESET_NATIVE.equals(ps)) {
+                return keepProxy == null ? NATIVE : new Profile(PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, keepProxy);
+            }
             PresetDef def = PRESETS.get(ps);
             if (def == null) {
                 throw new IllegalArgumentException("未知环境预设「" + spec + "」，可选：" + String.join(", ", PRESETS.keySet()));
@@ -344,15 +734,22 @@ public final class ContainerEnv {
             long seed = (base != null && base.seed != 0L) ? base.seed : nextSeed();
             boolean desktop = base != null && base.desktop;
             String webrtc = (base != null && base.isIsolated()) ? base.webrtc : WEBRTC_SANITIZE;
-            return new Profile(def.id, def.timezone, def.locale, def.languages, def.acceptLanguage, dev, desktop, seed, webrtc);
+            return new Profile(def.id, def.timezone, def.locale, def.languages, def.acceptLanguage, dev, desktop, seed, webrtc, keepProxy);
         }
         if (!(spec instanceof JSONObject)) {
             throw new IllegalArgumentException("profile 必须是预设名字符串或 JSON 对象");
         }
         JSONObject o = (JSONObject) spec;
+        ProxySpec proxy = o.has("proxy") ? parseProxySpec(o.opt("proxy")) : (base != null ? base.proxy : null);
         String presetReq = o.has("preset") && !o.isNull("preset") ? o.optString("preset", "").trim().toLowerCase(Locale.ROOT) : "";
         if (PRESET_NATIVE.equals(presetReq) && !hasAnyOverrideField(o)) {
-            return NATIVE;
+            return proxy == null ? NATIVE : new Profile(PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, proxy);
+        }
+        if (PRESET_NATIVE.equals(presetReq) && !hasFingerprintOverrideField(o)) {
+            return proxy == null ? NATIVE : new Profile(PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, proxy);
+        }
+        if (presetReq.isEmpty() && !hasFingerprintOverrideField(o) && base != null && PRESET_NATIVE.equals(base.preset)) {
+            return proxy == null ? NATIVE : new Profile(PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, proxy);
         }
         Profile seedBase;
         if (!presetReq.isEmpty()) {
@@ -369,7 +766,7 @@ public final class ContainerEnv {
                 long seed = (base != null && base.seed != 0L) ? base.seed : nextSeed();
                 boolean desktop = base != null && base.desktop;
                 String webrtc = (base != null && base.isIsolated()) ? base.webrtc : WEBRTC_SANITIZE;
-                seedBase = new Profile(def.id, def.timezone, def.locale, def.languages, def.acceptLanguage, dev, desktop, seed, webrtc);
+                seedBase = new Profile(def.id, def.timezone, def.locale, def.languages, def.acceptLanguage, dev, desktop, seed, webrtc, proxy);
             }
         } else if (base != null && base.isIsolated()) {
             seedBase = base;
@@ -423,16 +820,20 @@ public final class ContainerEnv {
         }
 
         String finalPreset = !presetReq.isEmpty() ? presetReq : seedBase.preset;
-        if (PRESET_NATIVE.equals(finalPreset) && hasAnyOverrideField(o)) {
+        if (PRESET_NATIVE.equals(finalPreset) && hasFingerprintOverrideField(o)) {
             finalPreset = PRESET_CUSTOM;
         }
-        return new Profile(finalPreset, tz, loc, langs, acceptLang, dev, desktop, seed, webrtc);
+        return new Profile(finalPreset, tz, loc, langs, acceptLang, dev, desktop, seed, webrtc, proxy);
     }
 
-    private static boolean hasAnyOverrideField(JSONObject o) {
+    private static boolean hasFingerprintOverrideField(JSONObject o) {
         return o.has("timezone") || o.has("locale") || o.has("languages")
                 || o.has("acceptLanguage") || o.has("device") || o.has("desktop")
                 || o.has("seed") || o.has("webrtc");
+    }
+
+    private static boolean hasAnyOverrideField(JSONObject o) {
+        return hasFingerprintOverrideField(o) || o.has("proxy");
     }
 
     private static List<String> parseLanguages(Object raw) {
@@ -498,25 +899,50 @@ public final class ContainerEnv {
                 o.put("seed", prof.seed);
                 o.put("webrtc", prof.webrtc);
             }
+            if (prof.proxy != null) {
+                o.put("proxy", prof.proxy.toStorageJson());
+            }
         } catch (Exception ignored) {}
         return o;
     }
 
     public static JSONObject toSummaryJson(Profile p) {
         Profile prof = p == null ? NATIVE : p;
-        JSONObject o = toJson(prof);
+        JSONObject o = new JSONObject();
         try {
+            o.put("preset", prof.preset);
+            if (prof.isIsolated()) {
+                o.put("timezone", prof.timezone);
+                o.put("locale", prof.locale);
+                o.put("languages", new JSONArray(prof.languages));
+                o.put("acceptLanguage", prof.acceptLanguage);
+                o.put("device", prof.device);
+                o.put("desktop", prof.desktop);
+                o.put("seed", prof.seed);
+                o.put("webrtc", prof.webrtc);
+            }
             o.put("isolated", prof.isIsolated());
             o.put("badge", badgeEmoji(prof));
             o.put("summary", summary(prof));
+            o.put("proxy", prof.proxy != null ? prof.proxy.toSummaryJson() : JSONObject.NULL);
+            o.put("proxySignature", prof.proxySignature());
         } catch (Exception ignored) {}
         return o;
     }
 
     public static Profile fromJson(JSONObject o) {
         if (o == null) return NATIVE;
+        ProxySpec proxy = null;
+        if (o.has("proxy") && !o.isNull("proxy")) {
+            try {
+                proxy = parseProxySpec(o.opt("proxy"));
+            } catch (Throwable ignored) {}
+        }
         String preset = o.optString("preset", PRESET_NATIVE).trim().toLowerCase(Locale.ROOT);
-        if (preset.isEmpty() || PRESET_NATIVE.equals(preset)) return NATIVE;
+        if (preset.isEmpty() || PRESET_NATIVE.equals(preset)) {
+            if (proxy == null) return NATIVE;
+            return new Profile(PRESET_NATIVE, "", "", Collections.emptyList(), "", "", false, 0L, WEBRTC_NATIVE, proxy);
+        }
         PresetDef def = PRESETS.get(preset);
         String tz;
         if (o.has("timezone") && !o.isNull("timezone")) {
@@ -537,7 +963,7 @@ public final class ContainerEnv {
         if (!WEBRTC_SANITIZE.equals(webrtc) && !WEBRTC_DISABLED.equals(webrtc) && !WEBRTC_NATIVE.equals(webrtc)) {
             webrtc = WEBRTC_SANITIZE;
         }
-        return new Profile(preset, tz, loc, langs, al, dev, desktop, seed, webrtc);
+        return new Profile(preset, tz, loc, langs, al, dev, desktop, seed, webrtc, proxy);
     }
 
     // ------------------------------------------------------------------ 摘要 / UI

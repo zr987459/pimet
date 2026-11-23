@@ -105,6 +105,11 @@ public final class ContainerManager {
 
     /** 生成 "c&lt;递增数字&gt;"，按 profileSpec（null 时为 auto）固化环境并同步落盘，返回 name。 */
     public String newContainer(Object profileSpec) {
+        return newContainer(profileSpec, null, null);
+    }
+
+    /** 生成 "c&lt;递增数字&gt;"，可选指定 profileSpec、label 与 keep，返回 name。 */
+    public String newContainer(Object profileSpec, String label, Boolean keep) {
         ContainerEnv.Profile envProfile = profileSpec == null
                 ? ContainerEnv.createAuto()
                 : ContainerEnv.fromSpec(profileSpec, ContainerEnv.createAuto());
@@ -118,7 +123,9 @@ public final class ContainerManager {
             String name = "c" + n;
             while (meta.containsKey(name)) name = "c" + (++n);
             noteName(name);
-            JSONObject m = makeMeta("容器 " + n, COLORS[(n - 1) % COLORS.length], false);
+            String finalLabel = (label != null && !label.trim().isEmpty()) ? label.trim() : ("容器 " + n);
+            boolean finalKeep = keep != null && keep.booleanValue();
+            JSONObject m = makeMeta(finalLabel, COLORS[(n - 1) % COLORS.length], finalKeep);
             try {
                 m.put("profile", ContainerEnv.toJson(envProfile));
             } catch (Exception ignored) {}
@@ -142,8 +149,8 @@ public final class ContainerManager {
         String n = name.trim();
         if (DEFAULT.equalsIgnoreCase(n)) {
             ContainerEnv.Profile req = ContainerEnv.fromSpec(profileSpec, ContainerEnv.NATIVE);
-            if (req.isIsolated()) {
-                throw new IllegalArgumentException("Default 共享容器始终为 native，禁止设为隔离环境");
+            if (req.isIsolated() || req.hasActiveProxy()) {
+                throw new IllegalArgumentException("Default 共享容器始终为直连，禁止配置代理，请使用新容器");
             }
             return ContainerEnv.NATIVE;
         }

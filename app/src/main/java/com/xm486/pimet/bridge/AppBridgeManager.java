@@ -368,7 +368,11 @@ public class AppBridgeManager {
     }
 
     private static boolean isBrowser(JSONObject json) {
-        return "browser".equals(json.optString("action")) || json.has("browser_action");
+        String act = json.optString("action");
+        return "browser".equals(act)
+                || "create_container".equals(act)
+                || "set_container_profile".equals(act)
+                || json.has("browser_action");
     }
 
     private static boolean isTerminal(JSONObject json) {

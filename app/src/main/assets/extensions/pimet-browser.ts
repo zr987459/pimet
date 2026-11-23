@@ -41,6 +41,7 @@ const MANAGE = new Set([
   "scripts", "script_get", "script_install", "script_enable", "script_remove", "script_update", "script_values",
   "menu_commands", "menu_run", "console", "config_get", "config_set", "ua", "desktop", "zoom", "cookies", "clear_data",
   "find", "wait_for", "inject",
+  "create_container", "set_container_profile",
   "containers", "container_keep", "container_rename", "container_profile", "history", "history_delete", "history_clear", "tab_new", "tab_switch", "tab_close",
   ...UI_ACTIONS,
 ]);
@@ -101,9 +102,24 @@ function adaptParams(action: string, p: Record<string, any>): Record<string, any
       if (q.container === undefined || q.container === "") q.container = "new";
       if (q.background === undefined) q.background = true;
       if (q.profile !== undefined) q.profile = maybeJson(q.profile);
+      if ("proxy" in p) {
+        q.proxy = p.proxy === null ? null : maybeJson(p.proxy);
+      }
+      if (q.switch_proxy !== undefined) q.switch_proxy = Boolean(q.switch_proxy);
+      break;
+    case "create_container":
+      if (q.profile !== undefined) q.profile = maybeJson(q.profile);
+      if ("proxy" in p) {
+        q.proxy = p.proxy === null ? null : maybeJson(p.proxy);
+      }
+      if (q.keep !== undefined) q.keep = Boolean(q.keep);
       break;
     case "container_profile":
+    case "set_container_profile":
       if (q.profile !== undefined) q.profile = maybeJson(q.profile);
+      if ("proxy" in p) {
+        q.proxy = p.proxy === null ? null : maybeJson(p.proxy);
+      }
       break;
     case "read":
       if (q.max_chars === undefined && q.maxChars !== undefined) q.max_chars = Number(q.maxChars);
@@ -1599,12 +1615,18 @@ function makeB(st: RunState, tab?: string): any {
     async tabs() {
       return (await exec("tabs", {}, { trace: false })).tabs ?? [];
     },
-    /** 新标签：container 默认 "new"（独立容器、独立登录态）；profile 可传预设名("ca-en"/"us-en"/...)或配置对象；"same" 沿用当前标签的容器，"Default" 共享容器，或容器名 */
-    async newTab(url?: string, opts: { container?: string; background?: boolean; profile?: string | Record<string, any> } = {}) {
+    /** 新标签：container 默认 "new"（独立容器、独立登录态）；profile 可传预设名("ca-en"/"us-en"/...)或配置对象；proxy 支持字符串/对象/null；switch_proxy 默认 true */
+    async newTab(url?: string, opts: { container?: string; background?: boolean; profile?: string | Record<string, any>; proxy?: string | Record<string, any> | null; switch_proxy?: boolean } = {}) {
       const j = await exec("tab_new", { ...(url ? { url } : {}), ...opts });
       return makeB(st, j.tab);
     },
-    async containerProfile(opts: { name?: string; profile?: string | Record<string, any>; randomize?: boolean; reload?: boolean } = {}) {
+    async createContainer(opts: { profile?: string | Record<string, any>; proxy?: string | Record<string, any> | null; label?: string; keep?: boolean } = {}) {
+      return await exec("create_container", opts ?? {});
+    },
+    async setContainerProfile(opts: { name?: string; profile?: string | Record<string, any>; proxy?: string | Record<string, any> | null; randomize?: boolean; reload?: boolean } = {}) {
+      return await exec("set_container_profile", opts ?? {});
+    },
+    async containerProfile(opts: { name?: string; profile?: string | Record<string, any>; proxy?: string | Record<string, any> | null; randomize?: boolean; reload?: boolean } = {}) {
       return await exec("container_profile", opts ?? {});
     },
     async closeTab() {
@@ -1821,7 +1843,7 @@ export default function (pi: ExtensionAPI) {
       "【目标 target】@N（快照 ref）| CSS 选择器（跨层用 >>>）| text=文字 | [x,y] 坐标。\n" +
       "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
       "【单步】tools | read | open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
-      "【标签/容器/历史】tab_new(url,container:new|same|Default|容器名,profile?,background) | tabs | tab_switch | tab_close | containers | container_keep | container_profile(name?,profile?,randomize?,reload?) | history | history_delete | history_clear（需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\" 等)）。\n" +
+      "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,switch_proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
       "【油猴与定制】scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject；" +
       "ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panel_* | action_run | site_* | rule_* | rules（定制细节按需读 customize.md）。\n" +
       "【红线】script_remove、clear_data、history_clear、ui_reset 先征得用户同意；不擅自 show / tab_switch；遇到「用户已叫停」或 user_takeover 立即停下汇报；验证码/支付/登录确认交由用户完成。",
@@ -1829,7 +1851,7 @@ export default function (pi: ExtensionAPI) {
       action: Type.String({
         description:
           "run | batch | tools | read | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
-          " | tab_new | tabs | tab_switch | tab_close | containers | container_keep | container_profile | history | history_delete | history_clear" +
+          " | tab_new | tabs | tab_switch | tab_close | create_container | containers | container_keep | container_profile | set_container_profile | history | history_delete | history_clear" +
           " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
           " | config_get | config_set | ua | desktop | zoom | cookies | clear_data" +
           " | ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panels | panel_write | panel_open | panel_delete | action_run | site_set | site_get | rule_add | rule_remove | rules",
@@ -1852,14 +1874,22 @@ export default function (pi: ExtensionAPI) {
       profile: Type.Optional(
         Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })], {
           description:
-            "tab_new / container_profile 的环境配置：预设字符串（ca-en | us-en | us-west | uk-en | au-en | jp-ja | cn-zh | auto | native）或对象 {preset?, timezone?, locale?, languages?, device?, desktop?, seed?, webrtc?}",
+            "tab_new / create_container / container_profile / set_container_profile 的环境配置：预设字符串（ca-en | us-en | us-west | uk-en | au-en | jp-ja | cn-zh | auto | native）或对象 {preset?, timezone?, locale?, languages?, device?, desktop?, seed?, webrtc?, proxy?}",
         })
       ),
+      proxy: Type.Optional(
+        Type.Union([Type.String(), Type.Null(), Type.Object({}, { additionalProperties: true })], {
+          description:
+            "tab_new / create_container / container_profile / set_container_profile 的容器代理：字符串 shorthand（如 \"http://127.0.0.1:7890\"、\"socks5://user:pass@host:port\"、\"direct\"）或对象 {enabled?, type?, host, port, username?, password?, upstream?}，传 null 或 \"direct\" 清除代理",
+        })
+      ),
+      label: Type.Optional(Type.String({ description: "create_container 的容器显示名称（可选）" })),
+      switch_proxy: Type.Optional(Type.Boolean({ description: "单活全局代理与目标标签不一致时是否自动切换，默认 true；false 时拒绝访问以防串线" })),
       randomize: Type.Optional(Type.Boolean({ description: "container_profile：true = 随机更换设备型号与指纹 seed" })),
       reload: Type.Optional(Type.Boolean({ description: "container_profile：true = 更新环境后立即刷新该容器已打开的标签" })),
       background: Type.Optional(Type.Boolean({ description: "tab_new 在后台打开，不切走用户当前标签，默认 true" })),
-      name: Type.Optional(Type.String({ description: "container_keep / container_profile 的容器名（containers 列出，container_profile 省略时为当前容器）；ui_restore 的备份名（ui_backups 列出）" })),
-      keep: Type.Optional(Type.Boolean({ description: "container_keep：true = 关闭标签后保留容器数据" })),
+      name: Type.Optional(Type.String({ description: "container_keep / container_profile / set_container_profile 的容器名（containers 列出，省略时为当前容器）；ui_restore 的备份名（ui_backups 列出）" })),
+      keep: Type.Optional(Type.Boolean({ description: "container_keep / create_container：true = 关闭标签后保留容器数据" })),
       q: Type.Optional(Type.String({ description: "history 搜索词（网址或标题包含，不区分大小写）" })),
       limit: Type.Optional(Type.Number({ description: "history 返回条数" })),
       offset: Type.Optional(Type.Number({ description: "history 跳过条数（翻页）" })),
