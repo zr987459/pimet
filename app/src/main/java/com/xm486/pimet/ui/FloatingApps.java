@@ -13,8 +13,10 @@ import android.content.SharedPreferences;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -25,6 +27,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
+import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
@@ -33,6 +36,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -77,6 +81,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -87,7 +93,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Pi 浏览器：独立的全屏浏览器窗口（{@link PiBrowserActivity}，单独的任务，在最近任务里是一张单独的卡片），
@@ -150,6 +162,28 @@ public final class FloatingApps {
     private final LinearLayout proxyBanner;
     private final TextView proxyBannerText, proxyBannerBtn;
     private ContainerProxyManager proxyMgr;
+    private OffscreenWebHost offscreenHost;
+    private volatile ProxyWorkerPool workerPool;
+    private volatile String activeRemoteTabId = null;
+    private LinearLayout remoteMirrorContainer;
+    private TextView mirrorHeaderTv;
+    private ImageView mirrorImageView;
+    private volatile int mirrorRemoteW = 0, mirrorRemoteH = 0;
+    private final AtomicBoolean mirrorFetching = new AtomicBoolean(false);
+    private final ExecutorService mirrorExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "pimet-remote-mirror");
+        t.setDaemon(true);
+        return t;
+    });
+    private long lastSwitcherRemoteRefreshMs = 0L;
+    private final Runnable mirrorPollTask = new Runnable() {
+        @Override
+        public void run() {
+            if (activeRemoteTabId == null || minimized || host == null) return;
+            fetchRemoteMirrorFrame(activeRemoteTabId);
+            MAIN.postDelayed(this, 700L);
+        }
+    };
     private final LinearLayout customStrip;
     private final android.widget.HorizontalScrollView customScroll;
     /** 标签页网格（点标签数按钮打开） */
@@ -294,6 +328,11 @@ public final class FloatingApps {
             f.configMtime = -1; // 顺便按当前 Pi-Web 主题重新配色
             f.reloadConfigIfChanged();
             if (f.fullscreen) f.applyImmersive(true);
+            f.applyVisibility();
+            if (f.activeRemoteTabId != null) f.startMirrorPolling();
+        } else {
+            f.stopMirrorPolling();
+            f.applyVisibility();
         }
         f.refreshTabs();
     }
@@ -311,6 +350,7 @@ public final class FloatingApps {
         if (f.customView != null) { f.hideCustomView(); return true; }
         if (f.panelOpen()) { f.closePanel(); return true; }
         if (f.switcher.getVisibility() == View.VISIBLE) { f.closeSwitcher(); return true; }
+        if (f.activeRemoteTabId != null) { f.exitRemoteMirror(); return true; }
         if (f.fullscreen) { f.setFullscreen(false); return true; }
         if (f.urlField.hasFocus()) { f.hideIme(); f.showUrl(f.active, f.currentUrl()); return true; }
         if (f.active != null && f.web != null && !f.isHomeUrl(f.currentUrl()) && f.web.canGoBack()) { f.goBackTab(f.active); return true; }
@@ -320,15 +360,18 @@ public final class FloatingApps {
 
     private void attachHost(Activity a, ViewGroup container) {
         host = a;
+        minimized = false;
         vctx.setBaseContext(a);
         if (root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
         container.addView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         applyConfig();
+        applyVisibility();
         if (fullscreen) applyImmersive(true);
     }
 
     private void detachHost(Activity a) {
         if (host != a) return;
+        stopMirrorPolling();
         hideCustomView();
         hideIme();
         closeSwitcher();
@@ -337,6 +380,7 @@ public final class FloatingApps {
         host = null;
         vctx.setBaseContext(ctx);
         minimized = true;
+        applyVisibility();
         layoutOffscreen();
         refreshTabs();
     }
@@ -475,7 +519,11 @@ public final class FloatingApps {
             if (go) {
                 String target = normalizeUrl(urlField.getText().toString());
                 hideIme();
-                load(target);
+                if (activeRemoteTabId != null) {
+                    navigateRemoteFromUi(activeRemoteTabId, target);
+                } else {
+                    load(target);
+                }
                 return true;
             }
             return false;
@@ -551,19 +599,9 @@ public final class FloatingApps {
         proxyBannerText.setSingleLine(true);
         proxyBannerText.setEllipsize(TextUtils.TruncateAt.END);
         proxyBanner.addView(proxyBannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        proxyBannerBtn = barBtn("切回本页代理", "切换全局代理回当前标签所在容器", 12);
+        proxyBannerBtn = barBtn("切回直连", "退出远程代理预览，回到主进程直连标签", 12);
         proxyBannerBtn.setPadding(dp(8), 0, dp(8), 0);
-        proxyBannerBtn.setOnClickListener(v -> {
-            Tab t = active;
-            if (t == null || t.closed) return;
-            ensureTabProxyAsync(t, () -> {
-                if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-                if (!isHomeUrl(t.url) && !t.url.startsWith("about:")) {
-                    if (t.errorCode != 0 || t.url.isEmpty()) loadUrlWithEnv(t, t.url, null);
-                    else t.web.reload();
-                }
-            });
-        });
+        proxyBannerBtn.setOnClickListener(v -> exitRemoteMirror());
         proxyBanner.addView(proxyBannerBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
         proxyBanner.setVisibility(View.GONE);
         column.addView(proxyBanner, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
@@ -699,6 +737,7 @@ public final class FloatingApps {
     static final class Tab {
         final String id;
         final boolean pi;
+        MutableContextWrapper tabCtx;
         WebView web;
         volatile String url = "";
         volatile String title = "";
@@ -806,6 +845,10 @@ public final class FloatingApps {
         }
     }
 
+    synchronized String nextTabId() {
+        return "t" + (++tabSeq);
+    }
+
     /** 新标签 = 新容器 */
     private Tab newTab(boolean pi) {
         return newTab(pi, resolveContainer("new", null));
@@ -813,23 +856,27 @@ public final class FloatingApps {
 
     /** container 为容器名（已解析）；WebView 创建后、第一次 loadUrl 之前绑定容器 */
     private Tab newTab(boolean pi, String container) {
-        Tab t = new Tab("t" + (++tabSeq), pi);
+        return newTab(pi, container, null);
+    }
+
+    private Tab newTab(boolean pi, String container, String explicitId) {
+        String tid = (explicitId != null && !explicitId.isEmpty()) ? explicitId : nextTabId();
+        Tab t = new Tab(tid, pi);
         t.container = container == null || container.isEmpty() ? ContainerManager.DEFAULT : container;
         try {
             t.envProfile = containers().getProfile(t.container);
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
-        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
-        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
-        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
+        t.proxySignature = "DIRECT";
+        t.proxySummary = "直连";
+        t.proxyFrozen = false;
         boolean defDesktop = !pi && uiObj("defaults").optBoolean("desktopMode", false);
         t.desktop = (t.envProfile != null && t.envProfile.desktop) || defDesktop;
+        t.tabCtx = new MutableContextWrapper(offscreenHost().getHostContext());
         t.web = createWebView(t);
-        t.web.setVisibility(View.INVISIBLE);
-        webFrame.addView(t.web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        offscreenHost().mount(t.web, effectiveDesktopOf(t));
         tabs.add(t);
-        if (host == null) layoutOffscreen();
         return t;
     }
 
@@ -886,32 +933,24 @@ public final class FloatingApps {
         if (t == null || t.closed || t.web != dead) return;
         if (sPendingFileWebView == dead) cancelPendingFileChooser();
         cleanupTabFrames(t, dead);
-        int idx = webFrame.indexOfChild(dead);
+        offscreenHost().unmount(dead);
         try { webFrame.removeView(dead); } catch (Throwable ignored) {}
         try { dead.destroy(); } catch (Throwable ignored) {}
         releaseContainer(t.container); // 旧 WebView 的 apply 计数还回去；下面 createWebView 会对新 WebView 再 apply
         t.loading = false;
         t.translated = false;
         try { t.envProfile = containers().getProfile(t.container); } catch (Throwable ignored) {}
+        if (t.tabCtx == null) {
+            t.tabCtx = new MutableContextWrapper(offscreenHost().getHostContext());
+        } else {
+            t.tabCtx.setBaseContext(isTabInForeground(t) && host != null ? host : offscreenHost().getHostContext());
+        }
         t.web = createWebView(t);
-        webFrame.addView(t.web, Math.max(0, idx), new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         if (active == t) web = t.web;
         applyVisibility();
         String u = t.url;
         if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
-            if (isLocalUrl(u)) {
-                loadUrlWithEnv(t, u, null);
-            } else if (t == active) {
-                ensureTabProxyAsync(t, () -> {
-                    if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-                    loadUrlWithEnv(t, u, null);
-                });
-            } else if (!t.proxyFrozen && proxyManager().matchesActive(t.proxySignature)) {
-                loadUrlWithEnv(t, u, null);
-            } else {
-                // 后台冻结标签保持冻结，不主动发起外网请求，等切到该标签时再恢复
-                t.pendingRecoverUrl = u;
-            }
+            loadUrlWithEnv(t, u, null);
         } else {
             goHome(t, false);
         }
@@ -924,6 +963,11 @@ public final class FloatingApps {
 
     private void switchTo(Tab t) {
         if (t == null || t.closed) return;
+        if (activeRemoteTabId != null) {
+            activeRemoteTabId = null;
+            stopMirrorPolling();
+            hideRemoteMirror();
+        }
         if (active != null && active != t) snapThumb(active);
         active = t;
         web = t.web;
@@ -937,35 +981,78 @@ public final class FloatingApps {
             showUrl(t, u);
         }
         syncUrlPill();
-        if (!proxyManager().matchesActive(t.proxySignature) || t.proxyFrozen) {
-            ensureTabProxyAsync(t, () -> {
-                if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-                String pending = t.pendingRecoverUrl;
-                if (pending != null && !pending.isEmpty()) {
-                    t.pendingRecoverUrl = null;
-                    loadUrlWithEnv(t, pending, null);
-                }
-            });
-        } else if (t.pendingRecoverUrl != null && !t.pendingRecoverUrl.isEmpty()) {
-            String pending = t.pendingRecoverUrl;
-            t.pendingRecoverUrl = null;
-            loadUrlWithEnv(t, pending, null);
-        }
         refreshTabs();
     }
 
     boolean isActive(Tab t) {
-        return t == active;
+        return t == active && activeRemoteTabId == null;
     }
 
-    /** 当前标签在最上层；被 Pi 操作的后台标签 VISIBLE 但压在下面；其余 INVISIBLE */
-    private void applyVisibility() {
-        for (Tab x : tabs) {
-            if (x.web == null) continue;
-            x.web.setVisibility(x == active || x.agentVisible ? View.VISIBLE : View.INVISIBLE);
+    private boolean isTabInForeground(Tab t) {
+        return t != null && !t.closed && t == active && activeRemoteTabId == null && !minimized && host != null;
+    }
+
+    boolean isTabOnOffscreenHost(Tab t) {
+        return t != null && t.web != null && t.web.getParent() != webFrame;
+    }
+
+    boolean isTabNativeTapReady(Tab t) {
+        if (t == null || t.closed || t.web == null) return false;
+        if (t.web.getWidth() <= 0 || t.web.getHeight() <= 0) return false;
+        if (!t.web.isAttachedToWindow()) return false;
+        if (t.web.getParent() == webFrame) {
+            return !minimized && activeRemoteTabId == null && t == active;
         }
-        for (Tab x : tabs) if (x != active && x.agentVisible && x.web != null) x.web.bringToFront();
-        if (active != null && active.web != null) active.web.bringToFront();
+        return !offscreenHost().isOverlayFallback();
+    }
+
+    private boolean effectiveDesktopOf(Tab t) {
+        if (t == null) return false;
+        if (t.siteUaMode != null && !t.siteUaMode.isEmpty()) {
+            if ("desktop".equalsIgnoreCase(t.siteUaMode)) return true;
+            if ("mobile".equalsIgnoreCase(t.siteUaMode)) return false;
+        }
+        return t.desktop;
+    }
+
+    private void syncLocalWebMount(Tab t) {
+        if (t == null || t.closed || t.web == null) return;
+        boolean fg = isTabInForeground(t);
+        boolean effDesktop = effectiveDesktopOf(t);
+        if (fg) {
+            offscreenHost().unmount(t.web);
+            if (t.tabCtx != null) t.tabCtx.setBaseContext(host != null ? host : vctx);
+            if (t.web.getParent() != webFrame) {
+                if (t.web.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) t.web.getParent()).removeView(t.web);
+                }
+                webFrame.addView(t.web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+            t.web.setVisibility(View.VISIBLE);
+            try { t.web.onResume(); } catch (Throwable ignored) {}
+            t.web.bringToFront();
+            syncDesktopViewport(t, effDesktop, true);
+        } else {
+            if (t.web.getParent() == webFrame) {
+                webFrame.removeView(t.web);
+            }
+            if (t.tabCtx != null) t.tabCtx.setBaseContext(offscreenHost().getHostContext());
+            offscreenHost().mount(t.web, effDesktop);
+            syncDesktopViewport(t, effDesktop, false);
+        }
+    }
+
+    /** 统一挂载规则：当前前台激活且未最小化且未处于远程镜像的标签在 webFrame，其余本地标签一律在 OffscreenWebHost */
+    private void applyVisibility() {
+        for (Tab x : new ArrayList<>(tabs)) {
+            syncLocalWebMount(x);
+        }
+        if (activeRemoteTabId != null && remoteMirrorContainer != null) {
+            remoteMirrorContainer.setVisibility(View.VISIBLE);
+            remoteMirrorContainer.bringToFront();
+        } else if (remoteMirrorContainer != null) {
+            remoteMirrorContainer.setVisibility(View.GONE);
+        }
         webFrame.invalidate();
     }
 
@@ -983,12 +1070,16 @@ public final class FloatingApps {
         tabs.remove(t);
         t.closed = true;
         cleanupTabFrames(t, t.web);
-        try {
-            webFrame.removeView(t.web);
-            t.web.stopLoading();
-            t.web.destroy();
-        } catch (Throwable ignored) {}
-        t.web = null;
+        if (t.web != null) {
+            offscreenHost().unmount(t.web);
+            try { webFrame.removeView(t.web); } catch (Throwable ignored) {}
+            try { t.web.stopLoading(); } catch (Throwable ignored) {}
+            if (t.tabCtx != null) {
+                try { t.tabCtx.setBaseContext(ctx); } catch (Throwable ignored) {}
+            }
+            try { t.web.destroy(); } catch (Throwable ignored) {}
+            t.web = null;
+        }
         releaseContainer(t.container);
         if (active == t) {
             Tab next = null;
@@ -1048,6 +1139,29 @@ public final class FloatingApps {
         return true;
     }
 
+    boolean hasLocalPiTab() {
+        return lastPiTab() != null;
+    }
+
+    Tab agentTabExact(String spec) {
+        if (spec == null || spec.trim().isEmpty()) return null;
+        String s = spec.trim();
+        if ("pi".equalsIgnoreCase(s)) return lastPiTab();
+        if ("user".equalsIgnoreCase(s)) {
+            if (active != null && !active.pi) return active;
+            for (Tab x : tabs) if (!x.pi) return x;
+            return null;
+        }
+        return findTab(s);
+    }
+
+    ProxyWorkerPool peekWorkerPool() {
+        return workerPool;
+    }
+
+    void refreshTabsPublic() {
+        refreshTabs();
+    }
     /** 返回 null 表示成功，否则是错误信息。Pi 只能关 Pi 标签，不能关用户的标签 */
     String agentCloseTab(String id) {
         Tab t = id == null || id.isEmpty() || "pi".equalsIgnoreCase(id) ? lastPiTab() : findTab(id);
@@ -1060,12 +1174,17 @@ public final class FloatingApps {
     org.json.JSONArray agentTabsJson() throws Exception {
         org.json.JSONArray a = new org.json.JSONArray();
         for (Tab x : tabs) {
-            a.put(new JSONObject().put("id", x.id).put("kind", x.pi ? "pi" : "user").put("active", x == active)
+            boolean effDesk = effectiveDesktopOf(x);
+            a.put(new JSONObject().put("id", x.id).put("kind", x.pi ? "pi" : "user")
+                    .put("active", x == active && activeRemoteTabId == null)
                     .put("busy", x.busy > 0).put("url", x.url).put("title", x.title)
+                    .put("desktop", effDesk)
+                    .put("viewport", ContainerEnv.viewportWidth(effDesk) + "x" + ContainerEnv.viewportHeight(effDesk))
+                    .put("remote", false)
                     .put("container", x.container).put("containerLabel", containerLabel(x.container))
-                    .put("proxyFrozen", x.proxyFrozen)
-                    .put("proxySignature", x.proxySignature)
-                    .put("proxySummary", x.proxySummary));
+                    .put("proxyFrozen", false)
+                    .put("proxySignature", "DIRECT")
+                    .put("proxySummary", "直连"));
         }
         return a;
     }
@@ -1073,35 +1192,27 @@ public final class FloatingApps {
     String agentTabsText() {
         StringBuilder sb = new StringBuilder();
         for (Tab x : tabs) {
-            sb.append(x.id).append(x.pi ? " 🤖Pi" : " 用户").append(x == active ? " [当前显示]" : "")
+            sb.append(x.id).append(x.pi ? " 🤖Pi" : " 用户").append(x == active && activeRemoteTabId == null ? " [当前显示]" : "")
                     .append(x.busy > 0 ? " [操作中]" : "").append(" {").append(containerLabel(x.container)).append("}  ").append(x.title.isEmpty() ? "" : x.title + "  ").append(x.url).append('\n');
         }
         return sb.toString().trim();
     }
 
-    /** Pi 开始操作某个标签（主线程） */
+    /** Pi 开始操作某个标签（主线程）：后台标签已在 OffscreenWebHost 保持真实视口与渲染，无需切入 webFrame */
     void agentBegin(Tab t) {
         if (t.closed) return;
         t.busy++;
-        if (t != active && !t.agentVisible) {
-            t.agentVisible = true;
-            applyVisibility();
-        }
         if (t.busy == 1) refreshTabs();
     }
 
-    /** Pi 结束一次操作；连续操作之间不闪烁：1.5 秒内没有新操作才恢复 INVISIBLE、去掉「操作中」 */
+    /** Pi 结束一次操作 */
     void agentEnd(Tab t) {
         t.busy = Math.max(0, t.busy - 1);
         if (t.busy > 0) return;
         MAIN.postDelayed(() -> {
             if (t.busy > 0 || t.closed) return;
-            if (t.agentVisible) {
-                t.agentVisible = false;
-                applyVisibility();
-            }
             refreshTabs();
-        }, 1500);
+        }, 600);
     }
 
     private android.animation.ObjectAnimator busyPulse;
@@ -1114,15 +1225,18 @@ public final class FloatingApps {
         return null;
     }
 
-    /** 刷新标签数按钮、Pi 状态条、标签页网格（名字沿用旧版，到处都在调用） */
+    /** 刷新标签数按钮、Pi 状态条、标签页网格 */
     private void refreshTabs() {
         if (tabCountBtn == null) return;
-        int n = tabs.size();
+        int remoteCnt = workerPool != null ? workerPool.remoteTabCount() : 0;
+        int n = tabs.size() + remoteCnt;
         tabCountBtn.setText(n > 99 ? ":D" : String.valueOf(n));
         Tab busy = busyPiTab();
         GradientDrawable tb = new GradientDrawable();
         tb.setCornerRadius(dp(5));
-        int idle = active != null && ContainerManager.supported() && !ContainerManager.DEFAULT.equals(active.container) ? containerColor(active.container) : cFg;
+        int idle = activeRemoteTabId != null
+                ? cAccent
+                : (active != null && ContainerManager.supported() && !ContainerManager.DEFAULT.equals(active.container) ? containerColor(active.container) : cFg);
         tb.setStroke(dp(2), busy != null ? cAccent : idle);
         tabCountBtn.setBackground(tb);
         tabCountBtn.setTextColor(busy != null ? cAccent : cFg);
@@ -1139,7 +1253,7 @@ public final class FloatingApps {
         }
 
         // Pi 状态条：Pi 正在一个用户没在看的标签里操作，或者已经被叫停
-        boolean showBanner = !fullscreen && (sPiStopped || (busy != null && busy != active));
+        boolean showBanner = !fullscreen && (sPiStopped || (busy != null && (busy != active || activeRemoteTabId != null)));
         if (showBanner) {
             piBannerText.setText(sPiStopped ? "已叫停 Pi：它的浏览器操作都会被拒绝"
                     : "🤖 Pi 正在后台标签操作" + (busy.title.isEmpty() ? "" : "：" + busy.title));
@@ -1148,28 +1262,9 @@ public final class FloatingApps {
         }
         piBanner.setVisibility(showBanner ? View.VISIBLE : View.GONE);
 
-        // 容器代理状态条：全局代理生效 / 切换中 / 当前标签被冻结
+        // 主进程固定直连、永不冻结；仅关闭旧单活冻结条
         if (proxyBanner != null) {
-            ContainerProxyManager pm = proxyManager();
-            Tab cur = active;
-            boolean frozen = cur != null && (cur.proxyFrozen || !pm.matchesActive(cur.proxySignature));
-            boolean showProxyBanner = !fullscreen && (pm.isSwitching() || frozen || !pm.isDirect());
-            if (showProxyBanner) {
-                if (pm.isSwitching()) {
-                    proxyBanner.setBackgroundColor(blend(cBar, Color.parseColor("#D29922"), 0.22f));
-                    proxyBannerText.setText("⏳ 正在切换容器代理…");
-                    proxyBannerBtn.setVisibility(View.GONE);
-                } else if (frozen) {
-                    proxyBanner.setBackgroundColor(blend(cBar, Color.parseColor("#D29922"), 0.24f));
-                    proxyBannerText.setText("⏸ 已冻结（全局：" + pm.getActiveSummary() + "，本页需：" + cur.proxySummary + "）");
-                    proxyBannerBtn.setVisibility(View.VISIBLE);
-                } else {
-                    proxyBanner.setBackgroundColor(blend(cBar, cAccent, 0.12f));
-                    proxyBannerText.setText("🌐 代理：" + pm.getActiveSummary() + "（" + pm.getActiveLabel() + "）");
-                    proxyBannerBtn.setVisibility(View.GONE);
-                }
-            }
-            proxyBanner.setVisibility(showProxyBanner ? View.VISIBLE : View.GONE);
+            proxyBanner.setVisibility(View.GONE);
         }
 
         if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
@@ -1206,46 +1301,71 @@ public final class FloatingApps {
         switcherGrid.removeAllViews();
     }
 
-    /** 给标签拍一张缩略图（只在界面可见时有效） */
+    /** 给标签拍一张缩略图 */
     private void snapThumb(Tab t) {
-        if (t == null || t.web == null || !t.web.isShown()) return;
+        if (t == null || t.web == null || t.closed) return;
         try {
-            int w = t.web.getWidth(), h = t.web.getHeight();
-            if (w <= 0 || h <= 0) return;
-            float s = Math.min(1f, 360f / w);
-            Bitmap b = Bitmap.createBitmap(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(Math.min(h, w * 1.25f) * s)), Bitmap.Config.RGB_565);
-            Canvas c = new Canvas(b);
-            c.scale(s, s);
-            c.translate(-t.web.getScrollX(), -t.web.getScrollY());
-            t.web.draw(c);
+            Bitmap raw;
+            if (!isTabOnOffscreenHost(t) && t.web.isShown()) {
+                int w = t.web.getWidth(), h = t.web.getHeight();
+                if (w <= 0 || h <= 0) return;
+                float s = Math.min(1f, 360f / w);
+                raw = Bitmap.createBitmap(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(Math.min(h, w * 1.25f) * s)), Bitmap.Config.RGB_565);
+                Canvas c = new Canvas(raw);
+                c.scale(s, s);
+                c.translate(-t.web.getScrollX(), -t.web.getScrollY());
+                t.web.draw(c);
+            } else {
+                raw = offscreenHost().captureScreenshot(t.web, 1200L);
+                if (raw == null) return;
+                int w = raw.getWidth(), h = raw.getHeight();
+                if (w > 360) {
+                    float s = 360f / w;
+                    int th = Math.max(1, Math.round(Math.min(h, w * 1.25f) * s));
+                    Bitmap scaled = Bitmap.createScaledBitmap(raw, 360, th, true);
+                    if (scaled != raw) raw.recycle();
+                    raw = scaled;
+                }
+            }
             if (t.thumb != null) t.thumb.recycle();
-            t.thumb = b;
+            t.thumb = raw;
         } catch (Throwable ignored) {}
     }
 
     private void rebuildSwitcher() {
         switcherGrid.removeAllViews();
         switcher.setBackgroundColor(cDark ? Color.parseColor("#FF111214") : Color.parseColor("#FFF1F3F4"));
-        boolean anyPi = lastPiTab() != null;
+        boolean anyPi = lastPiTab() != null || (workerPool != null && workerPool.remoteTabCount() > 0);
         switcherStop.setVisibility(anyPi || sPiStopped ? View.VISIBLE : View.GONE);
         switcherStop.setText(sPiStopped ? "▶ 允许 Pi" : "⏹ 停止 Pi");
         switcherStop.setTextColor(sPiStopped ? Color.parseColor("#D73A49") : cFg);
 
-        ContainerProxyManager pm = proxyManager();
+        long nowMs = System.currentTimeMillis();
+        if (workerPool != null && workerPool.remoteTabCount() > 0 && nowMs - lastSwitcherRemoteRefreshMs > 1000L) {
+            lastSwitcherRemoteRefreshMs = nowMs;
+            workerPool.refreshRemoteTabsAsync(() -> {
+                if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
+            });
+        }
+
+        List<JSONObject> remoteTabs = workerPool != null ? workerPool.listCachedRemoteTabs() : Collections.emptyList();
         TextView proxyStatusRow = new TextView(vctx);
-        proxyStatusRow.setText((pm.isSwitching() ? "⏳ 切换代理中…" : "🌐 当前全局代理：" + pm.getActiveSummary())
-                + "（" + pm.getActiveLabel() + "）");
+        proxyStatusRow.setText("🌐 主进程直连不冻结 · 独立代理进程标签 " + remoteTabs.size() + " 个");
         proxyStatusRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        proxyStatusRow.setTextColor(pm.isDirect() ? cDim : cAccent);
+        proxyStatusRow.setTextColor(remoteTabs.isEmpty() ? cDim : cAccent);
         proxyStatusRow.setPadding(dp(8), dp(2), dp(8), dp(6));
         switcherGrid.addView(proxyStatusRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         if ("list".equalsIgnoreCase(uiObj("theme").optString("tabStyle", "bar"))) {
-            // ui.json theme.tabStyle = list：一行一个标签（不带缩略图）
             for (Tab x : tabs) {
                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
                 rlp.setMargins(dp(6), dp(4), dp(6), dp(4));
                 switcherGrid.addView(tabListRow(x), rlp);
+            }
+            for (JSONObject rt : remoteTabs) {
+                LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+                rlp.setMargins(dp(6), dp(4), dp(6), dp(4));
+                switcherGrid.addView(remoteTabListRow(rt), rlp);
             }
             return;
         }
@@ -1262,11 +1382,183 @@ public final class FloatingApps {
             row.addView(tabCard(x), clp);
             i++;
         }
+        for (JSONObject rt : remoteTabs) {
+            if (i % 2 == 0) {
+                row = new LinearLayout(vctx);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                switcherGrid.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(232)));
+            }
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            clp.setMargins(dp(6), dp(6), dp(6), dp(6));
+            row.addView(remoteTabCard(rt), clp);
+            i++;
+        }
         if (i % 2 == 1 && row != null) {
             View pad = new View(vctx);
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
             clp.setMargins(dp(6), dp(6), dp(6), dp(6));
             row.addView(pad, clp);
+        }
+    }
+
+    private View remoteTabListRow(JSONObject rt) {
+        final String tid = rt.optString("id", "");
+        final int slotNum = rt.optInt("workerSlot", 0);
+        final String pSummary = rt.optString("proxySummary", "代理");
+        final String contLabel = rt.optString("containerLabel", rt.optString("container", ""));
+        final String urlStr = rt.optString("url", "");
+        String tt = rt.optString("title", "");
+        if (tt.isEmpty()) tt = urlStr.isEmpty() ? "远程代理标签 " + tid : urlStr.replaceFirst("^https?://", "");
+        boolean sel = tid.equals(activeRemoteTabId);
+
+        LinearLayout row = new LinearLayout(vctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), 0, dp(4), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(12));
+        bg.setColor(sel ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
+        row.setBackground(bg);
+        int fg = sel ? Color.WHITE : cFg;
+
+        View strip = new View(vctx);
+        GradientDrawable sd = new GradientDrawable();
+        sd.setCornerRadius(dp(2));
+        sd.setColor(Color.parseColor("#3FB950"));
+        strip.setBackground(sd);
+        LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(dp(4), dp(32));
+        stl.rightMargin = dp(10);
+        row.addView(strip, stl);
+
+        LinearLayout txt = new LinearLayout(vctx);
+        txt.setOrientation(LinearLayout.VERTICAL);
+        TextView title = new TextView(vctx);
+        title.setText("⚡ 代理进程 #" + slotNum + " · " + tt);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        title.setTextColor(fg);
+        txt.addView(title);
+        TextView sub = new TextView(vctx);
+        sub.setText(contLabel + " · " + pSummary + (urlStr.isEmpty() ? "" : "  " + urlStr.replaceFirst("^https?://", "")));
+        sub.setSingleLine(true);
+        sub.setEllipsize(TextUtils.TruncateAt.END);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        sub.setTextColor(sel ? Color.WHITE : cDim);
+        txt.addView(sub);
+        row.addView(txt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView close = new TextView(vctx);
+        close.setText("✕");
+        close.setGravity(Gravity.CENTER);
+        close.setTextColor(fg);
+        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        close.setOnClickListener(v -> closeRemoteTabFromUi(tid));
+        row.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        row.setOnClickListener(v -> {
+            closeSwitcher();
+            switchToRemote(tid);
+        });
+        return row;
+    }
+
+    private View remoteTabCard(JSONObject rt) {
+        final String tid = rt.optString("id", "");
+        final int slotNum = rt.optInt("workerSlot", 0);
+        final String pSummary = rt.optString("proxySummary", "代理");
+        final String contLabel = rt.optString("containerLabel", rt.optString("container", ""));
+        final String urlStr = rt.optString("url", "");
+        String tt = rt.optString("title", "");
+        if (tt.isEmpty()) tt = urlStr.isEmpty() ? "远程代理标签 " + tid : urlStr.replaceFirst("^https?://", "");
+        boolean sel = tid.equals(activeRemoteTabId);
+
+        LinearLayout card = new LinearLayout(vctx);
+        card.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(14));
+        bg.setColor(sel ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
+        card.setBackground(bg);
+        card.setPadding(dp(3), 0, dp(3), dp(3));
+        card.setClipToOutline(true);
+
+        LinearLayout head = new LinearLayout(vctx);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(8), 0, 0, 0);
+        TextView badge = new TextView(vctx);
+        badge.setText("⚡ 代理进程 #" + slotNum);
+        badge.setSingleLine(true);
+        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        badge.setTextColor(sel ? Color.WHITE : Color.parseColor("#3FB950"));
+        badge.setPadding(0, 0, dp(6), 0);
+        head.addView(badge);
+
+        TextView title = new TextView(vctx);
+        title.setText(tt);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        int headFg = sel ? Color.WHITE : cFg;
+        title.setTextColor(headFg);
+        head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView close = new TextView(vctx);
+        close.setText("✕");
+        close.setGravity(Gravity.CENTER);
+        close.setTextColor(headFg);
+        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        close.setOnClickListener(v -> closeRemoteTabFromUi(tid));
+        head.addView(close, new LinearLayout.LayoutParams(dp(32), dp(32)));
+        card.addView(head, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)));
+
+        LinearLayout body = new LinearLayout(vctx);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setGravity(Gravity.CENTER);
+        body.setPadding(dp(10), dp(10), dp(10), dp(10));
+        GradientDrawable bb = new GradientDrawable();
+        bb.setCornerRadius(dp(11));
+        bb.setColor(pageColor);
+        body.setBackground(bb);
+        TextView iconTv = new TextView(vctx);
+        iconTv.setText("⚡");
+        iconTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
+        iconTv.setGravity(Gravity.CENTER);
+        body.addView(iconTv);
+        TextView infoTv = new TextView(vctx);
+        infoTv.setText(contLabel + "\n" + pSummary + (urlStr.isEmpty() ? "" : "\n" + urlStr.replaceFirst("^https?://", "")));
+        infoTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        infoTv.setTextColor(cDim);
+        infoTv.setGravity(Gravity.CENTER);
+        infoTv.setMaxLines(4);
+        infoTv.setEllipsize(TextUtils.TruncateAt.END);
+        body.addView(infoTv);
+        card.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        card.setOnClickListener(v -> {
+            closeSwitcher();
+            switchToRemote(tid);
+        });
+        return card;
+    }
+
+    private void closeRemoteTabFromUi(String tabId) {
+        if (tabId == null || tabId.isEmpty() || workerPool == null) return;
+        final ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(tabId);
+        if (tabId.equals(activeRemoteTabId)) {
+            exitRemoteMirror();
+        }
+        workerPool.unregisterRemoteTab(tabId);
+        refreshTabs();
+        if (slot != null) {
+            mirrorExec.execute(() -> {
+                try {
+                    workerPool.callRpc(slot, new JSONObject().put("action", "tab_close").put("tab", tabId), "ui-close-" + tabId, 5000L);
+                } catch (Throwable ignored) {}
+                MAIN.post(() -> {
+                    refreshTabs();
+                    if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
+                });
+            });
         }
     }
 
@@ -1277,9 +1569,10 @@ public final class FloatingApps {
         row.setPadding(dp(10), 0, dp(4), 0);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(12));
-        bg.setColor(x == active ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
+        boolean isShown = x == active && activeRemoteTabId == null;
+        bg.setColor(isShown ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
         row.setBackground(bg);
-        int fg = x == active ? Color.WHITE : cFg;
+        int fg = isShown ? Color.WHITE : cFg;
         if (ContainerManager.supported()) {
             View strip = new View(vctx);
             GradientDrawable sd = new GradientDrawable();
@@ -1295,7 +1588,7 @@ public final class FloatingApps {
         String tt = x.title;
         if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "新标签页" : x.url.replaceFirst("^https?://", "");
         TextView title = new TextView(vctx);
-        title.setText((x.proxyFrozen ? "⏸ " : "") + (x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
+        title.setText((x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -1304,12 +1597,11 @@ public final class FloatingApps {
         TextView sub = new TextView(vctx);
         String host = isLauncher(x.url) ? "" : x.url.replaceFirst("^https?://", "");
         String badge = ContainerEnv.badgeEmoji(x.envProfile);
-        String proxyTag = x.proxyFrozen ? "⏸ 已冻结(" + x.proxySummary + ")" : ("直连".equals(x.proxySummary) ? "" : "🌐 " + x.proxySummary);
-        sub.setText((ContainerManager.supported() ? badge + " " + containerLabel(x.container) + (proxyTag.isEmpty() ? "" : " · " + proxyTag) + "  " : "") + host);
+        sub.setText((ContainerManager.supported() ? badge + " " + containerLabel(x.container) + "  " : "") + host);
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        sub.setTextColor(x == active ? Color.WHITE : cDim);
+        sub.setTextColor(isShown ? Color.WHITE : cDim);
         txt.addView(sub);
         row.addView(txt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView close = new TextView(vctx);
@@ -1341,7 +1633,8 @@ public final class FloatingApps {
         card.setOrientation(LinearLayout.VERTICAL);
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(14));
-        bg.setColor(x == active ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
+        boolean isShown = x == active && activeRemoteTabId == null;
+        bg.setColor(isShown ? cAccent : (cDark ? Color.parseColor("#FF2A2B2F") : Color.WHITE));
         card.setBackground(bg);
         card.setPadding(dp(3), 0, dp(3), dp(3));
         card.setClipToOutline(true);
@@ -1353,7 +1646,7 @@ public final class FloatingApps {
         TextView title = new TextView(vctx);
         String tt = x.title;
         if (tt == null || tt.isEmpty() || isLauncher(x.url)) tt = isLauncher(x.url) || x.url.isEmpty() ? "新标签页" : x.url.replaceFirst("^https?://", "");
-        title.setText((x.proxyFrozen ? "⏸ " : "") + (x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
+        title.setText((x.pi ? "🤖 " : "") + tt + (x.busy > 0 ? " ●" : ""));
         if (ContainerManager.supported()) {
             View strip = new View(vctx);
             GradientDrawable sd = new GradientDrawable();
@@ -1365,18 +1658,17 @@ public final class FloatingApps {
             head.addView(strip, stl);
             TextView badge = new TextView(vctx);
             badge.setText(ContainerEnv.badgeEmoji(x.envProfile) + " " + containerLabel(x.container)
-                    + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : "")
-                    + (x.proxyFrozen ? " ⏸" : (!"直连".equals(x.proxySummary) ? " 🌐" : "")));
+                    + (containerKeep(x.container) && !ContainerManager.DEFAULT.equals(x.container) ? " 📌" : ""));
             badge.setSingleLine(true);
             badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-            badge.setTextColor(x == active ? Color.WHITE : containerColor(x.container));
+            badge.setTextColor(isShown ? Color.WHITE : containerColor(x.container));
             badge.setPadding(0, 0, dp(6), 0);
             head.addView(badge);
         }
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        int headFg = x == active ? Color.WHITE : cFg;
+        int headFg = isShown ? Color.WHITE : cFg;
         title.setTextColor(headFg);
         head.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView close = new TextView(vctx);
@@ -1864,22 +2156,54 @@ public final class FloatingApps {
     private static volatile String sDefaultUa;
 
     private void toggleDesktop() {
-        toggleDesktop(active, true);
+        setTabDesktop(active, active == null || !active.desktop, true);
     }
 
     private void toggleDesktop(Tab t, boolean toast) {
+        if (t == null) return;
+        setTabDesktop(t, !t.desktop, toast);
+    }
+
+    void setTabDesktop(Tab t, boolean on, boolean toast) {
         if (t == null || t.web == null) return;
         WebSettings ws = t.web.getSettings();
         if (sDefaultUa == null) sDefaultUa = WebSettings.getDefaultUserAgent(ctx);
-        t.desktop = !t.desktop;
+        t.desktop = on;
         t.siteUaMode = null;
         t.siteUa = null;
         applyContainerEnv(t, t.web, false);
         ws.setUseWideViewPort(true);
         ws.setLoadWithOverviewMode(true);
+        syncDesktopViewport(t, effectiveDesktopOf(t), !isTabOnOffscreenHost(t));
         applyZoom(t);
         t.web.reload();
         if (toast) Toast.makeText(ctx, t.desktop ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
+    }
+
+    private void syncDesktopViewport(Tab t, boolean effectiveDesktop, boolean injectOnPage) {
+        if (t == null || t.closed || t.web == null) return;
+        if (isTabOnOffscreenHost(t)) {
+            offscreenHost().updateViewport(t.web, effectiveDesktop);
+            return;
+        }
+        if (!injectOnPage) return;
+        String u = t.url;
+        if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+        if (effectiveDesktop) {
+            float density = ctx.getResources().getDisplayMetrics().density;
+            int wPx = t.web.getWidth() > 0 ? t.web.getWidth() : ctx.getResources().getDisplayMetrics().widthPixels;
+            double cssW = wPx / Math.max(1f, density);
+            double scale = cssW / ContainerEnv.DESKTOP_VIEWPORT_W;
+            String js = t.isIsolated()
+                    ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale)
+                    : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale);
+            t.web.evaluateJavascript(js, null);
+        } else {
+            t.web.evaluateJavascript(
+                    "(function(){try{window.__pimetDesktopVp=null;var m=document.getElementById('__pimet_desktop_vp');if(m&&m.parentNode)m.parentNode.removeChild(m);}catch(e){}})()",
+                    null
+            );
+        }
     }
 
     // ---- 分享 / 复制 / 外部浏览器
@@ -1940,7 +2264,8 @@ public final class FloatingApps {
     @SuppressLint({"ClickableViewAccessibility", "SetJavaScriptEnabled", "JavascriptInterface"})
     private WebView createWebView(Tab t) {
         final GestureDetector swipe = makeSwipeDetector(t);
-        WebView w = new WebView(vctx) {
+        Context webCtx = t.tabCtx != null ? t.tabCtx : vctx;
+        WebView w = new WebView(webCtx) {
             // 记录用户真实触摸 / 按键（Pi 的合成触摸 sAgentTouch=true 不算），BrowserAgent 据此判断「用户接手了」
             @Override
             public boolean dispatchTouchEvent(android.view.MotionEvent e) {
@@ -1976,9 +2301,9 @@ public final class FloatingApps {
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
-        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
-        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
-        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
+        t.proxySignature = "DIRECT";
+        t.proxySummary = "直连";
+        t.proxyFrozen = false;
         t.cookies = cookiesFor(t.container);
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -2008,9 +2333,6 @@ public final class FloatingApps {
         com.xm486.pimet.translation.WebTranslationManager.registerDelegate(w, new TabTranslationDelegate(t));
         setupCrossFrameSupport(t, w);
         applyContainerEnv(t, w, true);
-        if (t.proxyFrozen) {
-            try { w.onPause(); } catch (Throwable ignored) {}
-        }
         w.setDownloadListener((url, ua, contentDisposition, mime, length) -> {
             if (!t.pi && isUserJsUrl(url) && promptInstallFromUrl(url)) return;
             startDownload(t, url, ua, contentDisposition, mime);
@@ -2047,24 +2369,11 @@ public final class FloatingApps {
                 return true;
             }
 
-            /** rules.block & 单活代理熔断：绝不代理正常流量，仅拦截匹配 rules.block 或代理不匹配/切换中的外网请求 */
+            /** rules.block 拦截（主进程始终直连，永不冻结） */
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 String u = req != null && req.getUrl() != null ? req.getUrl().toString() : null;
                 if (uiBlocked(u)) return new android.webkit.WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
-                if (u != null && (u.startsWith("http://") || u.startsWith("https://")) && !isLoopbackUrl(u)) {
-                    ContainerProxyManager pm = proxyManager();
-                    if (pm.isSwitching() || !pm.matchesActive(t.proxySignature)) {
-                        return new android.webkit.WebResourceResponse(
-                                "text/plain",
-                                "utf-8",
-                                503,
-                                "Proxy Mismatch Frozen",
-                                Collections.singletonMap("Cache-Control", "no-store"),
-                                new java.io.ByteArrayInputStream(new byte[0])
-                        );
-                    }
-                }
                 return null;
             }
 
@@ -2124,6 +2433,7 @@ public final class FloatingApps {
                 recordHistory(t, t.url, t.title);
                 if (isTrusted(url)) view.evaluateJavascript(HELPER_JS, null);
                 reloadConfigIfChanged();
+                syncDesktopViewport(t, effectiveDesktopOf(t), true);
                 injectUiCss(t, view);
                 injectScripts(t, view, url, "document-end");
                 injectScripts(t, view, url, "document-idle");
@@ -2132,6 +2442,7 @@ public final class FloatingApps {
             @Override
             public void onPageCommitVisible(WebView view, String url) {
                 applyZoom(t);
+                syncDesktopViewport(t, effectiveDesktopOf(t), true);
                 if (WebPinchZoom.isLocal(url)) PiWebCompat.apply(view, url);
                 injectUiCss(t, view);
                 injectScripts(t, view, url, "document-start");
@@ -2684,7 +2995,7 @@ public final class FloatingApps {
         return sInstance;
     }
 
-    static FloatingApps current() {
+    public static FloatingApps current() {
         return sInstance;
     }
 
@@ -2697,6 +3008,14 @@ public final class FloatingApps {
     }
 
     private String currentUrl() {
+        if (activeRemoteTabId != null && workerPool != null) {
+            for (JSONObject o : workerPool.listCachedRemoteTabs()) {
+                if (activeRemoteTabId.equals(o.optString("id"))) {
+                    return o.optString("url", "");
+                }
+            }
+            return "";
+        }
         return active != null ? active.url : "";
     }
 
@@ -2740,22 +3059,13 @@ public final class FloatingApps {
         String r = uiRedirect(url);
         if (r != null) url = r;
         if (openInSiteContainer(t, url)) return;
-        final String targetUrl = url;
-        if (isLocalUrl(targetUrl)) {
-            applySiteSettings(t, targetUrl, true);
-            loadUrlWithEnv(t, targetUrl, null);
-            return;
-        }
-        ensureTabProxyAsync(t, () -> {
-            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-            applySiteSettings(t, targetUrl, true);
-            loadUrlWithEnv(t, targetUrl, null);
-        });
+        applySiteSettings(t, url, true);
+        loadUrlWithEnv(t, url, null);
     }
 
     private void updateProgress() {
         Tab t = active;
-        if (t == null || fullscreen) {
+        if (t == null || fullscreen || activeRemoteTabId != null) {
             progress.setVisibility(fullscreen ? View.GONE : View.INVISIBLE);
             return;
         }
@@ -2765,21 +3075,31 @@ public final class FloatingApps {
     }
 
     private void reload() {
+        if (activeRemoteTabId != null) {
+            final String rid = activeRemoteTabId;
+            ProxyWorkerPool.WorkerSlot slot = workerPool != null ? workerPool.slotForTab(rid) : null;
+            if (slot != null) {
+                mirrorExec.execute(() -> {
+                    try {
+                        workerPool.callRpc(slot, new JSONObject().put("action", "reload").put("tab", rid), "ui-reload-" + rid, 12000L);
+                    } catch (Throwable ignored) {}
+                    fetchRemoteMirrorFrame(rid);
+                });
+            }
+            return;
+        }
         String u = currentUrl();
         if (isHomeUrl(u)) goHome();
         else if (active != null && active.web != null) {
-            if (isLocalUrl(u)) active.web.reload();
-            else {
-                Tab cur = active;
-                ensureTabProxyAsync(cur, () -> {
-                    if (cur.closed || cur.web == null || !proxyManager().matchesActive(cur.proxySignature)) return;
-                    cur.web.reload();
-                });
-            }
+            active.web.reload();
         }
     }
 
     private void goBack() {
+        if (activeRemoteTabId != null) {
+            exitRemoteMirror();
+            return;
+        }
         if (active != null && web != null && !isHomeUrl(currentUrl()) && web.canGoBack()) goBackTab(active);
         else if (!isHomeUrl(currentUrl())) goHome();
         else agentMinimize();
@@ -2787,18 +3107,12 @@ public final class FloatingApps {
 
     private void goBackTab(Tab t) {
         if (t == null || t.closed || t.web == null || !t.web.canGoBack()) return;
-        ensureTabProxyAsync(t, () -> {
-            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-            if (t.web.canGoBack()) t.web.goBack();
-        });
+        t.web.goBack();
     }
 
     private void goForwardTab(Tab t) {
         if (t == null || t.closed || t.web == null || !t.web.canGoForward()) return;
-        ensureTabProxyAsync(t, () -> {
-            if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) return;
-            if (t.web.canGoForward()) t.web.goForward();
-        });
+        t.web.goForward();
     }
 
     private boolean isLauncher(String url) {
@@ -2835,7 +3149,9 @@ public final class FloatingApps {
      */
     private void syncUrlPill() {
         if (urlPill == null || bar == null) return;
-        boolean onHome = active != null && isHomeUrl(active.url) && (urlField == null || !urlField.hasFocus());
+        boolean onHome = activeRemoteTabId == null
+                && active != null && isHomeUrl(active.url)
+                && (urlField == null || !urlField.hasFocus());
 
         if (!isBottomToolbar()) {
             int vis = onHome ? View.INVISIBLE : View.VISIBLE;
@@ -2895,6 +3211,16 @@ public final class FloatingApps {
     }
 
     private void showUrl(Tab t, String url) {
+        if (activeRemoteTabId != null) {
+            syncUrlPill();
+            if (!urlField.hasFocus()) {
+                siteIcon.setText("⚡");
+                String shown = url == null ? "" : url.replaceFirst("^https?://(www\\.)?", "");
+                if (shown.endsWith("/")) shown = shown.substring(0, shown.length() - 1);
+                urlField.setText(shown);
+            }
+            return;
+        }
         if (t == active) syncUrlPill();
         if (t != active || urlField.hasFocus()) return;
         if (url == null || url.isEmpty() || isHomeUrl(url)) {
@@ -3101,11 +3427,14 @@ public final class FloatingApps {
 
     private UserScriptManager scriptMgr;
 
-    /** 用户脚本管理器（M1 实现，线程安全）。BrowserAgent 也用它 */
-    synchronized UserScriptManager scripts() {
+    /** 用户脚本管理器（M1 实现，线程安全）。BrowserAgent 与 AppBridgeManager 共用 */
+    public synchronized UserScriptManager scripts() {
         if (scriptMgr == null) {
             scriptMgr = new UserScriptManager(appsDir);
-            scriptMgr.setOnChangeListener(() -> MAIN.post(this::refreshAllDocStartScripts));
+            scriptMgr.setOnChangeListener(() -> MAIN.post(() -> {
+                refreshAllDocStartScripts();
+                if (workerPool != null) workerPool.broadcastScriptsSync();
+            }));
         }
         return scriptMgr;
     }
@@ -3180,21 +3509,16 @@ public final class FloatingApps {
         } catch (Throwable e) {
             t.envProfile = ContainerEnv.NATIVE;
         }
-        t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
-        t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
-        t.proxyFrozen = proxyManager().isSwitching() || !proxyManager().matchesActive(t.proxySignature);
+        t.proxySignature = "DIRECT";
+        t.proxySummary = "直连";
+        t.proxyFrozen = false;
 
-        boolean effectiveDesktop = t.desktop;
+        boolean effectiveDesktop = effectiveDesktopOf(t);
         String overrideUa = customUa();
-        if (t.siteUaMode != null && !t.siteUaMode.isEmpty()) {
-            if ("desktop".equalsIgnoreCase(t.siteUaMode)) {
-                effectiveDesktop = true;
-                overrideUa = null;
-            } else if ("mobile".equalsIgnoreCase(t.siteUaMode)) {
-                effectiveDesktop = false;
-            } else {
-                overrideUa = t.siteUaMode;
-            }
+        if (t.siteUaMode != null && !t.siteUaMode.isEmpty()
+                && !"desktop".equalsIgnoreCase(t.siteUaMode)
+                && !"mobile".equalsIgnoreCase(t.siteUaMode)) {
+            overrideUa = t.siteUaMode;
         }
 
         if (t.isIsolated()) {
@@ -3236,11 +3560,7 @@ public final class FloatingApps {
                 t.lastAppliedEnvKey = key;
             }
         } else {
-            if (t.envDocStartHandler != null) {
-                try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
-                t.envDocStartHandler = null;
-            }
-            t.lastAppliedEnvKey = null;
+            String key = "NATIVE|" + effectiveDesktop + "|" + (overrideUa == null ? "" : overrideUa);
             if (overrideUa != null && !overrideUa.isEmpty()) {
                 w.getSettings().setUserAgentString(overrideUa);
             } else if (effectiveDesktop) {
@@ -3255,14 +3575,30 @@ public final class FloatingApps {
                 w.addJavascriptInterface(new GMBridge(t), "PiMetGM");
                 t.bridgesAttached = true;
             }
+            if (forceReinstall || !key.equals(t.lastAppliedEnvKey)) {
+                if (t.envDocStartHandler != null) {
+                    try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
+                    t.envDocStartHandler = null;
+                }
+                if (crossFrameSupported()) {
+                    if (effectiveDesktop) {
+                        try {
+                            t.envDocStartHandler = WebViewCompat.addDocumentStartJavaScript(
+                                    w, AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0), Collections.singleton("*"));
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                t.lastAppliedEnvKey = key;
+            }
             if (forceReinstall) {
                 installTransDocStartScript(t, w);
                 installScriptDocStartScripts(t, w);
             }
         }
+        syncDesktopViewport(t, effectiveDesktop, false);
     }
 
-    /** 刷新指定容器下所有打开标签的环境（供 UI 与 BrowserAgent 调用） */
+    /** 刷新指定容器下所有打开标签的环境（供 UI 与 BrowserAgent 调用，主进程恒直连） */
     int applyContainerEnvForContainer(String containerName, boolean reloadTabs) {
         if (containerName == null) return 0;
         int affected = 0;
@@ -3277,33 +3613,16 @@ public final class FloatingApps {
                 t.siteUa = null;
             } catch (Throwable ignored) {}
             applyContainerEnv(t, t.web, true);
+            syncDesktopViewport(t, effectiveDesktopOf(t), !isTabOnOffscreenHost(t));
             matched.add(t);
             affected++;
         }
-        ContainerProxyManager pm = proxyManager();
-        boolean needSwitch = (active != null && containerName.equals(active.container))
-                || containerName.equals(pm.getActiveContainer());
-        if (needSwitch && !matched.isEmpty()) {
-            Tab pivot = (active != null && containerName.equals(active.container)) ? active : matched.get(0);
-            ensureTabProxyAsync(pivot, () -> {
-                if (reloadTabs) {
-                    for (Tab t : matched) {
-                        if (t.closed || t.web == null || !proxyManager().matchesActive(t.proxySignature)) continue;
-                        String u = t.url;
-                        if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
-                            t.web.reload();
-                        }
-                    }
-                }
-            });
-        } else if (reloadTabs) {
+        if (reloadTabs) {
             for (Tab t : matched) {
                 if (t.closed || t.web == null) continue;
                 String u = t.url;
                 if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
-                    if (isLocalUrl(u) || proxyManager().matchesActive(t.proxySignature)) {
-                        t.web.reload();
-                    }
+                    t.web.reload();
                 }
             }
         }
@@ -3312,6 +3631,7 @@ public final class FloatingApps {
         return affected;
     }
 
+    /** 仅用于 testProxyAsync 代理连通性测试与 statusJson 聚合；主进程绝不再调用 ProxyController.setProxyOverride */
     synchronized ContainerProxyManager proxyManager() {
         if (proxyMgr == null) {
             proxyMgr = new ContainerProxyManager(ctx, () -> MAIN.post(this::refreshTabs));
@@ -3319,17 +3639,364 @@ public final class FloatingApps {
         return proxyMgr;
     }
 
-    void ensureTabProxyAsync(Tab t, Runnable onReady) {
-        if (t == null || t.closed) {
-            if (onReady != null) onReady.run();
-            return;
+    synchronized OffscreenWebHost offscreenHost() {
+        if (offscreenHost == null) {
+            offscreenHost = new OffscreenWebHost(ctx);
+        }
+        return offscreenHost;
+    }
+
+    synchronized ProxyWorkerPool workerPool() {
+        if (workerPool == null) {
+            workerPool = new ProxyWorkerPool(ctx, appsDir, containers());
+            workerPool.setCustomUa(customUa());
+        }
+        return workerPool;
+    }
+
+    JSONObject proxyStatusJson() {
+        JSONObject out = new JSONObject();
+        try {
+            out.put("proxySupported", proxyManager().isProxySupported());
+            out.put("mainProcessDirect", true);
+            out.put("frozenTabs", 0);
+            JSONObject ap = new JSONObject();
+            ap.put("container", ContainerManager.DEFAULT);
+            ap.put("label", "主进程直连");
+            ap.put("signature", "DIRECT");
+            ap.put("summary", "直连");
+            ap.put("direct", true);
+            ap.put("localPort", 0);
+            ap.put("switching", false);
+            ap.put("frozenTabs", 0);
+            ap.put("mainProcessDirect", true);
+            out.put("activeProxy", ap);
+            out.put("workers", workerPool().workersStatusJson());
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
+    /**
+     * 抓取主进程标签画面（可在后台线程或主线程调用）：
+     * 后台或最小化时走 OffscreenWebHost.captureScreenshot（解除 minimized 拒拍限制）；
+     * 前台可见时优先 PixelCopy，失败回退 web.draw。
+     */
+    Bitmap captureScreenshot(Tab t, long timeoutMs) {
+        if (t == null || t.closed || t.web == null) return null;
+        long budget = Math.max(800L, timeoutMs);
+        final AtomicBoolean onOffscreen = new AtomicBoolean(false);
+        final AtomicReference<Activity> actRef = new AtomicReference<>();
+        final CountDownLatch chk = new CountDownLatch(1);
+        Runnable checkRun = () -> {
+            onOffscreen.set(minimized || activeRemoteTabId != null || t != active || isTabOnOffscreenHost(t));
+            actRef.set(host);
+            chk.countDown();
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            checkRun.run();
+        } else {
+            MAIN.post(checkRun);
+            try { chk.await(1500L, TimeUnit.MILLISECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+        }
+        if (onOffscreen.get()) {
+            return offscreenHost().captureScreenshot(t.web, budget);
+        }
+        Activity a = actRef.get();
+        if (a != null && !a.isFinishing() && Build.VERSION.SDK_INT >= 26) {
+            Bitmap px = pixelCopyForeground(t.web, a, Math.min(3000L, budget));
+            if (px != null) return px;
+        }
+        final AtomicReference<Bitmap> drawRef = new AtomicReference<>();
+        final CountDownLatch drawLatch = new CountDownLatch(1);
+        Runnable drawRun = () -> {
+            try {
+                int w = t.web.getWidth(), h = t.web.getHeight();
+                if (w > 0 && h > 0) {
+                    Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    b.eraseColor(Color.WHITE);
+                    Canvas c = new Canvas(b);
+                    c.translate(-t.web.getScrollX(), -t.web.getScrollY());
+                    t.web.draw(c);
+                    drawRef.set(b);
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                drawLatch.countDown();
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            drawRun.run();
+        } else {
+            MAIN.post(drawRun);
+            try { drawLatch.await(budget, TimeUnit.MILLISECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+        }
+        return drawRef.get();
+    }
+
+    private Bitmap pixelCopyForeground(WebView wv, Activity a, long timeoutMs) {
+        if (wv == null || a == null || Build.VERSION.SDK_INT < 26) return null;
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicInteger code = new AtomicInteger(-1);
+        final AtomicReference<Bitmap> bmpRef = new AtomicReference<>();
+        final AtomicBoolean posted = new AtomicBoolean(false);
+        Runnable reqRun = () -> {
+            try {
+                Window w = a.getWindow();
+                if (w == null || w.peekDecorView() == null) return;
+                int vw = wv.getWidth(), vh = wv.getHeight();
+                if (vw <= 0 || vh <= 0 || !wv.isShown()) return;
+                int[] loc = new int[2];
+                wv.getLocationInWindow(loc);
+                Bitmap b = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
+                bmpRef.set(b);
+                PixelCopy.request(w, new Rect(loc[0], loc[1], loc[0] + vw, loc[1] + vh), b, r -> {
+                    code.set(r);
+                    latch.countDown();
+                }, MAIN);
+                posted.set(true);
+            } catch (Throwable ignored) {}
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            reqRun.run();
+            if (!posted.get()) return null;
+        } else {
+            final CountDownLatch prep = new CountDownLatch(1);
+            MAIN.post(() -> { reqRun.run(); prep.countDown(); });
+            try { prep.await(1500L, TimeUnit.MILLISECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+            if (!posted.get()) {
+                Bitmap b = bmpRef.get();
+                if (b != null) b.recycle();
+                return null;
+            }
         }
         try {
-            t.envProfile = containers().getProfile(t.container);
-            t.proxySignature = t.envProfile != null ? t.envProfile.proxySignature() : "DIRECT";
-            t.proxySummary = (t.envProfile != null && t.envProfile.hasActiveProxy()) ? t.envProfile.proxy.summary() : "直连";
-        } catch (Throwable ignored) {}
-        proxyManager().applyForContainer(t.container, containerLabel(t.container), t.envProfile, tabs, onReady);
+            if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        Bitmap b = bmpRef.get();
+        if (code.get() != PixelCopy.SUCCESS || b == null) {
+            if (b != null) b.recycle();
+            return null;
+        }
+        return b;
+    }
+
+    // ------------------------------------------------------------------ 远程代理标签预览与交互接管
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void ensureRemoteMirrorView() {
+        if (remoteMirrorContainer != null) return;
+        remoteMirrorContainer = new LinearLayout(vctx);
+        remoteMirrorContainer.setOrientation(LinearLayout.VERTICAL);
+        remoteMirrorContainer.setClickable(true);
+        remoteMirrorContainer.setBackgroundColor(pageColor);
+
+        LinearLayout header = new LinearLayout(vctx);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(10), dp(4), dp(8), dp(4));
+        header.setBackgroundColor(blend(cBar, cAccent, 0.14f));
+
+        mirrorHeaderTv = new TextView(vctx);
+        mirrorHeaderTv.setText("⚡ 独立代理进程");
+        mirrorHeaderTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        mirrorHeaderTv.setTextColor(cFg);
+        mirrorHeaderTv.setSingleLine(true);
+        mirrorHeaderTv.setEllipsize(TextUtils.TruncateAt.END);
+        header.addView(mirrorHeaderTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView refreshBtn = barBtn("刷新画面", "刷新远程代理标签画面", 12);
+        refreshBtn.setTextColor(cAccent);
+        refreshBtn.setPadding(dp(8), 0, dp(8), 0);
+        refreshBtn.setOnClickListener(v -> refreshRemoteMirrorNow());
+        header.addView(refreshBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+
+        TextView backBtn = barBtn("切回直连", "切回主进程直连标签", 12);
+        backBtn.setTextColor(cAccent);
+        backBtn.setPadding(dp(8), 0, dp(4), 0);
+        backBtn.setOnClickListener(v -> exitRemoteMirror());
+        header.addView(backBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+
+        remoteMirrorContainer.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+
+        mirrorImageView = new ImageView(vctx);
+        mirrorImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        mirrorImageView.setBackgroundColor(Color.BLACK);
+        mirrorImageView.setOnTouchListener((v, ev) -> {
+            if (ev.getActionMasked() == MotionEvent.ACTION_UP && activeRemoteTabId != null) {
+                sendRemoteMirrorTap(activeRemoteTabId, ev.getX(), ev.getY());
+            }
+            return true;
+        });
+        remoteMirrorContainer.addView(mirrorImageView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        remoteMirrorContainer.setVisibility(View.GONE);
+        webFrame.addView(remoteMirrorContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    boolean switchToRemote(String remoteTabId) {
+        if (remoteTabId == null || remoteTabId.isEmpty() || workerPool == null) return false;
+        ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
+        if (slot == null) return false;
+        ensureRemoteMirrorView();
+        activeRemoteTabId = remoteTabId;
+        applyVisibility();
+        updateProgress();
+        mirrorHeaderTv.setText("⚡ 独立代理进程 #" + slot.slot + " · " + slot.proxySummary);
+        String cachedUrl = "";
+        for (JSONObject o : workerPool.listCachedRemoteTabs()) {
+            if (remoteTabId.equals(o.optString("id"))) {
+                cachedUrl = o.optString("url", "");
+                break;
+            }
+        }
+        showUrl(active, cachedUrl);
+        refreshTabs();
+        refreshRemoteMirrorNow();
+        startMirrorPolling();
+        return true;
+    }
+
+    void exitRemoteMirror() {
+        if (activeRemoteTabId == null) return;
+        activeRemoteTabId = null;
+        stopMirrorPolling();
+        hideRemoteMirror();
+        applyVisibility();
+        updateProgress();
+        if (!urlField.hasFocus() && active != null) {
+            urlField.setText("");
+            showUrl(active, active.url);
+        }
+        refreshTabs();
+    }
+
+    private void hideRemoteMirror() {
+        if (remoteMirrorContainer != null) {
+            remoteMirrorContainer.setVisibility(View.GONE);
+        }
+    }
+
+    private void startMirrorPolling() {
+        MAIN.removeCallbacks(mirrorPollTask);
+        if (activeRemoteTabId != null && !minimized && host != null) {
+            MAIN.postDelayed(mirrorPollTask, 700L);
+        }
+    }
+
+    private void stopMirrorPolling() {
+        MAIN.removeCallbacks(mirrorPollTask);
+    }
+
+    private void refreshRemoteMirrorNow() {
+        String rid = activeRemoteTabId;
+        if (rid != null) fetchRemoteMirrorFrame(rid);
+    }
+
+    private void fetchRemoteMirrorFrame(String remoteTabId) {
+        if (remoteTabId == null || workerPool == null) return;
+        ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
+        if (slot == null) {
+            MAIN.post(this::exitRemoteMirror);
+            return;
+        }
+        if (!mirrorFetching.compareAndSet(false, true)) return;
+        mirrorExec.execute(() -> {
+            try {
+                JSONObject req = new JSONObject()
+                        .put("action", "mirror_frame")
+                        .put("tab", remoteTabId)
+                        .put("max_side", 720)
+                        .put("quality", 55);
+                JSONObject resp = workerPool.callRpc(slot, req, "mirror-" + remoteTabId, 3500L);
+                if (resp.optBoolean("success", false)) {
+                    String b64 = resp.optString("image", "");
+                    String rUrl = resp.optString("url", "");
+                    int vw = resp.optInt("viewW", 0);
+                    int vh = resp.optInt("viewH", 0);
+                    Bitmap bmp = null;
+                    if (!b64.isEmpty()) {
+                        byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+                        bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    }
+                    final Bitmap fBmp = bmp;
+                    MAIN.post(() -> {
+                        if (!remoteTabId.equals(activeRemoteTabId)) {
+                            if (fBmp != null) fBmp.recycle();
+                            return;
+                        }
+                        if (vw > 0 && vh > 0) {
+                            mirrorRemoteW = vw;
+                            mirrorRemoteH = vh;
+                        }
+                        if (fBmp != null && mirrorImageView != null) {
+                            mirrorImageView.setImageBitmap(fBmp);
+                        }
+                        if (mirrorHeaderTv != null) {
+                            mirrorHeaderTv.setText("⚡ 独立代理进程 #" + slot.slot + " · " + slot.proxySummary
+                                    + (vw > 0 ? " (" + vw + "x" + vh + ")" : ""));
+                        }
+                        if (!urlField.hasFocus() && !rUrl.isEmpty()) {
+                            showUrl(active, rUrl);
+                        }
+                    });
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                mirrorFetching.set(false);
+            }
+        });
+    }
+
+    private void sendRemoteMirrorTap(String remoteTabId, float viewX, float viewY) {
+        if (mirrorImageView == null || workerPool == null) return;
+        ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
+        if (slot == null) return;
+        android.graphics.drawable.Drawable dr = mirrorImageView.getDrawable();
+        if (dr == null) return;
+        int dw = dr.getIntrinsicWidth();
+        int dh = dr.getIntrinsicHeight();
+        if (dw <= 0 || dh <= 0) return;
+
+        float[] pts = new float[]{viewX, viewY};
+        Matrix inv = new Matrix();
+        if (!mirrorImageView.getImageMatrix().invert(inv)) return;
+        inv.mapPoints(pts);
+        double nx = Math.max(0.0, Math.min(1.0, pts[0] / dw));
+        double ny = Math.max(0.0, Math.min(1.0, pts[1] / dh));
+
+        mirrorExec.execute(() -> {
+            try {
+                JSONObject req = new JSONObject()
+                        .put("action", "mirror_tap")
+                        .put("tab", remoteTabId)
+                        .put("nx", nx)
+                        .put("ny", ny)
+                        .put("normalized", true);
+                workerPool.callRpc(slot, req, "mtap-" + remoteTabId, 4000L);
+            } catch (Throwable ignored) {}
+            MAIN.postDelayed(() -> {
+                if (remoteTabId.equals(activeRemoteTabId)) fetchRemoteMirrorFrame(remoteTabId);
+            }, 180L);
+        });
+    }
+
+    private void navigateRemoteFromUi(String remoteTabId, String targetUrl) {
+        if (remoteTabId == null || targetUrl == null || targetUrl.isEmpty() || workerPool == null) return;
+        ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
+        if (slot == null) return;
+        mirrorExec.execute(() -> {
+            try {
+                JSONObject req = new JSONObject()
+                        .put("action", "open")
+                        .put("tab", remoteTabId)
+                        .put("url", targetUrl)
+                        .put("snapshot", false);
+                workerPool.callRpc(slot, req, "mnav-" + remoteTabId, 20000L);
+            } catch (Throwable ignored) {}
+            fetchRemoteMirrorFrame(remoteTabId);
+        });
     }
 
     private static boolean isLoopbackUrl(String u) {
@@ -4586,7 +5253,7 @@ public final class FloatingApps {
             String rt = req.optString("responseType", "text").toLowerCase(java.util.Locale.ROOT);
 
             for (int hop = 0; hop < 6; hop++) {
-                c = proxyManager().openConnection(t, url);
+                c = (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
                 c.setInstanceFollowRedirects(false);
                 c.setConnectTimeout(Math.min(timeout, 30000));
                 c.setReadTimeout(timeout);
@@ -4820,7 +5487,7 @@ public final class FloatingApps {
     private String httpGetText(Tab t, String u, android.webkit.CookieManager cookies) throws Exception {
         java.net.URL url = new java.net.URL(u);
         for (int hop = 0; hop < 6; hop++) {
-            java.net.HttpURLConnection c = proxyManager().openConnection(t, url);
+            java.net.HttpURLConnection c = (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
             try {
                 c.setInstanceFollowRedirects(false);
                 c.setConnectTimeout(15000);
@@ -5443,10 +6110,11 @@ public final class FloatingApps {
         return ua == null || ua.isEmpty() ? null : ua;
     }
 
-    /** 自定义 UA（所有标签，持久保存）；null / 空 = 恢复默认 */
+    /** 自定义 UA（指定标签或全部标签） */
     void setUserAgent(String uaOrNull) {
         String ua = uaOrNull == null ? "" : uaOrNull.trim();
         prefs().edit().putString("custom_ua", ua).apply();
+        if (workerPool != null) workerPool.setCustomUa(ua.isEmpty() ? null : ua);
         for (Tab t : tabs) {
             if (t.web == null) continue;
             t.desktop = false;
@@ -5456,6 +6124,17 @@ public final class FloatingApps {
             applyZoom(t);
             t.web.reload();
         }
+    }
+
+    void setTabUserAgent(Tab t, String uaOrNull) {
+        if (t == null || t.closed || t.web == null) return;
+        String ua = uaOrNull == null ? "" : uaOrNull.trim();
+        t.desktop = false;
+        t.siteUaMode = ua.isEmpty() ? null : ua;
+        t.siteUa = ua.isEmpty() ? null : ua;
+        applyContainerEnv(t, t.web, false);
+        applyZoom(t);
+        t.web.reload();
     }
 
     /** 给 BrowserAgent 的 status：default | desktop | custom */
@@ -5470,13 +6149,40 @@ public final class FloatingApps {
         if (on) prefs().edit().putString("custom_ua", "").apply();
         for (Tab t : new ArrayList<>(tabs)) {
             if (t.web == null || t.desktop == on) continue;
-            toggleDesktop(t, false);
+            setTabDesktop(t, on, false);
         }
     }
 
     /** 网页缩放百分比（网站页面，和 ⋮ → 页面缩放 同一个设置） */
     void setZoom(int percent) {
         saveZoom(null, "https://zoom.invalid/", percent, null);
+    }
+
+    void setTabZoom(Tab t, int percent) {
+        if (t == null || t.closed || t.web == null) return;
+        int z = WebPinchZoom.clamp(percent);
+        String u = t.url;
+        if (u != null && !u.startsWith("about:")) {
+            t.web.getSettings().setTextZoom(100);
+            WebPinchZoom.applyPercent(t.web, z);
+        }
+    }
+
+    String activeRemoteTabId() {
+        return activeRemoteTabId;
+    }
+
+    int mainTabCountForContainer(String containerName) {
+        if (containerName == null || containerName.isEmpty()) return 0;
+        int cnt = 0;
+        for (Tab x : tabs) {
+            if (x != null && !x.closed && containerName.equals(x.container)) cnt++;
+        }
+        return cnt;
+    }
+
+    boolean isEffectiveDesktop(Tab t) {
+        return effectiveDesktopOf(t);
     }
 
     /** 给 BrowserAgent 的 status：当前网页缩放百分比 */
@@ -5545,8 +6251,8 @@ public final class FloatingApps {
         return containerMgr;
     }
 
-    /** 浏览历史（M1 实现）。BrowserAgent 也用它 */
-    synchronized HistoryStore history() {
+    /** 浏览历史（M1 实现）。BrowserAgent 与 AppBridgeManager 共用 */
+    public synchronized HistoryStore history() {
         if (historyStore == null) historyStore = new HistoryStore(appsDir);
         return historyStore;
     }
@@ -5591,7 +6297,11 @@ public final class FloatingApps {
      * background = true 时不切到前台。主线程调用。
      */
     Tab newTabInContainer(String url, String container, boolean background) {
-        Tab t = newTab(true, resolveContainer(container, active));
+        return newTabInContainer(url, container, background, null);
+    }
+
+    Tab newTabInContainer(String url, String container, boolean background, String explicitId) {
+        Tab t = newTab(true, resolveContainer(container, active), explicitId);
         if (url == null || url.isEmpty()) t.web.loadUrl("about:blank");
         else loadIn(t, url, false);
         if (!background) switchTo(t);
@@ -5599,10 +6309,62 @@ public final class FloatingApps {
         return t;
     }
 
-    /** 用户新建标签：container 规则同 resolveContainer */
+    /** 用户新建标签：container 规则同 resolveContainer；代理容器绝不在主进程直连打开 */
     private void newUserTabIn(String containerSpec) {
         userTouched = true;
-        Tab t = newTab(false, resolveContainer(containerSpec, active));
+        String resolved;
+        if ("same".equalsIgnoreCase(containerSpec) && activeRemoteTabId != null && workerPool != null) {
+            ProxyWorkerPool.WorkerSlot activeSlot = workerPool.slotForTab(activeRemoteTabId);
+            resolved = activeSlot != null && !activeSlot.boundContainerId.isEmpty()
+                    ? activeSlot.boundContainerId
+                    : resolveContainer(containerSpec, active);
+        } else {
+            resolved = resolveContainer(containerSpec, active);
+        }
+        ContainerEnv.Profile ep = ContainerEnv.NATIVE;
+        try {
+            if (!ContainerManager.DEFAULT.equalsIgnoreCase(resolved)) {
+                ep = containers().getProfile(resolved);
+            }
+        } catch (Throwable ignored) {}
+        if (ep != null && ep.hasActiveProxy()) {
+            final String fCont = resolved;
+            final ContainerEnv.Profile fEp = ep;
+            final String fLabel = containerLabel(fCont);
+            final String tabId = nextTabId();
+            final ProxyWorkerPool pool = workerPool();
+            Toast.makeText(ctx, "正在独立代理进程中打开容器「" + fLabel + "」…", Toast.LENGTH_SHORT).show();
+            mirrorExec.execute(() -> {
+                ProxyWorkerPool.WorkerSlot slot = null;
+                try {
+                    slot = pool.acquireSlotForContainer(fCont, fLabel, fEp, 20_000L);
+                    JSONObject rpcReq = new JSONObject()
+                            .put("action", "tab_new")
+                            .put("tabId", tabId)
+                            .put("tab", tabId)
+                            .put("pi", false)
+                            .put("desktop", fEp.desktop);
+                    JSONObject resp = pool.callRpc(slot, rpcReq, "ui-tabnew-" + tabId, 20_000L);
+                    if (resp.optBoolean("success", false)) {
+                        pool.registerRemoteTab(tabId, slot);
+                        MAIN.post(() -> {
+                            switchToRemote(tabId);
+                            refreshTabs();
+                        });
+                    } else {
+                        final String errMsg = resp.optString("error", "创建远程代理标签失败");
+                        MAIN.post(() -> Toast.makeText(ctx, errMsg, Toast.LENGTH_LONG).show());
+                    }
+                } catch (Throwable t) {
+                    final String errMsg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                    MAIN.post(() -> Toast.makeText(ctx, "打开代理标签失败：" + errMsg, Toast.LENGTH_LONG).show());
+                } finally {
+                    if (slot != null) pool.releaseAcquire(slot);
+                }
+            });
+            return;
+        }
+        Tab t = newTab(false, resolved);
         switchTo(t);
         openNewTabContent(t);
     }
@@ -5619,7 +6381,7 @@ public final class FloatingApps {
     }
 
     /** 容器显示信息：[标签, 颜色]；Default 显示为「共享」 */
-    private String containerLabel(String name) {
+    String containerLabel(String name) {
         if (name == null || ContainerManager.DEFAULT.equals(name)) return "共享";
         try {
             JSONObject m = containers().meta(name);
@@ -5763,6 +6525,26 @@ public final class FloatingApps {
                             next = containers().setProfile(containerName, presets.get(which));
                         }
                         int n = applyContainerEnvForContainer(containerName, false);
+                        final ProxyWorkerPool.WorkerSlot activeWorker =
+                                workerPool != null ? workerPool.slotForContainer(containerName) : null;
+                        if (activeWorker != null) {
+                            final ContainerEnv.Profile fNext = next;
+                            final String fLabel = containerLabel(containerName);
+                            mirrorExec.execute(() -> {
+                                try {
+                                    JSONObject rpc = new JSONObject()
+                                            .put("action", "update_container_profile")
+                                            .put("label", fLabel)
+                                            .put("profileJson", ContainerEnv.toJson(fNext).toString());
+                                    JSONObject resp = workerPool.callRpc(activeWorker, rpc, "ui-prof-" + containerName, 12000L);
+                                    if (resp.optBoolean("success", false)) {
+                                        activeWorker.boundProfile = fNext;
+                                        activeWorker.boundLabel = fLabel;
+                                        MAIN.post(this::refreshTabs);
+                                    }
+                                } catch (Throwable ignored) {}
+                            });
+                        }
                         if (n > 0) {
                             new AlertDialog.Builder(host)
                                     .setTitle("已更新容器环境")
@@ -5772,7 +6554,8 @@ public final class FloatingApps {
                                     .setNegativeButton("稍后手动刷新", null)
                                     .show();
                         } else {
-                            Toast.makeText(ctx, "已切换为：" + ContainerEnv.summary(next), Toast.LENGTH_SHORT).show();
+                            Toast.makeText(ctx, "已切换为：" + ContainerEnv.summary(next)
+                                    + (activeWorker != null ? "（已同步至代理工作进程）" : ""), Toast.LENGTH_SHORT).show();
                         }
                     } catch (Throwable e) {
                         Toast.makeText(ctx, "设置失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -5967,10 +6750,35 @@ public final class FloatingApps {
         dlg.setOnShowListener(di -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
                 ContainerEnv.ProxySpec candidate = buildSpec.call();
+                int mainDirectCount = 0;
+                for (Tab x : tabs) {
+                    if (x != null && !x.closed && containerName.equals(x.container)) mainDirectCount++;
+                }
+                if (candidate != null && candidate.isActive() && mainDirectCount > 0) {
+                    new AlertDialog.Builder(host)
+                            .setTitle("主进程严禁切换代理")
+                            .setMessage("容器「" + containerLabel(containerName) + "」当前在主进程有 " + mainDirectCount
+                                    + " 个直连标签。主进程固定保持直连不切代理。\n\n请先关闭该容器的直连标签再设置代理，或新建容器标签以在独立代理子进程运行。")
+                            .setPositiveButton("知道了", null)
+                            .show();
+                    return;
+                }
                 JSONObject spec = new JSONObject()
                         .put("proxy", candidate == null ? JSONObject.NULL : candidate.toStorageJson());
                 ContainerEnv.Profile next = containers().setProfile(containerName, spec);
                 applyContainerEnvForContainer(containerName, false);
+                final ProxyWorkerPool.WorkerSlot activeWorker = workerPool != null ? workerPool.slotForContainer(containerName) : null;
+                if (activeWorker != null) {
+                    mirrorExec.execute(() -> {
+                        try {
+                            JSONObject rpc = new JSONObject()
+                                    .put("action", "update_container_profile")
+                                    .put("label", containerLabel(containerName))
+                                    .put("profileJson", ContainerEnv.toJson(next).toString());
+                            workerPool.callRpc(activeWorker, rpc, "ui-proxy-" + containerName, 12000L);
+                        } catch (Throwable ignored) {}
+                    });
+                }
                 Toast.makeText(ctx, "已保存代理：" + (next.hasActiveProxy() ? next.proxy.summary() : "直连"), Toast.LENGTH_SHORT).show();
                 dlg.dismiss();
             } catch (Throwable t) {
@@ -6243,7 +7051,10 @@ public final class FloatingApps {
         if (!uiListening) {
             uiListening = true;
             try {
-                customizer().addListener(() -> MAIN.post(this::reloadUi));
+                customizer().addListener(() -> MAIN.post(() -> {
+                    reloadUi();
+                    if (workerPool != null) workerPool.broadcastConfigSync();
+                }));
             } catch (Throwable e) {
                 Log.w(TAG, "ui listener failed", e);
             }
@@ -7052,6 +7863,7 @@ public final class FloatingApps {
                 if ("desktop".equalsIgnoreCase(mode)) t.desktop = true;
                 else if ("mobile".equalsIgnoreCase(mode)) t.desktop = false;
                 applyContainerEnv(t, t.web, false);
+                syncDesktopViewport(t, effectiveDesktopOf(t), !beforeNav && !isTabOnOffscreenHost(t));
             }
         } else if (t.siteUaMode != null) {
             t.siteUaMode = null;
@@ -7059,6 +7871,7 @@ public final class FloatingApps {
             t.desktop = (t.envProfile != null && t.envProfile.desktop)
                     || (uiObj("defaults").optBoolean("desktopMode", false) && !t.pi);
             applyContainerEnv(t, t.web, false);
+            syncDesktopViewport(t, effectiveDesktopOf(t), !beforeNav && !isTabOnOffscreenHost(t));
         }
         if (!beforeNav) applyZoom(t);
     }
@@ -7096,14 +7909,18 @@ public final class FloatingApps {
         if (c.isEmpty()) return false;
         String name = resolveContainer(c, t);
         if (name == null || name.equals(t.container)) return false;
+        try {
+            ContainerEnv.Profile targetProf = containers().getProfile(name);
+            if (targetProf != null && targetProf.hasActiveProxy()) {
+                Toast.makeText(ctx, "容器「" + containerLabel(name) + "」已配置代理，主进程固定直连，请通过 Pi 代理标签打开", Toast.LENGTH_LONG).show();
+                return true;
+            }
+        } catch (Throwable ignored) {}
         boolean blank = t.url == null || t.url.isEmpty() || isLauncher(t.url) || t.url.startsWith("about:");
         Tab nt = newTab(false, name);
         switchTo(nt);
-        ensureTabProxyAsync(nt, () -> {
-            if (nt.closed || nt.web == null || !proxyManager().matchesActive(nt.proxySignature)) return;
-            applySiteSettings(nt, url, true);
-            loadUrlWithEnv(nt, url, null);
-        });
+        applySiteSettings(nt, url, true);
+        loadUrlWithEnv(nt, url, null);
         if (blank && tabs.size() > 1) closeTab(t);
         Toast.makeText(ctx, "已在容器「" + containerLabel(name) + "」打开", Toast.LENGTH_SHORT).show();
         return true;
@@ -7452,8 +8269,7 @@ public final class FloatingApps {
             JSONObject c = list.optJSONObject(i);
             if (c == null) continue;
             String n = c.optString("name");
-            int cnt = 0;
-            for (Tab x : tabs) if (n.equals(x.container)) cnt++;
+            int cnt = mainTabCountForContainer(n) + (workerPool != null ? workerPool.remoteTabCountForContainer(n) : 0);
             names.add(n);
             ContainerEnv.Profile ep = ContainerEnv.NATIVE;
             try { ep = containers().getProfile(n); } catch (Throwable ignored) {}
@@ -7464,8 +8280,19 @@ public final class FloatingApps {
         names.add("new");
         labels.add("＋ 新容器");
         AlertDialog dlg = new AlertDialog.Builder(host)
-                .setTitle("🗂 容器（全局代理：" + proxyManager().getActiveSummary() + "）")
-                .setItems(labels.toArray(new String[0]), (d, w) -> newUserTabIn(names.get(w)))
+                .setTitle("🗂 容器（主进程直连 · 独立代理进程池）")
+                .setItems(labels.toArray(new String[0]), (d, w) -> {
+                    String cname = names.get(w);
+                    if (!"new".equals(cname) && !ContainerManager.DEFAULT.equals(cname)) {
+                        try {
+                            if (containers().getProfile(cname).hasActiveProxy()) {
+                                showContainerActionsMenu(cname);
+                                return;
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                    newUserTabIn(cname);
+                })
                 .setNegativeButton("关闭", null)
                 .create();
         dlg.setOnShowListener(di -> {
@@ -8556,6 +9383,8 @@ public final class FloatingApps {
     }
 
     private void dismiss() {
+        stopMirrorPolling();
+        activeRemoteTabId = null;
         closePanel();
         cancelPendingFileChooser();
         AttachmentPickerActivity.sCallback = null;
@@ -8568,9 +9397,17 @@ public final class FloatingApps {
         host = null;
         vctx.setBaseContext(ctx);
         for (Tab t : tabs) {
+            if (offscreenHost != null && t.web != null) {
+                offscreenHost.unmount(t.web);
+            }
+            if (t.tabCtx != null) {
+                try { t.tabCtx.setBaseContext(ctx); } catch (Throwable ignored) {}
+            }
             try {
-                t.web.stopLoading();
-                t.web.destroy();
+                if (t.web != null) {
+                    t.web.stopLoading();
+                    t.web.destroy();
+                }
             } catch (Throwable ignored) {}
             t.web = null;
             t.closed = true;
@@ -8581,6 +9418,15 @@ public final class FloatingApps {
         for (Tab t : tabs) if (t.container != null) used.add(t.container);
         tabs.clear();
         for (String c : used) releaseContainer(c); // 每个标签各 release 一次，与 apply 次数对应
+        if (offscreenHost != null) {
+            try { offscreenHost.destroy(); } catch (Throwable ignored) {}
+            offscreenHost = null;
+        }
+        if (workerPool != null) {
+            try { workerPool.shutdownAll(); } catch (Throwable ignored) {}
+            workerPool = null;
+        }
+        try { mirrorExec.shutdownNow(); } catch (Throwable ignored) {}
         if (proxyMgr != null) {
             proxyMgr.shutdown();
             proxyMgr = null;

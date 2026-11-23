@@ -74,6 +74,19 @@ public final class ContainerEnv {
     public static final String WEBRTC_DISABLED = "disabled";
     public static final String WEBRTC_NATIVE = "native";
 
+    public static final int MOBILE_VIEWPORT_W = 390;
+    public static final int MOBILE_VIEWPORT_H = 844;
+    public static final int DESKTOP_VIEWPORT_W = 1280;
+    public static final int DESKTOP_VIEWPORT_H = 800;
+
+    public static int viewportWidth(boolean desktop) {
+        return desktop ? DESKTOP_VIEWPORT_W : MOBILE_VIEWPORT_W;
+    }
+
+    public static int viewportHeight(boolean desktop) {
+        return desktop ? DESKTOP_VIEWPORT_H : MOBILE_VIEWPORT_H;
+    }
+
     /** 真实设备规格 */
     public static final class DeviceSpec {
         public final String id;
@@ -1108,6 +1121,8 @@ public final class ContainerEnv {
             String majorVer = ver[1];
             String effectiveUa = buildEffectiveUa(ctx, p, effectiveDesktop, overrideUa);
 
+            ws.setUseWideViewPort(true);
+            ws.setLoadWithOverviewMode(true);
             ws.setUserAgentString(effectiveUa);
 
             if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {

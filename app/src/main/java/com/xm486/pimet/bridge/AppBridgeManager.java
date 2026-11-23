@@ -17,6 +17,10 @@ import com.xm486.pimet.automation.PiMetAccessibilityService;
 import com.xm486.pimet.pet.PetOverlayService;
 import com.xm486.pimet.pet.PetRegistry;
 import com.xm486.pimet.proot.ProotManager;
+import com.xm486.pimet.ui.FloatingApps;
+import com.xm486.pimet.ui.HistoryStore;
+import com.xm486.pimet.ui.ProxyWorkerBridge;
+import com.xm486.pimet.ui.UserScriptManager;
 
 import org.json.JSONObject;
 
@@ -177,6 +181,7 @@ public class AppBridgeManager {
                 long contentLength = 0;
                 boolean badLength = false;
                 String token = null;
+                String mainToken = null;
                 String hl;
                 while ((hl = readLineBytes(in)) != null && !hl.isEmpty()) {
                     int c = hl.indexOf(':');
@@ -187,15 +192,25 @@ public class AppBridgeManager {
                         try { contentLength = Long.parseLong(val); } catch (Exception e) { badLength = true; }
                     } else if ("x-pimet-token".equals(name)) {
                         token = val;
+                    } else if ("x-main-token".equals(name)) {
+                        mainToken = val;
                     }
                 }
                 String[] parts = requestLine.split(" ");
                 String method = parts.length > 0 ? parts[0] : "";
                 String path = parts.length > 1 ? parts[1] : "/";
+                int qIdx = path.indexOf('?');
+                String cleanPath = qIdx >= 0 ? path.substring(0, qIdx) : path;
 
                 // GET /api/phone-status：不看正文，行为不变
-                if ("GET".equalsIgnoreCase(method) && path.startsWith("/api/phone-status")) {
+                if ("GET".equalsIgnoreCase(method) && cleanPath.startsWith("/api/phone-status")) {
                     safeWrite(s, 200, PiMetAccessibilityService.statusJson(appContext));
+                    return;
+                }
+                boolean isWorkerEvent = "POST".equalsIgnoreCase(method)
+                        && ProxyWorkerBridge.PATH_WORKER_EVENT.equals(cleanPath);
+                if (isWorkerEvent && !mainTokenOk(mainToken)) {
+                    safeWrite(s, 401, err("未授权：缺少或无效的 X-Main-Token"));
                     return;
                 }
                 if (badLength || contentLength < 0) {
@@ -250,7 +265,9 @@ public class AppBridgeManager {
                 }
 
                 JSONObject resp;
-                if (isBrowser(json)) {
+                if (isWorkerEvent) {
+                    resp = handleWorkerEvent(json);
+                } else if (isBrowser(json)) {
                     if (token == null) token = json.optString("token", null);
                     if (!tokenOk(token)) {
                         resp = err("浏览器请求缺少有效令牌（X-PiMet-Token），请重启 PiMet 后重试");
@@ -292,6 +309,98 @@ public class AppBridgeManager {
         if (token == null) return false;
         return java.security.MessageDigest.isEqual(
                 getBridgeToken().getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private boolean mainTokenOk(String token) {
+        if (token == null) return false;
+        String expected = getWorkerMainToken();
+        return java.security.MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private volatile String workerMainToken;
+    private volatile HistoryStore fallbackHistory;
+    private volatile UserScriptManager fallbackScripts;
+
+    /** 供代理子进程回调主进程 /internal/worker-event 的随机令牌（进程级，内存持有） */
+    public String getWorkerMainToken() {
+        String t = workerMainToken;
+        if (t != null) return t;
+        synchronized (this) {
+            if (workerMainToken == null) {
+                byte[] b = new byte[32];
+                new java.security.SecureRandom().nextBytes(b);
+                StringBuilder sb = new StringBuilder(64);
+                for (byte x : b) sb.append(String.format(java.util.Locale.ROOT, "%02x", x & 0xff));
+                workerMainToken = sb.toString();
+            }
+            return workerMainToken;
+        }
+    }
+
+    private HistoryStore resolveHistoryStore() {
+        FloatingApps fa = FloatingApps.current();
+        if (fa != null) return fa.history();
+        HistoryStore fh = fallbackHistory;
+        if (fh != null) return fh;
+        synchronized (this) {
+            if (fallbackHistory == null) {
+                File apps = new File(ProotManager.getRootfsDir(appContext), FloatingApps.APPS_DIR_IN_CONTAINER.substring(1));
+                fallbackHistory = new HistoryStore(apps);
+            }
+            return fallbackHistory;
+        }
+    }
+
+    private UserScriptManager resolveScriptManager() {
+        FloatingApps fa = FloatingApps.current();
+        if (fa != null) return fa.scripts();
+        UserScriptManager fs = fallbackScripts;
+        if (fs != null) return fs;
+        synchronized (this) {
+            if (fallbackScripts == null) {
+                File apps = new File(ProotManager.getRootfsDir(appContext), FloatingApps.APPS_DIR_IN_CONTAINER.substring(1));
+                fallbackScripts = new UserScriptManager(apps);
+            }
+            return fallbackScripts;
+        }
+    }
+
+    private JSONObject handleWorkerEvent(JSONObject json) {
+        try {
+            String event = json.optString("event", "").trim();
+            switch (event) {
+                case "history_add": {
+                    String url = json.optString("url", "");
+                    String title = json.optString("title", "");
+                    String containerId = json.optString("containerId", "");
+                    resolveHistoryStore().add(url, title, containerId);
+                    return new JSONObject().put("success", true).put("ok", true);
+                }
+                case "gm_set_value": {
+                    String scriptId = json.optString("scriptId", "");
+                    String key = json.optString("key", "");
+                    String valJson = json.optString("valueJson", "null");
+                    if (!scriptId.isEmpty() && !key.isEmpty()) {
+                        resolveScriptManager().setValue(scriptId, key, valJson);
+                    }
+                    return new JSONObject().put("success", true).put("ok", true);
+                }
+                case "gm_delete_value": {
+                    String scriptId = json.optString("scriptId", "");
+                    String key = json.optString("key", "");
+                    if (!scriptId.isEmpty() && !key.isEmpty()) {
+                        resolveScriptManager().deleteValue(scriptId, key);
+                    }
+                    return new JSONObject().put("success", true).put("ok", true);
+                }
+                default:
+                    return err("未知 worker event: " + event);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "handleWorkerEvent error", t);
+            return err("处理 worker event 失败: " + t.getMessage());
+        }
     }
 
     /**
@@ -397,6 +506,7 @@ public class AppBridgeManager {
         String reason;
         switch (status) {
             case 400: reason = "Bad Request"; break;
+            case 401: reason = "Unauthorized"; break;
             case 413: reason = "Payload Too Large"; break;
             default: status = 200; reason = "OK"; break;
         }

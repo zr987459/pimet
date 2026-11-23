@@ -97,20 +97,22 @@ return await b.extract(".result-item", { title: "h3", url: "a@href" }, { limit: 
 
 - **作用域隔离**：`b.js(() => q)` 看不到外部变量 `q`，必须写成 `b.js((q) => ..., q)`；参数与返回值都须可 JSON 序列化。
 - **`b.js` 内跳页会丢返回值**：跳转用 `b.click` 或取出 `href` 后 `b.open`。
-- **后台窗口限制**：Pi 浏览器不在前台时，后台标签只能用 `js: true` 点击，且无法截图。
+- **后台真实视口**：后台标签与最小化状态下均保持真实非零视口（手机 `390x844` / 桌面 `1280x800`）与渲染，支持正常 `screenshot` 与定时/动画不节流；无窗口降级时自动回退 JS 点击。
 - **读错轨迹**：`run` 失败会返回 `出错位置（run 第 N 行 或 工具.mjs 第 N 行）`、`当前网址` 和 `最后 5 步`（`#序号 动作 · 耗时 · ✓/✗`）；从当前网址修复后继续即可。
 - **致命中断**：遇到 `⛔ 已叫停` 或 `用户正在操作标签（user_takeover）`，所有 `b.*` 会立即中止；立刻停手并汇报当前进度。
 
 ## 容器、指纹隔离、标签、历史与工具规范
 
-- **容器登录态、指纹隔离与单活代理（防风控防串线）**：
+- **容器登录态、指纹隔离与多进程并行代理（防风控防串线）**：
   - `tab_new` 默认 `container: "new"`（独立 Cookie/Storage 与独立 `auto` 设备指纹，自动去除 `; wv`、`X-Requested-With` 与全局 `window.PiMet*` 桥暴露）。
+  - 主进程固定保持 `DIRECT` 直连（用户前台 `t1` 及所有直连标签永不冻结，`frozenTabs: 0`）；带 `proxy` 的容器自动调度至独立代理子进程（最多 4 个槽位并发运行，完全隔离 `dataDirectorySuffix` 与 `ProxyController`，可同时开多条不同代理链路互不干扰！）。
   - 需要特定国家/地区环境与代理时，建议建容器/建标签时一次性配好：
     - 例：`tab_new(url, container: "new", profile: "ca-en", proxy: "socks5://user:pass@1.2.3.4:1080")` 或对象 `{type:"socks5", host, port, username, password, upstream:"http://127.0.0.1:7890"}`（传 `null` 或 `"direct"` 清除代理）。
     - 也可先 `create_container {profile, proxy, label?, keep?}` 创建容器，再在其中 `tab_new(url, container: name)`。
     - `run` 里可用 `await b.newTab(url, { profile: "ca-en", proxy: "http://127.0.0.1:7890" })`、`await b.createContainer(...)`、`await b.setContainerProfile(...)`。
-  - 查询/修改现有容器环境或代理用 `container_profile` / `set_container_profile {name?, profile?, proxy?, randomize?, reload?}`（或 `b.containerProfile(...)`）；若容器已有打开页面，改完环境会返回 `warning`，防风控场景强烈建议直接 `tab_new` 新建容器。
-  - **单活代理防串线**：WebView 进程内同一时刻只能有一个全局代理生效；切换到不同代理容器时会自动更新全局隧道并冻结其余不同代理的标签（`proxyFrozen: true`），页面交互前如需禁止自动切代理可传 `switch_proxy: false`。
+  - 查询/修改现有容器环境或代理用 `container_profile` / `set_container_profile {name?, profile?, proxy?, randomize?, reload?}`（或 `b.containerProfile(...)`）：若容器已在代理子进程运行支持热更新；若容器在主进程仍有活跃直连标签则严禁切换代理（需先关闭直连标签或新建容器）。
+  - 4 个独立代理进程槽位全被活跃代理标签占用时，需先 `tab_close` 关闭闲置代理标签；绝不跨容器混用。
+  - `desktop` / `ua` / `zoom` 支持显式传 `tab` 单独作用于该标签并立即同步 `1280x800` ↔ `390x844` 视口。
   - `Default` 容器始终为 `native` + 直连（禁止设置隔离或代理）；需要复用用户当前标签登录态时用 `container: "same"`；用 `container_keep {name, keep: true}` 保留容器（先征得用户同意）。
 - **不打断用户**：不传 `tab` 时只操作 Pi 标签；仅当用户明确要求操作当前页才传 `tab: "user"`；不要擅自 `show` / `tab_switch`。
 - **历史与下载**：`history {q?, limit?, offset?}` 查最近访问；`downloads` 查下载进度；`history_delete` / `history_clear` / `clear_data` / `script_remove` / `ui_reset` **须先征得用户同意**。

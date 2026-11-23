@@ -1,5 +1,6 @@
 package com.xm486.pimet.ui;
 
+import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -50,6 +51,50 @@ public final class ContainerManager {
     };
 
     private static Boolean supportedCache;
+
+    public static String workerDataDirSuffix(String containerId) {
+        String id = (containerId == null || containerId.trim().isEmpty()) ? "default" : containerId.trim();
+        return "pw_" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
+    /** 安全异步删除子进程 WebView 隔离数据目录（仅在目标子进程已确认退出后调用）。 */
+    public static void deleteWorkerDataDir(Context ctx, String containerId) {
+        if (ctx == null || containerId == null || containerId.trim().isEmpty()) return;
+        final Context app = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+        final String suffix = workerDataDirSuffix(containerId);
+        Thread t = new Thread(() -> {
+            try {
+                java.util.LinkedHashSet<File> roots = new java.util.LinkedHashSet<>();
+                File d1 = app.getDataDir();
+                if (d1 != null) roots.add(d1);
+                android.content.pm.ApplicationInfo ai = app.getApplicationInfo();
+                if (ai != null && ai.dataDir != null && !ai.dataDir.isEmpty()) {
+                    roots.add(new File(ai.dataDir));
+                }
+                for (File root : roots) {
+                    deleteRecursively(new File(root, "app_webview_" + suffix));
+                }
+            } catch (Throwable ex) {
+                Log.w(TAG, "deleteWorkerDataDir failed: " + containerId, ex);
+            }
+        }, "pimet-del-worker-dir");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f == null || !f.exists()) return;
+        try {
+            if (!Files.isSymbolicLink(f.toPath()) && f.isDirectory()) {
+                File[] children = f.listFiles();
+                if (children != null) {
+                    for (File child : children) deleteRecursively(child);
+                }
+            }
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        } catch (Throwable ignored) {}
+    }
 
     private final File metaFile;
     private final Object lock = new Object();

@@ -1843,7 +1843,7 @@ export default function (pi: ExtensionAPI) {
       "【目标 target】@N（快照 ref）| CSS 选择器（跨层用 >>>）| text=文字 | [x,y] 坐标。\n" +
       "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
       "【单步】tools | read | open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
-      "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,switch_proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
+      "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（多进程并行代理架构：主进程固定直连 t1 永不冻结，最多 4 个独立代理子进程并行，frozenTabs: 0，后台保持真实 390x844 / 桌面 1280x800 视口；需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
       "【油猴与定制】scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject；" +
       "ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panel_* | action_run | site_* | rule_* | rules（定制细节按需读 customize.md）。\n" +
       "【红线】script_remove、clear_data、history_clear、ui_reset 先征得用户同意；不擅自 show / tab_switch；遇到「用户已叫停」或 user_takeover 立即停下汇报；验证码/支付/登录确认交由用户完成。",
@@ -1857,7 +1857,7 @@ export default function (pi: ExtensionAPI) {
           " | ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panels | panel_write | panel_open | panel_delete | action_run | site_set | site_get | rule_add | rule_remove | rules",
       }),
       code: Type.Optional(Type.String({ description: "run 的代码：async 函数体，可用 b、ctx 和 await，用 return 返回结果；script_install 时是完整用户脚本源码（含 ==UserScript== 头）" })),
-      tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tab_new / tabs 给出的 id（如 t3）；tab_switch / tab_close 的目标标签" })),
+      tab: Type.Optional(Type.String({ description: "操作哪个标签：默认 Pi 专属标签；\"user\" = 用户当前的标签；或 tab_new / tabs 给出的 id（如 t3）；tab_switch / tab_close 的目标标签；desktop / ua / zoom 传 tab 可单独作用于指定标签（即时同步 1280x800 ↔ 390x844 视口）" })),
       target: Type.Optional(
         Type.Union([Type.String(), Type.Array(Type.Number())], {
           description: "click / fill / type / select / hover / scroll_into_view 的目标：@N（快照里的 [ref=N]）| CSS 选择器 | text=文字 | [x,y] 坐标",
@@ -1884,7 +1884,7 @@ export default function (pi: ExtensionAPI) {
         })
       ),
       label: Type.Optional(Type.String({ description: "create_container 的容器显示名称（可选）" })),
-      switch_proxy: Type.Optional(Type.Boolean({ description: "单活全局代理与目标标签不一致时是否自动切换，默认 true；false 时拒绝访问以防串线" })),
+      switch_proxy: Type.Optional(Type.Boolean({ description: "兼容保留参数（多进程并行代理架构下主进程固定直连不冻结，代理容器各自在独立子进程运行）" })),
       randomize: Type.Optional(Type.Boolean({ description: "container_profile：true = 随机更换设备型号与指纹 seed" })),
       reload: Type.Optional(Type.Boolean({ description: "container_profile：true = 更新环境后立即刷新该容器已打开的标签" })),
       background: Type.Optional(Type.Boolean({ description: "tab_new 在后台打开，不切走用户当前标签，默认 true" })),
@@ -1937,7 +1937,7 @@ export default function (pi: ExtensionAPI) {
       max_chars: Type.Optional(Type.Number({ description: "快照或 read 正文的最大字符数：snapshot 默认 12000，变更操作后附带快照默认 2500，read 默认 15000" })),
       timeout: Type.Optional(Type.Number({ description: "单步：等待加载 / wait / eval 的超时毫秒，默认 20000，最大 120000；run：整段代码的超时秒数，默认 120，最大 600" })),
       id: Type.Optional(Type.String({ description: "panel_write / panel_open / panel_delete 的面板 id；用户脚本 id（scripts 列出）：script_get / script_enable / script_remove / script_update（不填=全部检查更新）/ script_values / menu_run" })),
-      on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版 / false 手机版" })),
+      on: Type.Optional(Type.Boolean({ description: "script_enable：true 启用 / false 停用；desktop：true 桌面版(1280x800) / false 手机版(390x844)，可配合 tab 单独切换" })),
       set: Type.Optional(
         Type.Union([Type.String(), Type.Object({}, { additionalProperties: true })], {
           description: "script_values：要写入的值 {键: 值}；cookies：要设置的 Cookie 字符串（如 \"a=1; path=/\"）",
@@ -1951,8 +1951,8 @@ export default function (pi: ExtensionAPI) {
           description: "ui_patch：合并进 ui.json 的补丁（RFC 7386，null 表示删除该字段；数组整体替换）；config_set：合并进 config.json 的字段，如 {\"theme\":{...}} {\"buttons\":[...]} {\"home\":\"...\"} {\"showButtonBar\":true}；buttons 会整体替换，先 config_get 再改",
         })
       ),
-      ua: Type.Optional(Type.String({ description: "ua：自定义 User-Agent 字符串；空字符串或 default = 恢复默认" })),
-      percent: Type.Optional(Type.Number({ description: "zoom：页面缩放百分比，如 100、125" })),
+      ua: Type.Optional(Type.String({ description: "ua：自定义 User-Agent 字符串；空字符串或 default = 恢复默认（可配合 tab 单独设置）" })),
+      percent: Type.Optional(Type.Number({ description: "zoom：页面缩放百分比，如 100、125（可配合 tab 单独设置）" })),
       what: Type.Optional(Type.String({ description: "clear_data：cookies | cache | storage | all" })),
       selector: Type.Optional(Type.String({ description: "wait_for：等待出现的 CSS 选择器（与 text 二选一）；read：限定提取正文的容器选择器" })),
       include_links: Type.Optional(Type.Boolean({ description: "read：是否提取页面关键链接列表，默认 true" })),

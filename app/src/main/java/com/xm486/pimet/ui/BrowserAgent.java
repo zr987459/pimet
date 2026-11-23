@@ -1,11 +1,7 @@
 package com.xm486.pimet.ui;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.ContextWrapper;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -13,8 +9,6 @@ import android.util.Base64;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.PixelCopy;
-import android.view.Window;
 import android.webkit.WebView;
 
 import org.json.JSONArray;
@@ -38,7 +32,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -88,6 +81,7 @@ public final class BrowserAgent {
         volatile boolean cancelled;
         volatile String tabSpec = "";
         volatile FloatingApps.Tab tab;
+        volatile String remoteTabId;
 
         Req(String id, int timeout, long extraMs) {
             this.id = id;
@@ -103,6 +97,7 @@ public final class BrowserAgent {
     private static final ConcurrentHashMap<String, Long> PRE_CANCELLED = new ConcurrentHashMap<>();
     private static final ThreadLocal<Req> CUR = new ThreadLocal<>();
     private static final Map<FloatingApps.Tab, ReentrantLock> LOCKS = new WeakHashMap<>();
+    private static final ConcurrentHashMap<String, ReentrantLock> REMOTE_LOCKS = new ConcurrentHashMap<>();
 
     private static class AbortException extends RuntimeException {
         AbortException(String m) { super(m); }
@@ -127,20 +122,47 @@ public final class BrowserAgent {
         for (Iterator<Map.Entry<String, Long>> it = PRE_CANCELLED.entrySet().iterator(); it.hasNext(); ) {
             if (now - it.next().getValue() > 60000) it.remove();
         }
+        String remoteTabForPool = tab;
         if (reqId != null && !reqId.trim().isEmpty()) {
             Req r = INFLIGHT.get(reqId.trim());
-            if (r != null) r.cancelled = true;
-            else PRE_CANCELLED.put(reqId.trim(), now);
+            if (r != null) {
+                r.cancelled = true;
+                if (r.remoteTabId != null) remoteTabForPool = r.remoteTabId;
+            } else {
+                PRE_CANCELLED.put(reqId.trim(), now);
+            }
         }
+        List<String> matchedRemoteTabs = new ArrayList<>();
         if (tab != null && !tab.trim().isEmpty()) {
             String t = tab.trim();
-            for (Req r : INFLIGHT.values()) if (matchesTab(r, t)) r.cancelled = true;
+            for (Req r : INFLIGHT.values()) {
+                if (matchesTab(r, t)) {
+                    r.cancelled = true;
+                    if (r.remoteTabId != null && !matchedRemoteTabs.contains(r.remoteTabId)) {
+                        matchedRemoteTabs.add(r.remoteTabId);
+                    }
+                }
+            }
+        }
+        FloatingApps fa = FloatingApps.current();
+        if (fa != null) {
+            ProxyWorkerPool pool = fa.peekWorkerPool();
+            if (pool != null) {
+                if (!matchedRemoteTabs.isEmpty()) {
+                    for (String rt : matchedRemoteTabs) {
+                        pool.cancel(reqId, rt);
+                    }
+                } else {
+                    pool.cancel(reqId, remoteTabForPool);
+                }
+            }
         }
     }
 
     private static boolean matchesTab(Req r, String t) {
         String spec = r.tabSpec == null || r.tabSpec.trim().isEmpty() ? "pi" : r.tabSpec.trim();
         if (spec.equalsIgnoreCase(t)) return true;
+        if (r.remoteTabId != null && r.remoteTabId.equals(t)) return true;
         FloatingApps.Tab tb = r.tab;
         if (tb == null) return false;
         if (tb.id.equals(t)) return true;
@@ -253,6 +275,8 @@ public final class BrowserAgent {
                     if (!out.has("url")) out.put("url", t.url);
                     if (!out.has("title")) out.put("title", t.title);
                     if (!out.has("tab")) out.put("tab", t.id);
+                } else if (r.remoteTabId != null && !out.has("tab")) {
+                    out.put("tab", r.remoteTabId);
                 }
             }
         } catch (Throwable ignored) {}
@@ -301,7 +325,26 @@ public final class BrowserAgent {
                     } catch (Throwable ignored) {}
                     return a;
                 }, 4000);
-                JSONObject res = ok().put("tabs", tj == null ? new JSONArray() : tj).put("result", onMain(win::agentTabsText, 3000));
+                JSONArray merged = tj == null ? new JSONArray() : tj;
+                StringBuilder textSb = new StringBuilder(nz(onMain(win::agentTabsText, 3000)));
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                List<JSONObject> remoteTabs = pool.listAllRemoteTabs();
+                String activeRemote = win.activeRemoteTabId();
+                for (JSONObject rt : remoteTabs) {
+                    if (rt == null) continue;
+                    boolean isActiveRemote = activeRemote != null && activeRemote.equals(rt.optString("id"));
+                    try { rt.put("active", isActiveRemote); } catch (Throwable ignored) {}
+                    merged.put(rt);
+                    if (textSb.length() > 0) textSb.append('\n');
+                    textSb.append(rt.optString("id"))
+                            .append("pi".equals(rt.optString("kind", "pi")) ? " 🤖Pi" : " 用户")
+                            .append(isActiveRemote ? " [当前显示]" : "")
+                            .append(" [远程槽#").append(rt.optInt("workerSlot")).append("]")
+                            .append(" {").append(rt.optString("containerLabel", rt.optString("container"))).append("}  ")
+                            .append(rt.optString("title", "").isEmpty() ? "" : rt.optString("title") + "  ")
+                            .append(rt.optString("url", ""));
+                }
+                JSONObject res = ok().put("tabs", merged).put("result", textSb.toString().trim());
                 putProxyStatus(win, res, false);
                 return res;
             }
@@ -316,14 +359,16 @@ public final class BrowserAgent {
                     return tabNew(win, fwd);
                 }
                 String url = normalize(req.optString("url", ""));
-                boolean switchProxy = req.optBoolean("switch_proxy", true);
                 FloatingApps.Tab t;
                 synchronized (WINDOW_LOCK) {
                     t = onMain(win::agentNewPiTab, 5000);
                 }
                 if (t == null) return err("新建标签失败");
                 CUR.get().tab = t;
-                JSONObject out = ok().put("tab", t.id);
+                boolean effDesk = Boolean.TRUE.equals(onMain(() -> win.isEffectiveDesktop(t), 2000));
+                JSONObject out = ok().put("tab", t.id)
+                        .put("remote", false)
+                        .put("viewport", viewportStr(effDesk));
                 if (url.isEmpty()) {
                     putProxyStatus(win, out, false);
                     return out.put("url", t.url).put("result", "已新建 Pi 标签 " + t.id);
@@ -331,11 +376,6 @@ public final class BrowserAgent {
                 ReentrantLock lk = lockOf(t);
                 acquire(lk, t);
                 try {
-                    boolean proxySwitched = false;
-                    if (!isLocalUrlForProxy(url)) {
-                        proxySwitched = ensureProxyReadyForTab(win, t, switchProxy);
-                    }
-                    // 新标签先加载 about:blank，等它落定，免得把它当成目标页面的加载完成
                     long e = SystemClock.uptimeMillis() + 2000;
                     while (SystemClock.uptimeMillis() < e && (t.navSeq == 0 || t.loading || t.finishedSeq != t.navSeq)) sleep(50);
                     int seq = t.navSeq;
@@ -344,10 +384,10 @@ public final class BrowserAgent {
                     boolean loaded = navWait(t, seq, before, softLeft());
                     JSONObject bad = applyNav(out, t, loaded, "已新建 Pi 标签 " + t.id + " 并打开 " + url);
                     if (bad != null) {
-                        putProxyStatus(win, bad, proxySwitched);
-                        return bad.put("tab", t.id);
+                        putProxyStatus(win, bad, false);
+                        return bad.put("tab", t.id).put("remote", false).put("viewport", viewportStr(effDesk));
                     }
-                    putProxyStatus(win, out, proxySwitched);
+                    putProxyStatus(win, out, false);
                     return out.put("url", t.url).put("title", t.title);
                 } finally {
                     lk.unlock();
@@ -355,16 +395,65 @@ public final class BrowserAgent {
             }
             case "tab_switch":
             case "switch_tab": {
-                String id = req.optString("tab", "");
+                String id = req.optString("tab", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (pool.isRemoteTab(id)) {
+                    ProxyWorkerPool.WorkerSlot slot = pool.slotForTab(id);
+                    Boolean switched = onMain(() -> win.switchToRemote(id), 3000);
+                    if (!Boolean.TRUE.equals(switched)) return err("没有标签 " + id + "，用 tabs 查看");
+                    boolean bg = Boolean.TRUE.equals(onMain(() -> win.minimized, 2000));
+                    JSONObject res = ok().put("tab", id)
+                            .put("remote", true)
+                            .put("workerSlot", slot != null ? slot.slot : 0)
+                            .put("workerPid", slot != null ? slot.pid : 0)
+                            .put("result", "已切换到远程代理标签 " + id
+                                    + (bg ? "（浏览器窗口现在不在前台，用户打开浏览器时会看到代理预览）" : "（用户现在看到的是代理预览画面）"));
+                    putProxyStatus(win, res, false);
+                    return res;
+                }
                 Boolean done = onMain(() -> win.agentSwitch(id), 3000);
                 if (!Boolean.TRUE.equals(done)) return err("没有标签 " + id + "，用 tabs 查看");
                 boolean bg = Boolean.TRUE.equals(onMain(() -> win.minimized, 2000));
-                return ok().put("tab", id).put("result", "已切换到标签 " + id
+                return ok().put("tab", id).put("remote", false).put("result", "已切换到标签 " + id
                         + (bg ? "（浏览器窗口现在不在前台，用户打开浏览器时会看到它）" : "（用户现在看到的是它）"));
             }
             case "tab_close":
             case "close_tab": {
-                String id = req.optString("tab", "pi");
+                String id = req.optString("tab", "pi").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                String remoteTarget = null;
+                if (!id.isEmpty() && pool.isRemoteTab(id)) {
+                    remoteTarget = id;
+                } else if (id.isEmpty() || "pi".equalsIgnoreCase(id)) {
+                    boolean hasLocalPi = Boolean.TRUE.equals(onMain(win::hasLocalPiTab, 2000));
+                    if (!hasLocalPi) {
+                        remoteTarget = pool.lastRemoteTabId();
+                    }
+                }
+                if (remoteTarget != null) {
+                    ProxyWorkerPool.WorkerSlot slot = pool.slotForTab(remoteTarget);
+                    if (slot == null) return err("没有标签 " + remoteTarget);
+                    ReentrantLock rlk = remoteLockOf(remoteTarget);
+                    acquireRemote(rlk, remoteTarget);
+                    try {
+                        JSONObject rpcReq = new JSONObject()
+                                .put("action", "tab_close")
+                                .put("tab", remoteTarget)
+                                .put("req_id", CUR.get().id);
+                        JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(5000L, hardLeft()));
+                        pool.unregisterRemoteTab(remoteTarget);
+                        REMOTE_LOCKS.remove(remoteTarget);
+                        if (remoteTarget.equals(win.activeRemoteTabId())) {
+                            MAIN.post(win::exitRemoteMirror);
+                        } else {
+                            MAIN.post(win::refreshTabsPublic);
+                        }
+                        putProxyStatus(win, resp, false);
+                        return resp;
+                    } finally {
+                        rlk.unlock();
+                    }
+                }
                 String r;
                 synchronized (WINDOW_LOCK) {
                     r = onMain(() -> win.agentCloseTab(id), 3000);
@@ -378,13 +467,16 @@ public final class BrowserAgent {
             case "hide":
             case "minimize":
                 onMain(() -> { win.agentMinimize(); return null; }, 3000);
-                return ok().put("result", "浏览器窗口已退到后台（仍可继续操作，但只能用 JS 点击，也不能截图）");
+                return ok().put("result", "浏览器窗口已退到后台（后台标签保持真实视口与渲染，可继续操作与截图）");
             case "downloads":
                 return ok().put("result", FloatingApps.downloadsText(ctx));
             case "reload_ui":
-            case "reload_config":
+            case "reload_config": {
                 onMain(() -> { win.reloadConfigNow(); return null; }, 3000);
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                pool.broadcastConfigSync();
                 return ok().put("result", "已重新加载浏览器配置（config.json）；用户脚本会在下次打开/刷新网页时生效");
+            }
             default:
                 break;
         }
@@ -392,8 +484,23 @@ public final class BrowserAgent {
         JSONObject ext = doWindowExtra(win, action, req);
         if (ext != null) return ext;
 
-        // ---- 页面操作：先找到标签，再按标签加锁
-        final String tabSpec = req.optString("tab", "");
+        // ---- 页面操作：先判定是否远程代理标签（不占 WINDOW_LOCK，支持跨容器并行）
+        final String tabSpec = req.optString("tab", "").trim();
+        ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+        String remoteTabId = null;
+        if (!tabSpec.isEmpty() && pool.isRemoteTab(tabSpec)) {
+            remoteTabId = tabSpec;
+        } else if (tabSpec.isEmpty() || "pi".equalsIgnoreCase(tabSpec)) {
+            boolean hasLocalPi = Boolean.TRUE.equals(onMain(win::hasLocalPiTab, 2000));
+            if (!hasLocalPi) {
+                remoteTabId = pool.lastRemoteTabId();
+            }
+        }
+        if (remoteTabId != null) {
+            return handleRemoteTabAction(win, pool, remoteTabId, action, req);
+        }
+
+        // ---- 本地直连标签操作：先找到标签，再按标签加锁
         final FloatingApps.Tab tab;
         synchronized (WINDOW_LOCK) {
             tab = onMain(() -> win.agentTab(tabSpec), 5000);
@@ -412,6 +519,66 @@ public final class BrowserAgent {
         } finally {
             if (begun) MAIN.post(() -> win.agentEnd(tab));
             lk.unlock();
+        }
+    }
+
+    private static ReentrantLock remoteLockOf(String tabId) {
+        return REMOTE_LOCKS.computeIfAbsent(tabId, k -> new ReentrantLock());
+    }
+
+    private static void acquireRemote(ReentrantLock lk, String tabId) throws InterruptedException {
+        long end = SystemClock.uptimeMillis() + Math.min(hardLeft(), LOCK_WAIT_MAX);
+        while (true) {
+            checkStop();
+            long left = end - SystemClock.uptimeMillis();
+            if (lk.tryLock(Math.max(0, Math.min(200, left)), TimeUnit.MILLISECONDS)) return;
+            if (SystemClock.uptimeMillis() >= end) {
+                throw new AbortException("远程代理标签 " + tabId + " 正忙（上一个操作还没结束），稍后重试或先 cancel");
+            }
+        }
+    }
+
+    private static JSONObject handleRemoteTabAction(
+            FloatingApps win,
+            ProxyWorkerPool pool,
+            String remoteTabId,
+            String action,
+            JSONObject req
+    ) throws Exception {
+        ProxyWorkerPool.WorkerSlot slot = pool.slotForTab(remoteTabId);
+        if (slot == null) {
+            return err("远程代理标签 " + remoteTabId + " 已不存在");
+        }
+        CUR.get().remoteTabId = remoteTabId;
+        ReentrantLock rlk = remoteLockOf(remoteTabId);
+        acquireRemote(rlk, remoteTabId);
+        try {
+            JSONObject fwd = new JSONObject(req.toString());
+            fwd.put("action", action);
+            fwd.put("tab", remoteTabId);
+            fwd.put("req_id", CUR.get().id);
+            long rpcTmo = Math.max(15000L, hardLeft());
+            JSONObject resp = pool.callRpc(slot, fwd, CUR.get().id, rpcTmo);
+            if ("status".equals(action)) {
+                try {
+                    BrowserCustomizer cz = cust(win);
+                    JSONObject cfg = cz.config();
+                    JSONArray pa = cfg.optJSONArray("panels");
+                    resp.put("ui_version", cz.revision())
+                            .put("ui_schema_version", cfg.optInt("version", 1))
+                            .put("panels", pa == null ? 0 : pa.length());
+                } catch (Throwable ignored) {}
+            }
+            if (resp.optBoolean("success", false)) {
+                MAIN.post(win::refreshTabsPublic);
+            }
+            resp.put("remote", true)
+                    .put("workerSlot", slot.slot)
+                    .put("workerPid", slot.pid);
+            putProxyStatus(win, resp, false);
+            return resp;
+        } finally {
+            rlk.unlock();
         }
     }
 
@@ -442,11 +609,6 @@ public final class BrowserAgent {
     private static JSONObject doTab(FloatingApps win, FloatingApps.Tab tab, String action, JSONObject req, int timeout) throws Exception {
         boolean wantSnapshot = req.optBoolean("snapshot", true);
         boolean wantSettle = req.optBoolean("settle", true);
-        boolean switchProxy = req.optBoolean("switch_proxy", true);
-        boolean proxySwitched = false;
-        if (needsProxyGate(action, req)) {
-            proxySwitched = ensureProxyReadyForTab(win, tab, switchProxy);
-        }
         String result;
         JSONObject out = ok();
         switch (action) {
@@ -461,7 +623,6 @@ public final class BrowserAgent {
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, "已打开 " + url);
                 if (bad != null) {
-                    if (proxySwitched) putProxyStatus(win, bad, true);
                     return bad;
                 }
                 result = null;
@@ -474,7 +635,6 @@ public final class BrowserAgent {
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, "已回到首页");
                 if (bad != null) {
-                    if (proxySwitched) putProxyStatus(win, bad, true);
                     return bad;
                 }
                 result = null;
@@ -500,7 +660,6 @@ public final class BrowserAgent {
                 boolean loaded = navWait(tab, seq, before, softLeft());
                 JSONObject bad = applyNav(out, tab, loaded, action.equals("back") ? "已后退" : action.equals("forward") ? "已前进" : "已刷新");
                 if (bad != null) {
-                    if (proxySwitched) putProxyStatus(win, bad, true);
                     return bad;
                 }
                 result = null;
@@ -636,16 +795,15 @@ public final class BrowserAgent {
                 return out.put("url", tab.url).put("result", v[1]);
             }
             case "screenshot": {
-                if (Boolean.TRUE.equals(onMain(() -> win.minimized, 2000))) {
-                    return err("浏览器窗口现在不在前台（用户在用别的界面），截不了图。不要擅自把浏览器切到前台：能用 snapshot / eval 读页面就用它们；确实需要看画面时先问用户，或用 show 打开后再截图。");
-                }
-                boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab), 2000));
-                // 后台标签在操作期间是「可见但压在当前标签下面」，刚变可见时要等一帧画出来
-                waitFrame(tab, active ? 300 : 800);
-                String b64 = active ? pixelCopy(tab.web, 3000) : null;
-                if (b64 == null) b64 = onMain(() -> capture(tab.web), 8000);
-                if (b64 == null) return err("截图失败（窗口不可见？）");
-                return out.put("url", tab.url).put("image", b64).put("mime", "image/jpeg");
+                Bitmap bmp = win.captureScreenshot(tab, Math.max(2000L, Math.min(8000L, hardLeft())));
+                if (bmp == null) return err("截图失败");
+                boolean effDesk = Boolean.TRUE.equals(onMain(() -> win.isEffectiveDesktop(tab), 2000));
+                String b64 = encode(bmp);
+                return out.put("url", tab.url)
+                        .put("image", b64)
+                        .put("mime", "image/jpeg")
+                        .put("viewport", viewportStr(effDesk))
+                        .put("remote", false);
             }
             case "status": {
                 result = "url: " + tab.url;
@@ -664,15 +822,19 @@ public final class BrowserAgent {
                 if (mode == null) mode = "default";
                 Integer zoomNow = onMain(win::zoomPercent, 3000);
                 int zoom = zoomNow == null ? 100 : zoomNow;
+                boolean effDesk = Boolean.TRUE.equals(onMain(() -> win.isEffectiveDesktop(tab), 2000));
                 out.put("ua_mode", mode).put("user_agent", uaNow == null ? "" : uaNow).put("zoom", zoom);
                 boolean csup = ContainerManager.supported();
                 String cont = onMain(() -> win.containerOf(tab), 3000);
                 ContainerEnv.Profile ep = onMain(() -> tab.envProfile, 3000);
                 out.put("container", nz(cont)).put("containers_supported", csup)
                         .put("profile", ContainerEnv.toSummaryJson(ep))
-                        .put("proxyFrozen", tab.proxyFrozen)
-                        .put("proxySignature", nz(tab.proxySignature))
-                        .put("proxySummary", nz(tab.proxySummary));
+                        .put("remote", false)
+                        .put("desktop", effDesk)
+                        .put("viewport", viewportStr(effDesk))
+                        .put("proxyFrozen", false)
+                        .put("proxySignature", "DIRECT")
+                        .put("proxySummary", "直连");
                 putProxyStatus(win, out, false);
                 try {
                     BrowserCustomizer cz = cust(win);
@@ -686,7 +848,8 @@ public final class BrowserAgent {
                     out.put("ui_version", -1).put("panels", -1);
                 }
                 result += "；用户脚本 " + out.optInt("scripts") + " 个（当前页生效 " + out.optInt("scripts_matching") + " 个）；UA " + mode
-                        + "；缩放 " + zoom + "%；容器 " + (nz(cont).isEmpty() ? "-" : cont) + "（" + ContainerEnv.summary(ep) + "）"
+                        + "；缩放 " + zoom + "%；视口 " + viewportStr(effDesk)
+                        + "；容器 " + (nz(cont).isEmpty() ? "-" : cont) + "（" + ContainerEnv.summary(ep) + "）"
                         + (csup ? "" : "（系统不支持多容器）");
                 break;
             }
@@ -735,9 +898,6 @@ public final class BrowserAgent {
         }
 
         if (result != null) out.put("result", result);
-        if (proxySwitched) {
-            putProxyStatus(win, out, true);
-        }
         if (wantSnapshot) {
             JSONObject snap = snapshot(tab, req.optInt("max_chars", action.equals("snapshot") ? 12000 : 6000), scopeOf(req));
             out.put("url", snap.optString("url", tab.url));
@@ -989,15 +1149,14 @@ public final class BrowserAgent {
         boolean nativeOk = false;
         String note = "";
         String coveredBy = loc.optString("coveredBy", "");
-        if (!useJs) {
+        if (!useJs && Boolean.TRUE.equals(onMain(() -> win.isTabNativeTapReady(tab), 2000))) {
             boolean scrolled = loc.optBoolean("scrolled", true);
             boolean hasCoords = !Double.isNaN(loc.optDouble("x", Double.NaN))
                     && !Double.isNaN(loc.optDouble("y", Double.NaN))
                     && loc.optDouble("vw", 0) > 0;
             boolean active = Boolean.TRUE.equals(onMain(() -> win.isActive(tab), 2000));
-            if (!active) waitFrame(tab, 600); // 后台标签刚变可见，无论是否滚动都先等一帧画出来再触摸
             if (scrolled || !hasCoords) {
-                if (active) sleep(120);
+                if (active) sleep(120); else sleep(80);
                 // 触摸前重新量一次（scrollIntoView 之后可能还有动画/布局变化）
                 JSONObject rl = evalAgent(tab, "(typeof A.relocate==='function')?A.relocate():{nofn:1}", 3000);
                 if (!rl.optBoolean("nofn")) {
@@ -1081,7 +1240,7 @@ public final class BrowserAgent {
      */
     private static boolean nativeTap(FloatingApps win, FloatingApps.Tab tab, double cssX, double cssY, double vw) {
         WebView web = tab.web;
-        if (win.minimized || web == null || web.getWidth() <= 0 || web.getHeight() <= 0 || !(vw > 0) || !web.isShown()) return false;
+        if (web == null || !win.isTabNativeTapReady(tab) || !(vw > 0)) return false;
         if (Double.isNaN(cssX) || Double.isNaN(cssY)) return false;
         float ratio = (float) (web.getWidth() / vw);
         float x = (float) (cssX * ratio), y = (float) (cssY * ratio);
@@ -1257,92 +1416,6 @@ public final class BrowserAgent {
 
     // ------------------------------------------------------------------ 截图
 
-    /** 等 WebView 画出下一帧（后台标签刚变可见时需要）；最多 maxMs */
-    private static void waitFrame(FloatingApps.Tab tab, long maxMs) throws Exception {
-        CountDownLatch l = new CountDownLatch(1);
-        AtomicBoolean claimed = new AtomicBoolean(false);
-        MAIN.post(() -> {
-            if (!claimed.compareAndSet(false, true)) return;
-            try {
-                tab.web.postVisualStateCallback(1, new WebView.VisualStateCallback() {
-                    @Override
-                    public void onComplete(long requestId) {
-                        l.countDown();
-                    }
-                });
-            } catch (Throwable t) {
-                l.countDown();
-            }
-        });
-        awaitAbortable(l, maxMs, claimed);
-    }
-
-    /** 浏览器在前台且是当前标签：用 PixelCopy 从窗口取像素（能拍到硬件加速的视频/canvas）。失败返回 null */
-    private static String pixelCopy(WebView web, long timeoutMs) throws Exception {
-        CountDownLatch l = new CountDownLatch(1);
-        AtomicInteger code = new AtomicInteger(-1);
-        AtomicReference<Bitmap> bmp = new AtomicReference<>();
-        Boolean posted;
-        try {
-            posted = onMain(() -> {
-                Activity a = activityOf(web.getContext());
-                if (a == null || a.isFinishing()) return false;
-                Window w = a.getWindow();
-                if (w == null || w.peekDecorView() == null) return false;
-                int vw = web.getWidth(), vh = web.getHeight();
-                if (vw <= 0 || vh <= 0 || !web.isShown()) return false;
-                int[] loc = new int[2];
-                web.getLocationInWindow(loc);
-                Bitmap b = Bitmap.createBitmap(vw, vh, Bitmap.Config.ARGB_8888);
-                bmp.set(b);
-                PixelCopy.request(w, new Rect(loc[0], loc[1], loc[0] + vw, loc[1] + vh), b, r -> {
-                    code.set(r);
-                    l.countDown();
-                }, MAIN);
-                return true;
-            }, 3000);
-        } catch (AbortException a) {
-            throw a;
-        } catch (Exception e) {
-            return null;
-        }
-        if (!Boolean.TRUE.equals(posted)) {
-            Bitmap b = bmp.get();
-            if (b != null) b.recycle();
-            return null;
-        }
-        if (!l.await(timeoutMs, TimeUnit.MILLISECONDS)) return null; // 位图可能还在被写，交给 GC
-        Bitmap b = bmp.get();
-        if (code.get() != PixelCopy.SUCCESS || b == null) {
-            if (b != null) b.recycle();
-            return null;
-        }
-        return encode(b);
-    }
-
-    private static Activity activityOf(Context c) {
-        int guard = 0;
-        while (c != null && guard++ < 10) {
-            if (c instanceof Activity) return (Activity) c;
-            if (c instanceof ContextWrapper) c = ((ContextWrapper) c).getBaseContext();
-            else break;
-        }
-        return null;
-    }
-
-    /** 回退：web.draw 到位图（后台标签、PixelCopy 失败时）。主线程调用 */
-    private static String capture(WebView web) {
-        int w = web.getWidth(), h = web.getHeight();
-        if (w <= 0 || h <= 0 || !web.isShown()) return null;
-        float scale = Math.min(1f, 900f / Math.max(w, h));
-        Bitmap bmp = Bitmap.createBitmap(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)), Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(bmp);
-        c.scale(scale, scale);
-        c.translate(-web.getScrollX(), -web.getScrollY());
-        web.draw(c);
-        return encode(bmp);
-    }
-
     /** 缩到长边 ≤900 → JPEG 70 → base64；会回收传入的位图 */
     private static String encode(Bitmap src) {
         Bitmap out = src;
@@ -1402,6 +1475,10 @@ public final class BrowserAgent {
         return o;
     }
 
+    private static String viewportStr(boolean desktop) {
+        return ContainerEnv.viewportWidth(desktop) + "x" + ContainerEnv.viewportHeight(desktop);
+    }
+
     /** 不加标签锁地看一眼请求指向的标签（只读 url 用） */
     private static FloatingApps.Tab peekTab(FloatingApps win, JSONObject req) throws Exception {
         final String spec = req.optString("tab", "");
@@ -1412,6 +1489,24 @@ public final class BrowserAgent {
 
     private static String peekUrl(FloatingApps win, JSONObject req) {
         try {
+            String spec = req.optString("tab", "").trim();
+            ProxyWorkerPool pool = win.peekWorkerPool();
+            if (pool != null) {
+                String remoteId = null;
+                if (!spec.isEmpty() && pool.isRemoteTab(spec)) {
+                    remoteId = spec;
+                } else if ((spec.isEmpty() || "pi".equalsIgnoreCase(spec))
+                        && !Boolean.TRUE.equals(onMain(win::hasLocalPiTab, 2000))) {
+                    remoteId = pool.lastRemoteTabId();
+                }
+                if (remoteId != null) {
+                    for (JSONObject o : pool.listCachedRemoteTabs()) {
+                        if (remoteId.equals(o.optString("id"))) {
+                            return nz(o.optString("url", ""));
+                        }
+                    }
+                }
+            }
             FloatingApps.Tab t = peekTab(win, req);
             return t == null ? "" : nz(t.url);
         } catch (AbortException a) {
@@ -1458,6 +1553,7 @@ public final class BrowserAgent {
                 UserScriptManager m = mgr(win);
                 UserScriptManager.Script s = code.isEmpty() ? m.installFromUrl(normalize(url)) : m.install(code, null);
                 if (s == null) return err("安装失败");
+                onMain(win::workerPool, 2000).broadcastScriptsSync();
                 return ok().put("script", scriptBrief(s, matchingIds(m, peekUrl(win, req))))
                         .put("result", "已安装脚本「" + nz(s.name) + "」（id " + s.id + "），刷新页面后生效");
             }
@@ -1466,12 +1562,14 @@ public final class BrowserAgent {
                 if (id.isEmpty()) return err("script_enable 需要 id");
                 boolean on = req.optBoolean("on", true);
                 if (!mgr(win).setEnabled(id, on)) return err("没有脚本 " + id + "，用 scripts 查看");
+                onMain(win::workerPool, 2000).broadcastScriptsSync();
                 return ok().put("id", id).put("enabled", on).put("result", "已" + (on ? "启用" : "停用") + "脚本 " + id + "，刷新页面后生效");
             }
             case "script_remove": {
                 String id = req.optString("id", "").trim();
                 if (id.isEmpty()) return err("script_remove 需要 id");
                 if (!mgr(win).remove(id)) return err("没有脚本 " + id + "，用 scripts 查看");
+                onMain(win::workerPool, 2000).broadcastScriptsSync();
                 return ok().put("id", id).put("result", "已删除脚本 " + id + "（含存储的值），刷新页面后生效");
             }
             case "script_update":
@@ -1499,6 +1597,9 @@ public final class BrowserAgent {
                         changed++;
                     }
                 }
+                if (changed > 0) {
+                    onMain(win::workerPool, 2000).broadcastScriptsSync();
+                }
                 JSONObject vals = m.getValues(id);
                 return ok().put("id", id).put("values", vals == null ? new JSONObject() : vals)
                         .put("result", changed == 0 ? "脚本 " + id + " 的存储值" : "已修改 " + changed + " 项（页面里的 GM_getValue 快照在刷新后更新）");
@@ -1511,32 +1612,99 @@ public final class BrowserAgent {
                 final JSONObject patch = req.optJSONObject("patch");
                 if (patch == null || patch.length() == 0) return err("config_set 需要 patch（JSON 对象，如 {\"theme\":\"dark\"}）");
                 onMain(() -> { win.setConfig(patch); return null; }, 5000);
+                onMain(win::workerPool, 2000).broadcastConfigSync();
                 JSONObject c = onMain(win::getConfig, 3000);
                 return ok().put("config", c == null ? new JSONObject() : c).put("result", "已合并写入 config.json 并重新加载（" + patch.length() + " 项）");
             }
             case "ua": {
                 String v = req.isNull("ua") ? "" : req.optString("ua", "").trim();
                 final String ua = v.isEmpty() ? null : v;
+                String tabSpec = req.optString("tab", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (!tabSpec.isEmpty()) {
+                    if (pool.isRemoteTab(tabSpec)) {
+                        return handleRemoteTabAction(win, pool, tabSpec, "ua", req);
+                    }
+                    FloatingApps.Tab target = onMain(() -> win.agentTabExact(tabSpec), 3000);
+                    if (target == null) return err("没有标签 " + tabSpec + "，用 tabs 查看");
+                    onMain(() -> { win.setTabUserAgent(target, ua); return null; }, 5000);
+                    return ok().put("tab", target.id).put("ua", ua == null ? JSONObject.NULL : ua)
+                            .put("result", ua == null ? "已恢复标签 " + target.id + " 默认 UA" : "已设置标签 " + target.id + " 自定义 UA，刷新页面后生效");
+                }
                 onMain(() -> { win.setUserAgent(ua); return null; }, 5000);
+                broadcastSettingToWorkers(pool, "ua", req);
                 return ok().put("ua", ua == null ? JSONObject.NULL : ua).put("result", ua == null ? "已恢复默认 UA" : "已设置自定义 UA，刷新页面后生效");
             }
             case "desktop": {
                 final boolean on = req.optBoolean("on", true);
+                String tabSpec = req.optString("tab", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (!tabSpec.isEmpty()) {
+                    if (pool.isRemoteTab(tabSpec)) {
+                        return handleRemoteTabAction(win, pool, tabSpec, "desktop", req);
+                    }
+                    FloatingApps.Tab target = onMain(() -> win.agentTabExact(tabSpec), 3000);
+                    if (target == null) return err("没有标签 " + tabSpec + "，用 tabs 查看");
+                    onMain(() -> { win.setTabDesktop(target, on, false); return null; }, 5000);
+                    return ok().put("tab", target.id).put("desktop", on)
+                            .put("viewport", viewportStr(on))
+                            .put("result", on ? "已切换标签 " + target.id + " 为桌面版网站" : "已切换标签 " + target.id + " 为移动版网站");
+                }
                 onMain(() -> { win.setDesktopMode(on); return null; }, 5000);
-                return ok().put("desktop", on).put("result", on ? "已切换为桌面版网站" : "已切换为移动版网站");
+                broadcastSettingToWorkers(pool, "desktop", req);
+                return ok().put("desktop", on).put("viewport", viewportStr(on))
+                        .put("result", on ? "已切换为桌面版网站" : "已切换为移动版网站");
             }
             case "zoom": {
                 if (!req.has("percent")) return err("zoom 需要 percent（25–300）");
                 final int pct = clamp(req.optInt("percent", 100), 25, 300);
+                String tabSpec = req.optString("tab", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (!tabSpec.isEmpty()) {
+                    if (pool.isRemoteTab(tabSpec)) {
+                        return handleRemoteTabAction(win, pool, tabSpec, "zoom", req);
+                    }
+                    FloatingApps.Tab target = onMain(() -> win.agentTabExact(tabSpec), 3000);
+                    if (target == null) return err("没有标签 " + tabSpec + "，用 tabs 查看");
+                    onMain(() -> { win.setTabZoom(target, pct); return null; }, 5000);
+                    return ok().put("tab", target.id).put("zoom", pct)
+                            .put("result", "已把标签 " + target.id + " 页面缩放设为 " + pct + "%");
+                }
                 onMain(() -> { win.setZoom(pct); return null; }, 5000);
+                broadcastSettingToWorkers(pool, "zoom", req);
                 return ok().put("zoom", pct).put("result", "已把页面缩放设为 " + pct + "%");
             }
             case "cookies": {
+                String tabSpec = req.optString("tab", "").trim();
+                final String cont = req.optString("container", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (!tabSpec.isEmpty() && pool.isRemoteTab(tabSpec)) {
+                    return handleRemoteTabAction(win, pool, tabSpec, "cookies", req);
+                }
+                if (!cont.isEmpty()) {
+                    ProxyWorkerPool.WorkerSlot slot = pool.slotForContainer(cont);
+                    if (slot != null) {
+                        JSONObject rpcReq = new JSONObject(req.toString()).put("action", "cookies");
+                        JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(8000L, hardLeft()));
+                        resp.put("remote", true).put("workerSlot", slot.slot).put("workerPid", slot.pid);
+                        return resp;
+                    }
+                    if (ContainerManager.supported() && !containerExists(win, cont)) {
+                        return err("没有容器 " + cont + "，用 containers 查看");
+                    }
+                    ContainerEnv.Profile contProf = onMain(() -> win.containers() == null ? null : win.containers().getProfile(cont), 3000);
+                    if (contProf != null && contProf.hasActiveProxy()) {
+                        return err("该代理容器当前没有活跃工作进程，请先用 tab_new 打开标签后再读写 Cookie");
+                    }
+                } else if ((tabSpec.isEmpty() || "pi".equalsIgnoreCase(tabSpec))
+                        && !Boolean.TRUE.equals(onMain(win::hasLocalPiTab, 2000))
+                        && pool.lastRemoteTabId() != null) {
+                    return handleRemoteTabAction(win, pool, pool.lastRemoteTabId(), "cookies", req);
+                }
                 String u = normalize(req.optString("url", ""));
                 if (u.isEmpty()) u = peekUrl(win, req);
                 if (u.isEmpty() || u.startsWith("about:")) return err("cookies 需要 url");
                 final String url = u;
-                final String cont = req.optString("container", "").trim();
                 int n = 0;
                 Object set = req.opt("set");
                 List<String> list = new ArrayList<>();
@@ -1574,7 +1742,30 @@ public final class BrowserAgent {
                 if (!what.equals("cookies") && !what.equals("cache") && !what.equals("storage") && !what.equals("all")) {
                     return err("clear_data 的 what 只能是 cookies / cache / storage / all");
                 }
+                String tabSpec = req.optString("tab", "").trim();
+                String cont = req.optString("container", "").trim();
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+                if (!tabSpec.isEmpty() && pool.isRemoteTab(tabSpec)) {
+                    return handleRemoteTabAction(win, pool, tabSpec, "clear_data", req);
+                }
+                if (!cont.isEmpty()) {
+                    ProxyWorkerPool.WorkerSlot slot = pool.slotForContainer(cont);
+                    if (slot != null) {
+                        JSONObject rpcReq = new JSONObject(req.toString()).put("action", "clear_data");
+                        JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(8000L, hardLeft()));
+                        resp.put("remote", true).put("workerSlot", slot.slot).put("workerPid", slot.pid);
+                        return resp;
+                    }
+                    onMain(() -> { win.clearData(what, cont); return null; }, 10000);
+                    if ("all".equals(what) && !ContainerManager.DEFAULT.equalsIgnoreCase(cont)) {
+                        ContainerManager.deleteWorkerDataDir(win.ctx, cont);
+                    }
+                    return ok().put("container", cont).put("result", "已清除容器 " + cont + " 的 " + what);
+                }
                 onMain(() -> { win.clearData(what); return null; }, 10000);
+                if ("all".equals(what)) {
+                    broadcastSettingToWorkers(pool, "clear_data", req);
+                }
                 return ok().put("result", "已清除 " + what);
             }
             case "tab_new":
@@ -1586,8 +1777,8 @@ public final class BrowserAgent {
             case "containers": {
                 JSONArray a = onMain(() -> win.containers() == null ? new JSONArray() : win.containers().list(), 3000);
                 if (a == null) a = new JSONArray();
-                // 填每个容器里的标签数
                 JSONArray tabs = onMain(win::agentTabsJson, 3000);
+                ProxyWorkerPool pool = onMain(win::workerPool, 3000);
                 for (int i = 0; i < a.length(); i++) {
                     JSONObject c = a.optJSONObject(i);
                     if (c == null) continue;
@@ -1597,7 +1788,13 @@ public final class BrowserAgent {
                         JSONObject t = tabs.optJSONObject(j);
                         if (t != null && name.equals(t.optString("container"))) cnt++;
                     }
+                    cnt += pool.remoteTabCountForContainer(name);
                     c.put("tabs", cnt);
+                    ProxyWorkerPool.WorkerSlot slot = pool.slotForContainer(name);
+                    if (slot != null) {
+                        c.put("workerSlot", slot.slot);
+                        c.put("workerPid", slot.pid);
+                    }
                 }
                 JSONObject res = ok().put("containers", a).put("supported", ContainerManager.supported())
                         .put("result", ContainerManager.supported() ? "共 " + a.length() + " 个容器" : "系统 WebView 不支持多容器，所有标签共享登录");
@@ -1812,11 +2009,12 @@ public final class BrowserAgent {
                 Object st = req.opt("settings");
                 BrowserCustomizer c = cust(win);
                 String ptr = "/sites/" + ptrSeg(pat);
-                if (st == null || st == JSONObject.NULL) return uiWrite("删除站点规则 " + pat, () -> c.remove(ptr));
-                if (!(st instanceof JSONObject)) return err("settings 应是对象，如 {ua:\"desktop\",zoom:120}");
-                JSONObject sites = new JSONObject().put(pat, st);
-                // 合并补丁：只改给出的字段，其余保留
-                return uiWrite("设置站点 " + pat, () -> c.patch(new JSONObject().put("sites", sites)));
+                JSONObject r;
+                if (st == null || st == JSONObject.NULL) r = uiWrite("删除站点规则 " + pat, () -> c.remove(ptr));
+                else if (!(st instanceof JSONObject)) return err("settings 应是对象，如 {ua:\"desktop\",zoom:120}");
+                else r = uiWrite("设置站点 " + pat, () -> c.patch(new JSONObject().put("sites", new JSONObject().put(pat, st))));
+                if (r.optBoolean("ok")) onMain(win::workerPool, 2000).broadcastConfigSync();
+                return r;
             }
             case "site_get": {
                 String u = normalize(req.optString("url", ""));
@@ -1848,7 +2046,9 @@ public final class BrowserAgent {
                     JSONObject r0 = uiWrite("初始化规则", () -> c.set("/rules/" + kind, new JSONArray()));
                     if (!r0.optBoolean("ok")) return r0;
                 }
-                return uiWrite("添加 " + kind + " 规则", () -> c.set("/rules/" + kind + "/-", rule));
+                JSONObject r = uiWrite("添加 " + kind + " 规则", () -> c.set("/rules/" + kind + "/-", rule));
+                if (r.optBoolean("ok")) onMain(win::workerPool, 2000).broadcastConfigSync();
+                return r;
             }
             case "rule_remove": {
                 String kind = req.optString("kind", "").trim();
@@ -1873,7 +2073,9 @@ public final class BrowserAgent {
                 }
                 if (idx < 0 || idx >= a.length()) return err("没有找到要删除的 " + kind + " 规则（rules 查看）");
                 final int i = idx;
-                return uiWrite("删除 " + kind + " 规则 #" + i, () -> c.remove("/rules/" + kind + "/" + i));
+                JSONObject r = uiWrite("删除 " + kind + " 规则 #" + i, () -> c.remove("/rules/" + kind + "/" + i));
+                if (r.optBoolean("ok")) onMain(win::workerPool, 2000).broadcastConfigSync();
+                return r;
             }
             default:
                 return null;
@@ -1884,42 +2086,24 @@ public final class BrowserAgent {
         return a == null ? 0 : a.length();
     }
 
-    private static boolean isLocalUrlForProxy(String url) {
-        if (url == null || url.isEmpty()) return true;
-        if (url.startsWith("file://") || url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:")) {
-            return true;
-        }
-        if (url.startsWith("http://") || url.startsWith("https://")) {
+    private static void broadcastSettingToWorkers(ProxyWorkerPool pool, String action, JSONObject req) {
+        if (pool == null) return;
+        JSONArray workers = pool.workersStatusJson();
+        for (int i = 0; i < workers.length(); i++) {
+            JSONObject w = workers.optJSONObject(i);
+            if (w == null) continue;
+            String st = w.optString("state", "");
+            if (!"READY_IDLE".equals(st) && !"READY_BUSY".equals(st)) continue;
+            String cid = w.optString("container", "");
+            ProxyWorkerPool.WorkerSlot slot = cid.isEmpty() ? null : pool.slotForContainer(cid);
+            if (slot == null) continue;
             try {
-                return ContainerProxyManager.isLoopbackHost(android.net.Uri.parse(url).getHost());
+                JSONObject rpcReq = new JSONObject(req.toString());
+                rpcReq.remove("tab");
+                rpcReq.remove("tabId");
+                rpcReq.put("action", action);
+                pool.callRpc(slot, rpcReq, "bcast-" + action + "-" + slot.slot + "-" + System.nanoTime(), 4000L);
             } catch (Throwable ignored) {}
-        }
-        return false;
-    }
-
-    private static boolean needsProxyGate(String action, JSONObject req) {
-        switch (action) {
-            case "open":
-            case "navigate":
-            case "goto":
-                return !isLocalUrlForProxy(normalize(req.optString("url", "")));
-            case "reload":
-            case "home":
-            case "back":
-            case "forward":
-            case "click":
-            case "tap":
-            case "type":
-            case "fill":
-            case "press":
-            case "key":
-            case "eval":
-            case "js":
-            case "batch":
-            case "wait_for":
-                return true;
-            default:
-                return false;
         }
     }
 
@@ -1951,72 +2135,20 @@ public final class BrowserAgent {
         throw new IllegalArgumentException("profile 必须是预设名字符串或 JSON 对象");
     }
 
-    /** 在后台线程等待容器代理切换到与 tab 一致；绝不在主线程调用 */
-    private static boolean ensureProxyReadyForTab(FloatingApps win, FloatingApps.Tab tab, boolean switchProxy) throws Exception {
-        if (win == null || tab == null || tab.closed) return false;
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            throw new IllegalStateException("ensureProxyReadyForTab 严禁在主线程阻塞等待");
-        }
-        ContainerProxyManager pm = onMain(win::proxyManager, 3000);
-        if (pm == null) return false;
-        String tabSig = onMain(() -> {
-            ContainerEnv.Profile ep = win.containers().getProfile(tab.container);
-            tab.envProfile = ep;
-            tab.proxySignature = ep != null ? ep.proxySignature() : "DIRECT";
-            tab.proxySummary = (ep != null && ep.hasActiveProxy()) ? ep.proxy.summary() : "直连";
-            return tab.proxySignature;
-        }, 3000);
-        if (tabSig == null || tabSig.isEmpty()) tabSig = "DIRECT";
-
-        if (!pm.isSwitching() && pm.matchesActive(tabSig)) {
-            return false;
-        }
-        if (!switchProxy) {
-            throw new AbortException("标签 " + tab.id + " 代理(" + tab.proxySummary + ")与当前全局代理(" + pm.getActiveSummary()
-                    + ")不一致，且 switch_proxy=false，已阻止访问以防串线");
-        }
-        if (!"DIRECT".equals(tabSig) && !pm.isProxySupported()) {
-            throw new AbortException("当前系统 WebView 不支持 ProxyController (PROXY_OVERRIDE)，无法启用容器代理");
-        }
-
-        CountDownLatch latch = new CountDownLatch(1);
-        MAIN.post(() -> {
-            if (tab.closed) {
-                latch.countDown();
-                return;
-            }
-            win.ensureTabProxyAsync(tab, latch::countDown);
-        });
-
-        long waitMs = Math.min(12_000L, Math.max(1500L, hardLeft()));
-        long end = SystemClock.uptimeMillis() + waitMs;
-        while (!latch.await(100, TimeUnit.MILLISECONDS)) {
-            checkStop();
-            if (SystemClock.uptimeMillis() >= end) {
-                throw new AbortException("切换容器代理超时");
-            }
-        }
-        checkStop();
-        String errMsg = pm.getLastError();
-        if (errMsg != null && !errMsg.isEmpty() && !pm.matchesActive(tabSig)) {
-            throw new AbortException(errMsg);
-        }
-        if (!pm.matchesActive(tabSig)) {
-            throw new AbortException("容器代理未能就绪（当前：" + pm.getActiveSummary() + "，期望：" + tab.proxySummary + "）");
-        }
-        return true;
-    }
-
     private static void putProxyStatus(FloatingApps win, JSONObject out, boolean proxySwitched) {
         try {
-            ContainerProxyManager pm = onMain(win::proxyManager, 3000);
-            if (pm != null) {
-                JSONObject st = pm.statusJson(win);
+            JSONObject st = onMain(win::proxyStatusJson, 3000);
+            if (st != null) {
                 out.put("proxySupported", st.optBoolean("proxySupported", false));
+                out.put("mainProcessDirect", st.optBoolean("mainProcessDirect", true));
+                out.put("frozenTabs", 0);
                 JSONObject ap = st.optJSONObject("activeProxy");
                 if (ap != null) {
                     out.put("activeProxy", ap);
-                    out.put("frozenTabs", ap.optInt("frozenTabs", 0));
+                }
+                JSONArray workers = st.optJSONArray("workers");
+                if (workers != null) {
+                    out.put("workers", workers);
                 }
             }
             if (proxySwitched) out.put("proxySwitched", true);
@@ -2067,9 +2199,21 @@ public final class BrowserAgent {
     /** container_profile / set_container_profile {name?, profile?, proxy?, randomize?, reload?} */
     private static JSONObject containerProfile(FloatingApps win, JSONObject req) throws Exception {
         String name = req.optString("name", "").trim();
+        ProxyWorkerPool pool = onMain(win::workerPool, 3000);
         if (name.isEmpty()) {
-            FloatingApps.Tab t = peekTab(win, req);
-            name = t != null ? nz(onMain(() -> win.containerOf(t), 3000)) : ContainerManager.DEFAULT;
+            String tabSpec = req.optString("tab", "").trim();
+            if (!tabSpec.isEmpty() && pool.isRemoteTab(tabSpec)) {
+                ProxyWorkerPool.WorkerSlot s = pool.slotForTab(tabSpec);
+                if (s != null) name = s.boundContainerId;
+            } else if ((tabSpec.isEmpty() || "pi".equalsIgnoreCase(tabSpec))
+                    && !Boolean.TRUE.equals(onMain(win::hasLocalPiTab, 2000))
+                    && pool.lastRemoteTabId() != null) {
+                ProxyWorkerPool.WorkerSlot s = pool.slotForTab(pool.lastRemoteTabId());
+                if (s != null) name = s.boundContainerId;
+            } else {
+                FloatingApps.Tab t = peekTab(win, req);
+                name = t != null ? nz(onMain(() -> win.containerOf(t), 3000)) : ContainerManager.DEFAULT;
+            }
             if (name.isEmpty()) name = ContainerManager.DEFAULT;
         }
         if (!containerExists(win, name)) {
@@ -2083,10 +2227,14 @@ public final class BrowserAgent {
 
         if (!hasProfile && !hasProxy && !randomize) {
             ContainerEnv.Profile cur = onMain(() -> win.containers().getProfile(targetName), 3000);
+            ProxyWorkerPool.WorkerSlot slot = pool.slotForContainer(targetName);
             JSONObject out = ok().put("name", targetName)
                     .put("profile", ContainerEnv.toSummaryJson(cur))
                     .put("result", "容器 " + targetName + " 当前环境：" + ContainerEnv.summary(cur)
                             + " · 代理：" + (cur.hasActiveProxy() ? cur.proxy.summary() : "直连"));
+            if (slot != null) {
+                out.put("workerSlot", slot.slot).put("workerPid", slot.pid);
+            }
             putProxyStatus(win, out, false);
             return out;
         }
@@ -2097,10 +2245,29 @@ public final class BrowserAgent {
         } catch (IllegalArgumentException iae) {
             return err(iae.getMessage());
         }
-        ContainerEnv.Profile next;
-        int affected;
+
+        ContainerEnv.Profile curProfile = onMain(() -> win.containers().getProfile(targetName), 3000);
+        ContainerEnv.Profile previewNext;
         try {
-            Object[] res = onMain(() -> {
+            if (randomize) {
+                ContainerEnv.Profile rand = ContainerEnv.randomize(curProfile);
+                previewNext = mergedSpec != null ? ContainerEnv.fromSpec(mergedSpec, rand) : rand;
+            } else {
+                previewNext = ContainerEnv.fromSpec(mergedSpec, curProfile);
+            }
+        } catch (IllegalArgumentException iae) {
+            return err(iae.getMessage());
+        }
+
+        int mainTabs = onMain(() -> win.mainTabCountForContainer(targetName), 3000);
+        if (mainTabs > 0 && previewNext.hasActiveProxy()) {
+            return err("容器 " + targetName + " 当前在主进程有 " + mainTabs
+                    + " 个直连标签，主进程严禁切换代理；请先关闭这些标签再配置代理，或用 tab_new(container:\"new\", proxy:...) 新建独立代理标签");
+        }
+
+        ContainerEnv.Profile next;
+        try {
+            next = onMain(() -> {
                 ContainerManager cm = win.containers();
                 ContainerEnv.Profile np;
                 if (randomize) {
@@ -2109,62 +2276,36 @@ public final class BrowserAgent {
                 } else {
                     np = cm.setProfile(targetName, mergedSpec);
                 }
-                int cnt = win.applyContainerEnvForContainer(targetName, false);
-                return new Object[]{np, cnt};
-            }, 5000);
-            next = (ContainerEnv.Profile) res[0];
-            affected = (Integer) res[1];
+                return np;
+            }, 4000);
         } catch (IllegalArgumentException iae) {
             return err(iae.getMessage());
         }
 
-        boolean proxySwitched = false;
-        ContainerProxyManager pm = onMain(win::proxyManager, 3000);
-        if (pm != null && (targetName.equals(pm.getActiveContainer())
-                || onMain(() -> win.active != null && targetName.equals(win.active.container), 2000))) {
-            if (next.hasActiveProxy() && !pm.isProxySupported()) {
-                return err("当前系统 WebView 不支持 ProxyController (PROXY_OVERRIDE)，无法启用容器代理");
+        ProxyWorkerPool.WorkerSlot slot = pool.slotForContainer(targetName);
+        if (slot != null) {
+            String targetLabel = onMain(() -> win.containerLabel(targetName), 2000);
+            JSONObject rpcReq = new JSONObject()
+                    .put("action", "update_container_profile")
+                    .put("label", targetLabel)
+                    .put("profileJson", ContainerEnv.toJson(next).toString())
+                    .put("reload", reload)
+                    .put("req_id", CUR.get().id);
+            JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(12_000L, hardLeft()));
+            if (resp.optBoolean("success", false)) {
+                slot.boundProfile = next;
+                slot.boundLabel = targetLabel;
+                slot.proxySummary = next.hasActiveProxy() ? next.proxy.summary() : "直连";
+                JSONObject ap = resp.optJSONObject("activeProxy");
+                if (ap != null) slot.localProxyPort = ap.optInt("localPort", slot.localProxyPort);
+                MAIN.post(win::refreshTabsPublic);
             }
-            String targetSig = next.proxySignature();
-            if (!pm.matchesActive(targetSig) || pm.isSwitching()) {
-                CountDownLatch latch = new CountDownLatch(1);
-                String targetLabel = onMain(() -> {
-                    JSONObject m = win.containers().meta(targetName);
-                    return m != null ? m.optString("label", targetName) : targetName;
-                }, 2000);
-                MAIN.post(() -> pm.applyForContainer(targetName, targetLabel, next, win.tabs(), latch::countDown));
-                long waitMs = Math.min(12_000L, Math.max(1500L, hardLeft()));
-                long end = SystemClock.uptimeMillis() + waitMs;
-                while (!latch.await(100, TimeUnit.MILLISECONDS)) {
-                    checkStop();
-                    if (SystemClock.uptimeMillis() >= end) {
-                        return err("切换容器代理超时");
-                    }
-                }
-                checkStop();
-                String errMsg = pm.getLastError();
-                if (errMsg != null && !errMsg.isEmpty() && !pm.matchesActive(targetSig)) {
-                    return err(errMsg);
-                }
-                if (!pm.matchesActive(targetSig)) {
-                    return err("容器代理未能就绪（当前：" + pm.getActiveSummary() + "，期望："
-                            + (next.hasActiveProxy() ? next.proxy.summary() : "直连") + "）");
-                }
-                proxySwitched = true;
-            }
-        }
-        if (reload && affected > 0) {
-            onMain(() -> {
-                for (FloatingApps.Tab t : new ArrayList<>(win.tabs())) {
-                    if (t != null && !t.closed && t.web != null && targetName.equals(t.container)) {
-                        String u = t.url;
-                        if (u != null && !u.isEmpty() && !u.startsWith("about:")) t.web.reload();
-                    }
-                }
-                return null;
-            }, 3000);
+            resp.put("remote", true).put("workerSlot", slot.slot).put("workerPid", slot.pid);
+            putProxyStatus(win, resp, false);
+            return resp;
         }
 
+        int affected = onMain(() -> win.applyContainerEnvForContainer(targetName, reload), 5000);
         JSONObject out = ok().put("name", targetName)
                 .put("profile", ContainerEnv.toSummaryJson(next))
                 .put("reloaded", reload)
@@ -2172,7 +2313,7 @@ public final class BrowserAgent {
                 .put("result", "已更新容器 " + targetName + " 环境为：" + ContainerEnv.summary(next)
                         + " · 代理：" + (next.hasActiveProxy() ? next.proxy.summary() : "直连")
                         + (reload && affected > 0 ? "（已刷新 " + affected + " 个标签）" : ""));
-        putProxyStatus(win, out, proxySwitched);
+        putProxyStatus(win, out, false);
         if (affected > 0) {
             out.put("warning", "容器 " + targetName + " 已有 " + affected + " 个打开的标签，旧页面会话/Cookie 可能残留；防风控建议用 tab_new(container:\"new\", profile:...) 新建容器");
         }
@@ -2185,7 +2326,6 @@ public final class BrowserAgent {
         String container = req.optString("container", "new").trim();
         if (container.isEmpty()) container = "new";
         boolean background = req.optBoolean("background", true);
-        boolean switchProxy = req.optBoolean("switch_proxy", true);
         final Object profileSpec;
         try {
             profileSpec = mergeProfileAndProxy(req);
@@ -2207,76 +2347,156 @@ public final class BrowserAgent {
             return err("没有容器 " + spec + "，用 containers 查看（新容器用 container:\"new\"）");
         }
 
-        if (hasProfileSpec) {
-            String targetCont;
-            if (spec == null) {
-                if (ContainerManager.supported()) {
-                    targetCont = onMain(() -> win.containers().newContainer(profileSpec), 3000);
-                } else {
-                    targetCont = ContainerManager.DEFAULT;
-                }
-            } else if ("same".equalsIgnoreCase(spec)) {
+        ProxyWorkerPool pool = onMain(win::workerPool, 3000);
+        String targetCont;
+        boolean newlyCreated = false;
+        if (spec == null) {
+            if (ContainerManager.supported()) {
+                targetCont = onMain(() -> win.containers().newContainer(profileSpec), 3000);
+                newlyCreated = true;
+            } else {
+                targetCont = ContainerManager.DEFAULT;
+            }
+        } else if ("same".equalsIgnoreCase(spec)) {
+            String activeRemote = win.activeRemoteTabId();
+            if (activeRemote != null && pool.slotForTab(activeRemote) != null) {
+                targetCont = pool.slotForTab(activeRemote).boundContainerId;
+            } else {
                 FloatingApps.Tab curTab = onMain(() -> win.active, 2000);
                 targetCont = curTab != null ? nz(curTab.container) : ContainerManager.DEFAULT;
-                if (targetCont.isEmpty()) targetCont = ContainerManager.DEFAULT;
-            } else {
-                targetCont = spec;
             }
-            if (ContainerManager.DEFAULT.equalsIgnoreCase(targetCont)) {
+            if (targetCont.isEmpty()) targetCont = ContainerManager.DEFAULT;
+        } else {
+            targetCont = spec;
+        }
+        final String resolvedCont = targetCont;
+
+        if (hasProfileSpec) {
+            if (ContainerManager.DEFAULT.equalsIgnoreCase(resolvedCont)) {
                 ContainerEnv.Profile reqProf = ContainerEnv.fromSpec(profileSpec, ContainerEnv.NATIVE);
                 if (reqProf.isIsolated() || reqProf.hasActiveProxy()) {
                     return err("Default 共享容器始终为直连，禁止配置代理或隔离 profile");
                 }
-            } else if (spec != null) {
+            } else if (!newlyCreated) {
+                ContainerEnv.Profile curProf = onMain(() -> win.containers().getProfile(resolvedCont), 3000);
+                ContainerEnv.Profile previewProf = ContainerEnv.fromSpec(profileSpec, curProf);
+                int mainTabs = onMain(() -> win.mainTabCountForContainer(resolvedCont), 3000);
+                if (mainTabs > 0 && previewProf.hasActiveProxy()) {
+                    return err("容器 " + resolvedCont + " 当前在主进程有 " + mainTabs
+                            + " 个直连标签，主进程严禁切换代理；请先关闭这些标签再配置代理，或用 tab_new(container:\"new\", proxy:...) 新建独立代理标签");
+                }
                 try {
-                    final String tc = targetCont;
                     onMain(() -> {
-                        win.containers().setProfile(tc, profileSpec);
-                        win.applyContainerEnvForContainer(tc, false);
+                        win.containers().setProfile(resolvedCont, profileSpec);
+                        win.applyContainerEnvForContainer(resolvedCont, false);
                         return null;
                     }, 3000);
                 } catch (IllegalArgumentException iae) {
                     return err(iae.getMessage());
                 }
             }
-            spec = targetCont;
         }
 
-        final String finalSpec = spec;
+        ContainerEnv.Profile ep = onMain(() -> win.containers().getProfile(resolvedCont), 3000);
+        String cLabel = onMain(() -> win.containerLabel(resolvedCont), 2000);
+        String tabId = onMain(win::nextTabId, 3000);
+
+        if (ep != null && ep.hasActiveProxy()) {
+            // 代理容器：严禁持有 WINDOW_LOCK！独立子进程槽位执行
+            ProxyWorkerPool.WorkerSlot slot;
+            try {
+                slot = pool.acquireSlotForContainer(resolvedCont, cLabel, ep, Math.max(15_000L, hardLeft()));
+            } catch (Throwable t) {
+                if (newlyCreated) {
+                    MAIN.post(() -> {
+                        try { win.containers().release(resolvedCont); } catch (Throwable ignored) {}
+                    });
+                }
+                if (t instanceof Exception) throw (Exception) t;
+                throw new RuntimeException(t);
+            }
+
+            try {
+                CUR.get().remoteTabId = tabId;
+                ReentrantLock rlk = remoteLockOf(tabId);
+                acquireRemote(rlk, tabId);
+                try {
+                    JSONObject rpcReq = new JSONObject();
+                    rpcReq.put("action", "tab_new");
+                    rpcReq.put("tabId", tabId);
+                    rpcReq.put("tab", tabId);
+                    if (!url.isEmpty()) rpcReq.put("url", url);
+                    rpcReq.put("pi", true);
+                    rpcReq.put("desktop", req.has("desktop") ? req.optBoolean("desktop", false) : ep.desktop);
+                    rpcReq.put("timeout", timeoutOf());
+                    rpcReq.put("req_id", CUR.get().id);
+
+                    JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(15_000L, hardLeft()));
+                    if (resp.optBoolean("success", false)) {
+                        pool.registerRemoteTab(tabId, slot);
+                        if (!background) {
+                            onMain(() -> win.switchToRemote(tabId), 3000);
+                        } else {
+                            MAIN.post(win::refreshTabsPublic);
+                        }
+                    } else if (newlyCreated && slot.tabs.isEmpty()) {
+                        MAIN.post(() -> {
+                            try { win.containers().release(resolvedCont); } catch (Throwable ignored) {}
+                        });
+                    }
+                    resp.put("remote", true)
+                            .put("workerSlot", slot.slot)
+                            .put("workerPid", slot.pid);
+                    if (!resp.has("viewport")) {
+                        boolean desk = req.has("desktop") ? req.optBoolean("desktop", false) : ep.desktop;
+                        resp.put("viewport", viewportStr(desk));
+                    }
+                    putProxyStatus(win, resp, false);
+                    return resp;
+                } finally {
+                    rlk.unlock();
+                }
+            } finally {
+                pool.releaseAcquire(slot);
+            }
+        }
+
+        // DIRECT 容器：走主进程 FloatingApps（后台挂在 OffscreenWebHost，保证 390x844 / 1280x800 真实视口）
         final boolean bg = background;
         FloatingApps.Tab t;
         synchronized (WINDOW_LOCK) {
-            // 先开 about:blank，再像 new_tab 一样等它落定后导航，避免把 about:blank 的加载当成目标页完成
-            t = onMain(() -> win.newTabInContainer(null, finalSpec, bg), 6000);
+            t = onMain(() -> win.newTabInContainer(null, resolvedCont, bg, tabId), 6000);
         }
         if (t == null) return err("新建标签失败");
         CUR.get().tab = t;
         String cont = onMain(() -> win.containerOf(t), 3000);
-        ContainerEnv.Profile ep = onMain(() -> t.envProfile, 3000);
-        JSONObject out = ok().put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
+        ContainerEnv.Profile localEp = onMain(() -> t.envProfile, 3000);
+        boolean effDesk = Boolean.TRUE.equals(onMain(() -> win.isEffectiveDesktop(t), 2000));
+        JSONObject out = ok().put("tab", t.id)
+                .put("container", nz(cont))
+                .put("profile", ContainerEnv.toSummaryJson(localEp))
+                .put("remote", false)
+                .put("viewport", viewportStr(effDesk));
         if (url.isEmpty()) {
             putProxyStatus(win, out, false);
-            return out.put("url", nz(t.url)).put("result", "已新建标签 " + t.id + "（容器 " + nz(cont) + " · " + ContainerEnv.summary(ep) + "）");
+            return out.put("url", nz(t.url)).put("result", "已新建标签 " + t.id + "（容器 " + nz(cont) + " · " + ContainerEnv.summary(localEp) + "）");
         }
         ReentrantLock lk = lockOf(t);
         acquire(lk, t);
         try {
-            boolean proxySwitched = false;
-            if (!isLocalUrlForProxy(url)) {
-                proxySwitched = ensureProxyReadyForTab(win, t, switchProxy);
-            }
             long e = SystemClock.uptimeMillis() + 2000;
             while (SystemClock.uptimeMillis() < e && (t.navSeq == 0 || t.loading || t.finishedSeq != t.navSeq)) sleep(50);
             int seq = t.navSeq;
             String before = t.url;
             onMain(() -> { win.agentLoad(t, url); return null; }, 5000);
             boolean loaded = navWait(t, seq, before, softLeft());
-            JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + "（" + ContainerEnv.summary(ep) + "）新建标签 " + t.id + " 并打开 " + url);
+            JSONObject bad = applyNav(out, t, loaded, "已在容器 " + nz(cont) + "（" + ContainerEnv.summary(localEp) + "）新建标签 " + t.id + " 并打开 " + url);
             if (bad != null) {
-                putProxyStatus(win, bad, proxySwitched);
-                return bad.put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(ep));
+                putProxyStatus(win, bad, false);
+                return bad.put("tab", t.id).put("container", nz(cont)).put("profile", ContainerEnv.toSummaryJson(localEp))
+                        .put("remote", false).put("viewport", viewportStr(effDesk));
             }
-            putProxyStatus(win, out, proxySwitched);
+            putProxyStatus(win, out, false);
             return out.put("url", nz(t.url)).put("title", nz(t.title));
         } finally {
             lk.unlock();
@@ -2336,6 +2556,9 @@ public final class BrowserAgent {
             } catch (Throwable t) {
                 failed.put(new JSONObject().put("id", s.id).put("error", friendly(t)));
             }
+        }
+        if (updated.length() > 0) {
+            onMain(win::workerPool, 2000).broadcastScriptsSync();
         }
         String res = "检查了 " + checked + " 个脚本，更新 " + updated.length() + " 个" + (failed.length() > 0 ? "，失败 " + failed.length() + " 个" : "")
                 + (updated.length() > 0 ? "，刷新页面后生效" : "");
@@ -2403,6 +2626,7 @@ public final class BrowserAgent {
         UserScriptManager m = mgr(win);
         UserScriptManager.Script s = m.install(sb.toString(), null);
         if (s == null) return err("安装脚本失败");
+        onMain(win::workerPool, 2000).broadcastScriptsSync();
         boolean ran = false;
         if (matchingIds(m, tab.url).contains(s.id)) {
             checkUser(tab);
