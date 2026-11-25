@@ -14,6 +14,14 @@ public final class ProxyWorkerBridge {
     public static final int MSG_INIT_ACK = 2;
     /** 主进程 → 子进程：释放资源并退出子进程 */
     public static final int MSG_SHUTDOWN = 3;
+    /** 主进程 → 子进程：将指定标签的 WebView 嵌入主进程 SurfaceView（API 30+ SurfaceControlViewHost） */
+    public static final int MSG_ATTACH_SURFACE = 4;
+    /** 子进程 → 主进程：返回 SurfacePackage 与当前标签状态 */
+    public static final int MSG_ATTACH_SURFACE_ACK = 5;
+    /** 主进程 → 子进程：调整已嵌入 SurfaceControlViewHost 尺寸 */
+    public static final int MSG_RESIZE_SURFACE = 6;
+    /** 主进程 → 子进程：解除 SurfaceControlViewHost 嵌入并回挂 OffscreenWebHost */
+    public static final int MSG_DETACH_SURFACE = 7;
 
     // ---- MSG_INIT Bundle Keys
     public static final String KEY_SLOT = "slot";
@@ -35,6 +43,24 @@ public final class ProxyWorkerBridge {
     public static final String KEY_PROXY_SUPPORTED = "proxySupported";
     public static final String KEY_PROXY_SUMMARY = "proxySummary";
     public static final String KEY_LOCAL_PROXY_PORT = "localProxyPort";
+
+    // ---- SurfaceControlViewHost 跨进程原生嵌入 Bundle Keys
+    public static final String KEY_TAB_ID = "tabId";
+    public static final String KEY_ATTACH_SEQ = "attachSeq";
+    public static final String KEY_HOST_TOKEN = "hostToken";
+    public static final String KEY_DISPLAY_ID = "displayId";
+    public static final String KEY_WIDTH = "width";
+    public static final String KEY_HEIGHT = "height";
+    public static final String KEY_SURFACE_PACKAGE = "surfacePackage";
+
+    // ---- 实时状态同步 Bundle Keys
+    public static final String KEY_URL = "url";
+    public static final String KEY_TITLE = "title";
+    public static final String KEY_LOADING = "loading";
+    public static final String KEY_PROGRESS = "progress";
+    public static final String KEY_CAN_GO_BACK = "canGoBack";
+    public static final String KEY_CAN_GO_FORWARD = "canGoForward";
+    public static final String KEY_DESKTOP = "desktop";
 
     // ---- 本地回环 HTTP RPC & 主进程内部回调协议常量
     public static final String HEADER_WORKER_TOKEN = "X-Worker-Token";

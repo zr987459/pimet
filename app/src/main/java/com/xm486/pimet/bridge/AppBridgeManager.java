@@ -394,6 +394,21 @@ public class AppBridgeManager {
                     }
                     return new JSONObject().put("success", true).put("ok", true);
                 }
+                case "tab_state": {
+                    FloatingApps fa = FloatingApps.current();
+                    if (fa != null) {
+                        fa.onRemoteTabState(json);
+                    }
+                    return new JSONObject().put("success", true).put("ok", true);
+                }
+                case "tab_focus": {
+                    String tabId = json.optString("tabId", "");
+                    FloatingApps fa = FloatingApps.current();
+                    if (fa != null && !tabId.isEmpty()) {
+                        fa.onRemoteTabFocused(tabId);
+                    }
+                    return new JSONObject().put("success", true).put("ok", true);
+                }
                 default:
                     return err("未知 worker event: " + event);
             }

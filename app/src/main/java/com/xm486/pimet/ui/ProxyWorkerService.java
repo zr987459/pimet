@@ -199,6 +199,49 @@ public abstract class ProxyWorkerService extends Service {
         scheduleKillSelf();
     }
 
+    private void handleAttachSurfaceMsg(Message msg) {
+        Bundle data = msg.getData();
+        ProxyWorkerRuntime rt = runtime;
+        if (rt == null || shuttingDown) {
+            sendAttachSurfaceErrorAck(msg.replyTo, data,
+                    shuttingDown ? "worker shutting down" : "runtime not ready");
+            return;
+        }
+        rt.handleAttachSurface(data, msg.replyTo);
+    }
+
+    private void handleResizeSurfaceMsg(Message msg) {
+        ProxyWorkerRuntime rt = runtime;
+        if (rt != null && !shuttingDown) {
+            rt.handleResizeSurface(msg.getData());
+        }
+    }
+
+    private void handleDetachSurfaceMsg(Message msg) {
+        ProxyWorkerRuntime rt = runtime;
+        if (rt != null) {
+            rt.handleDetachSurface(msg.getData());
+        }
+    }
+
+    private static void sendAttachSurfaceErrorAck(Messenger replyTo, Bundle req, String error) {
+        if (replyTo == null) return;
+        Message ack = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK);
+        Bundle b = new Bundle();
+        b.putBoolean(ProxyWorkerBridge.KEY_OK, false);
+        b.putString(ProxyWorkerBridge.KEY_ERROR, error == null ? "runtime not ready" : error);
+        if (req != null) {
+            b.putString(ProxyWorkerBridge.KEY_TAB_ID, req.getString(ProxyWorkerBridge.KEY_TAB_ID, ""));
+            b.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, req.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L));
+        }
+        ack.setData(b);
+        try {
+            replyTo.send(ack);
+        } catch (Throwable t) {
+            Log.w(TAG, "sendAttachSurfaceErrorAck failed", t);
+        }
+    }
+
     private static void sendInitAck(
             Messenger replyTo,
             boolean ok,
@@ -243,6 +286,15 @@ public abstract class ProxyWorkerService extends Service {
                     break;
                 case ProxyWorkerBridge.MSG_SHUTDOWN:
                     handleShutdown();
+                    break;
+                case ProxyWorkerBridge.MSG_ATTACH_SURFACE:
+                    handleAttachSurfaceMsg(msg);
+                    break;
+                case ProxyWorkerBridge.MSG_RESIZE_SURFACE:
+                    handleResizeSurfaceMsg(msg);
+                    break;
+                case ProxyWorkerBridge.MSG_DETACH_SURFACE:
+                    handleDetachSurfaceMsg(msg);
                     break;
                 default:
                     super.handleMessage(msg);

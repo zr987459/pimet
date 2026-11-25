@@ -24,19 +24,25 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Display;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.PixelCopy;
+import android.view.SurfaceControlViewHost;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -62,6 +68,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.RequiresApi;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebMessageCompat;
@@ -99,6 +106,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -167,7 +175,17 @@ public final class FloatingApps {
     private volatile String activeRemoteTabId = null;
     private LinearLayout remoteMirrorContainer;
     private TextView mirrorHeaderTv;
+    private TextView mirrorRefreshBtn;
+    private SurfaceView remoteSurfaceView;
     private ImageView mirrorImageView;
+    private final AtomicLong remoteAttachSeqGen = new AtomicLong(0L);
+    private volatile long activeRemoteAttachSeq = 0L;
+    private volatile String attachedRemoteTabId = null;
+    private volatile String attachingRemoteTabId = null;
+    private volatile int attachingRemoteW = 0, attachingRemoteH = 0;
+    private volatile boolean remoteSurfaceReady = false;
+    private volatile boolean remoteFallbackActive = false;
+    private Runnable remoteAttachTimeoutTask;
     private volatile int mirrorRemoteW = 0, mirrorRemoteH = 0;
     private final AtomicBoolean mirrorFetching = new AtomicBoolean(false);
     private final ExecutorService mirrorExec = Executors.newSingleThreadExecutor(r -> {
@@ -180,6 +198,7 @@ public final class FloatingApps {
         @Override
         public void run() {
             if (activeRemoteTabId == null || minimized || host == null) return;
+            if (!remoteFallbackActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return;
             fetchRemoteMirrorFrame(activeRemoteTabId);
             MAIN.postDelayed(this, 700L);
         }
@@ -329,9 +348,11 @@ public final class FloatingApps {
             f.reloadConfigIfChanged();
             if (f.fullscreen) f.applyImmersive(true);
             f.applyVisibility();
-            if (f.activeRemoteTabId != null) f.startMirrorPolling();
+            if (f.activeRemoteTabId != null && !f.isRemoteSurfaceObscured()) {
+                f.resumeRemoteSurfaceIfNeeded();
+            }
         } else {
-            f.stopMirrorPolling();
+            f.suspendRemoteSurfaceForOverlay();
             f.applyVisibility();
         }
         f.refreshTabs();
@@ -350,7 +371,12 @@ public final class FloatingApps {
         if (f.customView != null) { f.hideCustomView(); return true; }
         if (f.panelOpen()) { f.closePanel(); return true; }
         if (f.switcher.getVisibility() == View.VISIBLE) { f.closeSwitcher(); return true; }
-        if (f.activeRemoteTabId != null) { f.exitRemoteMirror(); return true; }
+        if (f.activeRemoteTabId != null) {
+            if (f.fullscreen) { f.setFullscreen(false); return true; }
+            if (f.urlField.hasFocus()) { f.hideIme(); f.showUrl(f.active, f.currentUrl()); return true; }
+            f.goBack();
+            return true;
+        }
         if (f.fullscreen) { f.setFullscreen(false); return true; }
         if (f.urlField.hasFocus()) { f.hideIme(); f.showUrl(f.active, f.currentUrl()); return true; }
         if (f.active != null && f.web != null && !f.isHomeUrl(f.currentUrl()) && f.web.canGoBack()) { f.goBackTab(f.active); return true; }
@@ -371,7 +397,8 @@ public final class FloatingApps {
 
     private void detachHost(Activity a) {
         if (host != a) return;
-        stopMirrorPolling();
+        minimized = true;
+        suspendRemoteSurfaceForOverlay();
         hideCustomView();
         hideIme();
         closeSwitcher();
@@ -379,7 +406,6 @@ public final class FloatingApps {
         if (root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
         host = null;
         vctx.setBaseContext(ctx);
-        minimized = true;
         applyVisibility();
         layoutOffscreen();
         refreshTabs();
@@ -520,6 +546,7 @@ public final class FloatingApps {
                 String target = normalizeUrl(urlField.getText().toString());
                 hideIme();
                 if (activeRemoteTabId != null) {
+                    urlField.clearFocus();
                     navigateRemoteFromUi(activeRemoteTabId, target);
                 } else {
                     load(target);
@@ -964,8 +991,9 @@ public final class FloatingApps {
     private void switchTo(Tab t) {
         if (t == null || t.closed) return;
         if (activeRemoteTabId != null) {
+            suspendRemoteSurfaceForOverlay();
             activeRemoteTabId = null;
-            stopMirrorPolling();
+            remoteFallbackActive = false;
             hideRemoteMirror();
         }
         if (active != null && active != t) snapThumb(active);
@@ -1289,6 +1317,7 @@ public final class FloatingApps {
 
     private void openSwitcher() {
         hideIme();
+        suspendRemoteSurfaceForOverlay();
         snapThumb(active);
         rebuildSwitcher();
         switcher.setVisibility(View.VISIBLE);
@@ -1299,6 +1328,7 @@ public final class FloatingApps {
         if (switcher.getVisibility() != View.VISIBLE) return;
         switcher.setVisibility(View.GONE);
         switcherGrid.removeAllViews();
+        resumeRemoteSurfaceIfNeeded();
     }
 
     /** 给标签拍一张缩略图 */
@@ -1546,6 +1576,8 @@ public final class FloatingApps {
         final ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(tabId);
         if (tabId.equals(activeRemoteTabId)) {
             exitRemoteMirror();
+        } else if (tabId.equals(attachedRemoteTabId) || tabId.equals(attachingRemoteTabId)) {
+            detachCurrentRemoteSurface(true);
         }
         workerPool.unregisterRemoteTab(tabId);
         refreshTabs();
@@ -2156,6 +2188,20 @@ public final class FloatingApps {
     private static volatile String sDefaultUa;
 
     private void toggleDesktop() {
+        if (activeRemoteTabId != null) {
+            final String rid = activeRemoteTabId;
+            final boolean targetOn = !remoteIsDesktop();
+            try {
+                dispatchRemoteAction(
+                        rid,
+                        new JSONObject().put("action", "desktop").put("tab", rid).put("on", targetOn),
+                        "ui-desktop",
+                        12000L,
+                        true);
+                Toast.makeText(ctx, targetOn ? "已切换为桌面版网站" : "已切换为移动版网站", Toast.LENGTH_SHORT).show();
+            } catch (Throwable ignored) {}
+            return;
+        }
         setTabDesktop(active, active == null || !active.desktop, true);
     }
 
@@ -2238,12 +2284,21 @@ public final class FloatingApps {
 
     private void confirmCloseBrowser() {
         if (host == null) return;
-        new AlertDialog.Builder(host).setTitle("关闭浏览器？").setMessage("会关闭全部 " + tabs.size() + " 个标签（登录状态会保留）。")
+        int remoteCnt = workerPool != null ? workerPool.remoteTabCount() : 0;
+        int total = tabs.size() + remoteCnt;
+        AlertDialog.Builder b = new AlertDialog.Builder(host)
+                .setTitle("关闭浏览器？")
+                .setMessage("会关闭全部 " + total + " 个标签（登录状态会保留）。")
                 .setPositiveButton("关闭", (d, w) -> {
                     sUserClosed = true;
                     dismiss();
                 })
-                .setNegativeButton("取消", null).show();
+                .setNegativeButton("取消", null);
+        if (activeRemoteTabId != null) {
+            final String rid = activeRemoteTabId;
+            b.setNeutralButton("仅关闭此远程标签", (d, w) -> closeRemoteTabFromUi(rid));
+        }
+        b.show();
     }
 
     /** 首页里的 pimet:// 链接（只有应用目录里的本地页面能用） */
@@ -2951,6 +3006,10 @@ public final class FloatingApps {
     }
 
     private void goHome() {
+        if (activeRemoteTabId != null) {
+            sendRemoteHome(activeRemoteTabId);
+            return;
+        }
         goHome(active, true);
     }
 
@@ -3009,6 +3068,8 @@ public final class FloatingApps {
 
     private String currentUrl() {
         if (activeRemoteTabId != null && workerPool != null) {
+            JSONObject meta = workerPool.getCachedTabMeta(activeRemoteTabId);
+            if (meta != null) return meta.optString("url", "");
             for (JSONObject o : workerPool.listCachedRemoteTabs()) {
                 if (activeRemoteTabId.equals(o.optString("id"))) {
                     return o.optString("url", "");
@@ -3064,9 +3125,22 @@ public final class FloatingApps {
     }
 
     private void updateProgress() {
+        if (fullscreen) {
+            progress.setVisibility(View.GONE);
+            return;
+        }
+        if (activeRemoteTabId != null) {
+            JSONObject meta = activeRemoteMeta();
+            boolean loading = meta != null && meta.optBoolean("loading", false);
+            int prog = meta != null ? meta.optInt("progress", 100) : 100;
+            boolean show = loading && prog < 100;
+            progress.setProgress(Math.max(5, prog));
+            progress.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+            return;
+        }
         Tab t = active;
-        if (t == null || fullscreen || activeRemoteTabId != null) {
-            progress.setVisibility(fullscreen ? View.GONE : View.INVISIBLE);
+        if (t == null) {
+            progress.setVisibility(View.INVISIBLE);
             return;
         }
         boolean show = t.loading && t.progress < 100;
@@ -3077,15 +3151,9 @@ public final class FloatingApps {
     private void reload() {
         if (activeRemoteTabId != null) {
             final String rid = activeRemoteTabId;
-            ProxyWorkerPool.WorkerSlot slot = workerPool != null ? workerPool.slotForTab(rid) : null;
-            if (slot != null) {
-                mirrorExec.execute(() -> {
-                    try {
-                        workerPool.callRpc(slot, new JSONObject().put("action", "reload").put("tab", rid), "ui-reload-" + rid, 12000L);
-                    } catch (Throwable ignored) {}
-                    fetchRemoteMirrorFrame(rid);
-                });
-            }
+            try {
+                dispatchRemoteAction(rid, new JSONObject().put("action", "reload").put("tab", rid), "ui-reload", 12000L, true);
+            } catch (Throwable ignored) {}
             return;
         }
         String u = currentUrl();
@@ -3097,7 +3165,11 @@ public final class FloatingApps {
 
     private void goBack() {
         if (activeRemoteTabId != null) {
-            exitRemoteMirror();
+            if (remoteCanGoBack()) {
+                sendRemoteBack(activeRemoteTabId);
+            } else {
+                exitRemoteMirror();
+            }
             return;
         }
         if (active != null && web != null && !isHomeUrl(currentUrl()) && web.canGoBack()) goBackTab(active);
@@ -3111,6 +3183,12 @@ public final class FloatingApps {
     }
 
     private void goForwardTab(Tab t) {
+        if (activeRemoteTabId != null) {
+            if (remoteCanGoForward()) {
+                sendRemoteForward(activeRemoteTabId);
+            }
+            return;
+        }
         if (t == null || t.closed || t.web == null || !t.web.canGoForward()) return;
         t.web.goForward();
     }
@@ -3783,7 +3861,104 @@ public final class FloatingApps {
         return b;
     }
 
-    // ------------------------------------------------------------------ 远程代理标签预览与交互接管
+    // ------------------------------------------------------------------ 远程代理标签原生嵌入（API 30+）与降级预览
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private static final class SurfaceViewApi30 {
+        static IBinder getHostToken(SurfaceView sv) {
+            return sv != null ? sv.getHostToken() : null;
+        }
+
+        static void setChildSurfacePackage(SurfaceView sv, Object pkg) {
+            if (sv != null && pkg instanceof SurfaceControlViewHost.SurfacePackage) {
+                sv.setChildSurfacePackage((SurfaceControlViewHost.SurfacePackage) pkg);
+            }
+        }
+
+        static void releasePackage(Object pkg) {
+            if (pkg instanceof SurfaceControlViewHost.SurfacePackage) {
+                try {
+                    ((SurfaceControlViewHost.SurfacePackage) pkg).release();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    public void onRemoteTabState(JSONObject ev) {
+        if (ev == null) return;
+        final ProxyWorkerPool pool = workerPool;
+        if (pool == null) return;
+        if (!pool.updateTabStateFromEvent(ev)) return;
+        final String tid = ev.optString("tabId", "").trim();
+        final String evUrl = ev.has("url") ? ev.optString("url", "") : null;
+        MAIN.post(() -> {
+            if (tid.equals(activeRemoteTabId)) {
+                if (!urlField.hasFocus()) {
+                    String u = evUrl;
+                    if (u == null) {
+                        JSONObject meta = pool.getCachedTabMeta(tid);
+                        u = meta != null ? meta.optString("url", "") : "";
+                    }
+                    showUrl(active, u);
+                }
+                updateProgress();
+            }
+            refreshTabs();
+        });
+    }
+
+    public void onRemoteTabFocused(String tabId) {
+        if (tabId == null || tabId.isEmpty()) return;
+        MAIN.post(() -> {
+            if (tabId.equals(activeRemoteTabId) && urlField != null && urlField.hasFocus()) {
+                urlField.clearFocus();
+                hideIme();
+            }
+        });
+    }
+
+    private boolean isRemoteSurfaceObscured() {
+        return (switcher != null && switcher.getVisibility() == View.VISIBLE)
+                || panelOpen()
+                || customView != null
+                || minimized
+                || host == null;
+    }
+
+    private void cancelRemoteAttachTimeout() {
+        if (remoteAttachTimeoutTask != null) {
+            MAIN.removeCallbacks(remoteAttachTimeoutTask);
+            remoteAttachTimeoutTask = null;
+        }
+    }
+
+    private void suspendRemoteSurfaceForOverlay() {
+        stopMirrorPolling();
+        detachCurrentRemoteSurface(true);
+        if (remoteSurfaceView != null) {
+            remoteSurfaceView.setVisibility(View.GONE);
+        }
+    }
+
+    private void resumeRemoteSurfaceIfNeeded() {
+        if (activeRemoteTabId == null || isRemoteSurfaceObscured() || workerPool == null) {
+            return;
+        }
+        ensureRemoteMirrorView();
+        if (remoteMirrorContainer != null) {
+            remoteMirrorContainer.setVisibility(View.VISIBLE);
+            remoteMirrorContainer.bringToFront();
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && remoteSurfaceView != null) {
+            remoteFallbackActive = false;
+            if (mirrorImageView != null) mirrorImageView.setVisibility(View.GONE);
+            if (mirrorRefreshBtn != null) mirrorRefreshBtn.setVisibility(View.GONE);
+            remoteSurfaceView.setVisibility(View.VISIBLE);
+            attachCurrentRemoteSurface();
+        } else {
+            enableRemoteMirrorFallback(activeRemoteTabId);
+        }
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     private void ensureRemoteMirrorView() {
@@ -3800,18 +3975,19 @@ public final class FloatingApps {
         header.setBackgroundColor(blend(cBar, cAccent, 0.14f));
 
         mirrorHeaderTv = new TextView(vctx);
-        mirrorHeaderTv.setText("⚡ 独立代理进程");
+        mirrorHeaderTv.setText("⚡ 代理进程");
         mirrorHeaderTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         mirrorHeaderTv.setTextColor(cFg);
         mirrorHeaderTv.setSingleLine(true);
         mirrorHeaderTv.setEllipsize(TextUtils.TruncateAt.END);
         header.addView(mirrorHeaderTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView refreshBtn = barBtn("刷新画面", "刷新远程代理标签画面", 12);
-        refreshBtn.setTextColor(cAccent);
-        refreshBtn.setPadding(dp(8), 0, dp(8), 0);
-        refreshBtn.setOnClickListener(v -> refreshRemoteMirrorNow());
-        header.addView(refreshBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+        mirrorRefreshBtn = barBtn("刷新画面", "刷新远程代理标签画面", 12);
+        mirrorRefreshBtn.setTextColor(cAccent);
+        mirrorRefreshBtn.setPadding(dp(8), 0, dp(8), 0);
+        mirrorRefreshBtn.setOnClickListener(v -> refreshRemoteMirrorNow());
+        mirrorRefreshBtn.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? View.GONE : View.VISIBLE);
+        header.addView(mirrorRefreshBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
 
         TextView backBtn = barBtn("切回直连", "切回主进程直连标签", 12);
         backBtn.setTextColor(cAccent);
@@ -3820,6 +3996,40 @@ public final class FloatingApps {
         header.addView(backBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
 
         remoteMirrorContainer.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+
+        FrameLayout stage = new FrameLayout(vctx);
+        stage.setBackgroundColor(Color.BLACK);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            remoteSurfaceView = new SurfaceView(vctx);
+            remoteSurfaceView.setZOrderOnTop(false);
+            remoteSurfaceView.setFocusable(true);
+            remoteSurfaceView.setFocusableInTouchMode(true);
+            remoteSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(SurfaceHolder holder) {
+                    attachCurrentRemoteSurface();
+                }
+
+                @Override
+                public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                    if (activeRemoteTabId == null || isRemoteSurfaceObscured() || workerPool == null) return;
+                    if (remoteSurfaceReady && activeRemoteTabId.equals(attachedRemoteTabId)) {
+                        if (width > 0 && height > 0 && activeRemoteAttachSeq > 0L) {
+                            workerPool.sendResizeSurface(activeRemoteTabId, activeRemoteAttachSeq, width, height);
+                        }
+                    } else if (!remoteFallbackActive) {
+                        attachCurrentRemoteSurface();
+                    }
+                }
+
+                @Override
+                public void surfaceDestroyed(SurfaceHolder holder) {
+                    detachCurrentRemoteSurface(true);
+                }
+            });
+            stage.addView(remoteSurfaceView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
 
         mirrorImageView = new ImageView(vctx);
         mirrorImageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -3830,38 +4040,242 @@ public final class FloatingApps {
             }
             return true;
         });
-        remoteMirrorContainer.addView(mirrorImageView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        mirrorImageView.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? View.GONE : View.VISIBLE);
+        stage.addView(mirrorImageView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        remoteMirrorContainer.addView(stage, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         remoteMirrorContainer.setVisibility(View.GONE);
         webFrame.addView(remoteMirrorContainer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void attachCurrentRemoteSurface() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            if (activeRemoteTabId != null) enableRemoteMirrorFallback(activeRemoteTabId);
+            return;
+        }
+        final String tabId = activeRemoteTabId;
+        if (tabId == null || workerPool == null || remoteSurfaceView == null || isRemoteSurfaceObscured()) {
+            return;
+        }
+        if (remoteSurfaceView.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        SurfaceHolder holder = remoteSurfaceView.getHolder();
+        if (holder == null || holder.getSurface() == null || !holder.getSurface().isValid()) {
+            return;
+        }
+        int w = remoteSurfaceView.getWidth();
+        int h = remoteSurfaceView.getHeight();
+        if (w <= 0 || h <= 0) {
+            Rect frame = holder.getSurfaceFrame();
+            if (frame != null) {
+                w = frame.width();
+                h = frame.height();
+            }
+        }
+        if (w <= 0 || h <= 0) return;
+
+        if (remoteSurfaceReady && tabId.equals(attachedRemoteTabId)) {
+            return;
+        }
+        if (activeRemoteAttachSeq > 0L && tabId.equals(attachingRemoteTabId)
+                && attachingRemoteW == w && attachingRemoteH == h) {
+            return;
+        }
+
+        IBinder hostToken = SurfaceViewApi30.getHostToken(remoteSurfaceView);
+        if (hostToken == null) {
+            remoteSurfaceView.post(this::attachCurrentRemoteSurface);
+            return;
+        }
+        Display disp = remoteSurfaceView.getDisplay();
+        int displayId = disp != null ? disp.getDisplayId() : Display.DEFAULT_DISPLAY;
+
+        long prevSeq = activeRemoteAttachSeq;
+        if (prevSeq > 0L) {
+            workerPool.cancelPendingAttach(prevSeq);
+            String prevTid = attachedRemoteTabId != null ? attachedRemoteTabId : attachingRemoteTabId;
+            if (prevTid != null && !prevTid.isEmpty()) {
+                workerPool.sendDetachSurface(prevTid, prevSeq);
+            }
+        }
+        cancelRemoteAttachTimeout();
+
+        final long seq = remoteAttachSeqGen.incrementAndGet();
+        activeRemoteAttachSeq = seq;
+        attachingRemoteTabId = tabId;
+        attachingRemoteW = w;
+        attachingRemoteH = h;
+        remoteSurfaceReady = false;
+        remoteFallbackActive = false;
+
+        final Runnable timeoutTask = () -> {
+            if (seq == activeRemoteAttachSeq && tabId.equals(activeRemoteTabId) && !remoteSurfaceReady) {
+                Log.w(TAG, "remote attach surface timeout tab=" + tabId + " seq=" + seq);
+                if (workerPool != null) {
+                    workerPool.cancelPendingAttach(seq);
+                    workerPool.sendDetachSurface(tabId, seq);
+                }
+                enableRemoteMirrorFallback(tabId);
+            }
+        };
+        remoteAttachTimeoutTask = timeoutTask;
+        MAIN.postDelayed(timeoutTask, 2500L);
+
+        boolean sent = workerPool.sendAttachSurface(tabId, seq, hostToken, displayId, w, h,
+                (ok, surfacePackage, stateBundle, error) -> MAIN.post(() -> {
+                    if (seq == activeRemoteAttachSeq) {
+                        cancelRemoteAttachTimeout();
+                    }
+                    if (!tabId.equals(activeRemoteTabId) || seq != activeRemoteAttachSeq || isRemoteSurfaceObscured()) {
+                        if (surfacePackage != null) {
+                            SurfaceViewApi30.releasePackage(surfacePackage);
+                        }
+                        if (workerPool != null) {
+                            workerPool.sendDetachSurface(tabId, seq);
+                        }
+                        return;
+                    }
+                    if (ok && surfacePackage != null && remoteSurfaceView != null) {
+                        SurfaceViewApi30.setChildSurfacePackage(remoteSurfaceView, surfacePackage);
+                        attachedRemoteTabId = tabId;
+                        attachingRemoteTabId = null;
+                        remoteSurfaceReady = true;
+                        remoteFallbackActive = false;
+                        stopMirrorPolling();
+                        if (mirrorImageView != null) mirrorImageView.setVisibility(View.GONE);
+                        if (mirrorRefreshBtn != null) mirrorRefreshBtn.setVisibility(View.GONE);
+                        remoteSurfaceView.setVisibility(View.VISIBLE);
+                        ProxyWorkerPool.WorkerSlot slot = workerPool != null ? workerPool.slotForTab(tabId) : null;
+                        if (mirrorHeaderTv != null && slot != null) {
+                            mirrorHeaderTv.setText("⚡ 代理进程 #" + slot.slot + " · " + slot.proxySummary);
+                        }
+                        syncRemoteStateBundle(tabId, stateBundle);
+                    } else {
+                        Log.w(TAG, "attach surface failed tab=" + tabId + " seq=" + seq + " err=" + error);
+                        if (surfacePackage != null) {
+                            SurfaceViewApi30.releasePackage(surfacePackage);
+                        }
+                        enableRemoteMirrorFallback(tabId);
+                    }
+                }));
+
+        if (!sent) {
+            cancelRemoteAttachTimeout();
+            attachingRemoteTabId = null;
+            enableRemoteMirrorFallback(tabId);
+        }
+    }
+
+    private void detachCurrentRemoteSurface(boolean sendToWorker) {
+        cancelRemoteAttachTimeout();
+        long seq = activeRemoteAttachSeq;
+        String tid = attachedRemoteTabId != null
+                ? attachedRemoteTabId
+                : (attachingRemoteTabId != null ? attachingRemoteTabId : activeRemoteTabId);
+        activeRemoteAttachSeq = 0L;
+        attachedRemoteTabId = null;
+        attachingRemoteTabId = null;
+        attachingRemoteW = 0;
+        attachingRemoteH = 0;
+        remoteSurfaceReady = false;
+        if (seq > 0L && workerPool != null) {
+            workerPool.cancelPendingAttach(seq);
+            if (sendToWorker && tid != null && !tid.isEmpty()) {
+                workerPool.sendDetachSurface(tid, seq);
+            }
+        }
+    }
+
+    private void enableRemoteMirrorFallback(String tabId) {
+        if (tabId == null || !tabId.equals(activeRemoteTabId)) return;
+        detachCurrentRemoteSurface(false);
+        remoteFallbackActive = true;
+        remoteSurfaceReady = false;
+        if (remoteSurfaceView != null) {
+            remoteSurfaceView.setVisibility(View.GONE);
+        }
+        if (mirrorImageView != null) {
+            mirrorImageView.setVisibility(View.VISIBLE);
+        }
+        if (mirrorRefreshBtn != null) {
+            mirrorRefreshBtn.setVisibility(View.VISIBLE);
+        }
+        refreshRemoteMirrorNow();
+        startMirrorPolling();
+    }
+
+    private void syncRemoteStateBundle(String tabId, Bundle b) {
+        if (tabId == null || !tabId.equals(activeRemoteTabId)) return;
+        String url = b != null ? b.getString(ProxyWorkerBridge.KEY_URL, "") : "";
+        if (url.isEmpty()) {
+            JSONObject meta = activeRemoteMeta();
+            if (meta != null) url = meta.optString("url", "");
+        }
+        if (!urlField.hasFocus()) {
+            showUrl(active, url);
+        }
+        updateProgress();
+        refreshTabs();
+    }
+
+    private JSONObject activeRemoteMeta() {
+        String rid = activeRemoteTabId;
+        ProxyWorkerPool pool = workerPool;
+        if (rid == null || pool == null) return null;
+        return pool.getCachedTabMeta(rid);
+    }
+
+    private boolean remoteCanGoBack() {
+        JSONObject meta = activeRemoteMeta();
+        return meta != null && meta.optBoolean("canGoBack", false);
+    }
+
+    private boolean remoteCanGoForward() {
+        JSONObject meta = activeRemoteMeta();
+        return meta != null && meta.optBoolean("canGoForward", false);
+    }
+
+    private boolean remoteIsDesktop() {
+        JSONObject meta = activeRemoteMeta();
+        return meta != null && meta.optBoolean("desktop", false);
     }
 
     boolean switchToRemote(String remoteTabId) {
         if (remoteTabId == null || remoteTabId.isEmpty() || workerPool == null) return false;
         ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
         if (slot == null) return false;
+        if (activeRemoteTabId != null && !remoteTabId.equals(activeRemoteTabId)) {
+            detachCurrentRemoteSurface(true);
+        }
         ensureRemoteMirrorView();
         activeRemoteTabId = remoteTabId;
+        remoteFallbackActive = false;
         applyVisibility();
         updateProgress();
-        mirrorHeaderTv.setText("⚡ 独立代理进程 #" + slot.slot + " · " + slot.proxySummary);
-        String cachedUrl = "";
-        for (JSONObject o : workerPool.listCachedRemoteTabs()) {
-            if (remoteTabId.equals(o.optString("id"))) {
-                cachedUrl = o.optString("url", "");
-                break;
-            }
+        if (mirrorHeaderTv != null) {
+            mirrorHeaderTv.setText("⚡ 代理进程 #" + slot.slot + " · " + slot.proxySummary);
         }
-        showUrl(active, cachedUrl);
+        JSONObject meta = workerPool.getCachedTabMeta(remoteTabId);
+        String cachedUrl = meta != null ? meta.optString("url", "") : "";
+        if (!urlField.hasFocus()) {
+            urlField.setText("");
+            showUrl(active, cachedUrl);
+        }
         refreshTabs();
-        refreshRemoteMirrorNow();
-        startMirrorPolling();
+        if (!isRemoteSurfaceObscured()) {
+            resumeRemoteSurfaceIfNeeded();
+        } else {
+            suspendRemoteSurfaceForOverlay();
+        }
         return true;
     }
 
     void exitRemoteMirror() {
         if (activeRemoteTabId == null) return;
+        suspendRemoteSurfaceForOverlay();
         activeRemoteTabId = null;
-        stopMirrorPolling();
+        remoteFallbackActive = false;
         hideRemoteMirror();
         applyVisibility();
         updateProgress();
@@ -3873,6 +4287,9 @@ public final class FloatingApps {
     }
 
     private void hideRemoteMirror() {
+        if (remoteSurfaceView != null) {
+            remoteSurfaceView.setVisibility(View.GONE);
+        }
         if (remoteMirrorContainer != null) {
             remoteMirrorContainer.setVisibility(View.GONE);
         }
@@ -3880,7 +4297,8 @@ public final class FloatingApps {
 
     private void startMirrorPolling() {
         MAIN.removeCallbacks(mirrorPollTask);
-        if (activeRemoteTabId != null && !minimized && host != null) {
+        if (activeRemoteTabId != null && !minimized && host != null
+                && (remoteFallbackActive || Build.VERSION.SDK_INT < Build.VERSION_CODES.R)) {
             MAIN.postDelayed(mirrorPollTask, 700L);
         }
     }
@@ -3934,7 +4352,7 @@ public final class FloatingApps {
                             mirrorImageView.setImageBitmap(fBmp);
                         }
                         if (mirrorHeaderTv != null) {
-                            mirrorHeaderTv.setText("⚡ 独立代理进程 #" + slot.slot + " · " + slot.proxySummary
+                            mirrorHeaderTv.setText("⚡ 代理进程 #" + slot.slot + " · " + slot.proxySummary
                                     + (vw > 0 ? " (" + vw + "x" + vh + ")" : ""));
                         }
                         if (!urlField.hasFocus() && !rUrl.isEmpty()) {
@@ -3977,26 +4395,68 @@ public final class FloatingApps {
                 workerPool.callRpc(slot, req, "mtap-" + remoteTabId, 4000L);
             } catch (Throwable ignored) {}
             MAIN.postDelayed(() -> {
-                if (remoteTabId.equals(activeRemoteTabId)) fetchRemoteMirrorFrame(remoteTabId);
+                if (remoteTabId.equals(activeRemoteTabId) && (!remoteSurfaceReady || remoteFallbackActive)) {
+                    fetchRemoteMirrorFrame(remoteTabId);
+                }
             }, 180L);
         });
     }
 
-    private void navigateRemoteFromUi(String remoteTabId, String targetUrl) {
-        if (remoteTabId == null || targetUrl == null || targetUrl.isEmpty() || workerPool == null) return;
-        ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
+    private void dispatchRemoteAction(String remoteTabId, JSONObject req, String reqPrefix, long timeoutMs, boolean refreshMirrorOnFallback) {
+        if (remoteTabId == null || remoteTabId.isEmpty() || workerPool == null) return;
+        final ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(remoteTabId);
         if (slot == null) return;
         mirrorExec.execute(() -> {
             try {
-                JSONObject req = new JSONObject()
-                        .put("action", "open")
-                        .put("tab", remoteTabId)
-                        .put("url", targetUrl)
-                        .put("snapshot", false);
-                workerPool.callRpc(slot, req, "mnav-" + remoteTabId, 20000L);
+                workerPool.callRpc(slot, req, reqPrefix + "-" + remoteTabId + "-" + System.nanoTime(), timeoutMs);
             } catch (Throwable ignored) {}
-            fetchRemoteMirrorFrame(remoteTabId);
+            MAIN.post(() -> {
+                if (remoteTabId.equals(activeRemoteTabId)) {
+                    if (!urlField.hasFocus()) {
+                        showUrl(active, currentUrl());
+                    }
+                    updateProgress();
+                    refreshTabs();
+                }
+            });
+            if (refreshMirrorOnFallback && (!remoteSurfaceReady || remoteFallbackActive)) {
+                fetchRemoteMirrorFrame(remoteTabId);
+            }
         });
+    }
+
+    private void sendRemoteHome(String remoteTabId) {
+        try {
+            dispatchRemoteAction(remoteTabId, new JSONObject().put("action", "home").put("tab", remoteTabId), "ui-home", 12000L, true);
+        } catch (Throwable ignored) {}
+    }
+
+    private void sendRemoteBack(String remoteTabId) {
+        try {
+            dispatchRemoteAction(remoteTabId, new JSONObject().put("action", "back").put("tab", remoteTabId), "ui-back", 12000L, true);
+        } catch (Throwable ignored) {}
+    }
+
+    private void sendRemoteForward(String remoteTabId) {
+        try {
+            dispatchRemoteAction(remoteTabId, new JSONObject().put("action", "forward").put("tab", remoteTabId), "ui-forward", 12000L, true);
+        } catch (Throwable ignored) {}
+    }
+
+    private void navigateRemoteFromUi(String remoteTabId, String targetUrl) {
+        if (remoteTabId == null || targetUrl == null || targetUrl.isEmpty() || workerPool == null) return;
+        try {
+            dispatchRemoteAction(
+                    remoteTabId,
+                    new JSONObject()
+                            .put("action", "open")
+                            .put("tab", remoteTabId)
+                            .put("url", targetUrl)
+                            .put("snapshot", false),
+                    "mnav",
+                    20000L,
+                    true);
+        } catch (Throwable ignored) {}
     }
 
     private static boolean isLoopbackUrl(String u) {
@@ -7457,12 +7917,12 @@ public final class FloatingApps {
             String title = it.optString("label", "");
             boolean enabled = true, checkable = false, checked = false, show = true;
             switch (id) {
-                case "forward": enabled = web != null && web.canGoForward(); break;
-                case "back": enabled = web != null && web.canGoBack(); break;
+                case "forward": enabled = activeRemoteTabId != null ? remoteCanGoForward() : (web != null && web.canGoForward()); break;
+                case "back": enabled = activeRemoteTabId != null ? remoteCanGoBack() : (web != null && web.canGoBack()); break;
                 case "bookmark": title = isBookmarked(u) ? "★ 已加书签（点按移除）" : "☆ 添加书签"; enabled = webPage; break;
-                case "shortcut": enabled = !isHomeUrl(u) && (webPage || isTrusted(u)); break;
-                case "translate": if (title.isEmpty()) title = active != null && active.translated ? "显示原文" : "网页翻译"; enabled = webPage; break;
-                case "desktop": checkable = true; checked = active != null && active.desktop; break;
+                case "shortcut": enabled = activeRemoteTabId == null && !isHomeUrl(u) && (webPage || isTrusted(u)); break;
+                case "translate": if (title.isEmpty()) title = active != null && active.translated ? "显示原文" : "网页翻译"; enabled = activeRemoteTabId == null && webPage; break;
+                case "desktop": checkable = true; checked = activeRemoteTabId != null ? remoteIsDesktop() : (active != null && active.desktop); break;
                 case "fullscreen": if (title.isEmpty()) title = fullscreen ? "退出全屏" : "全屏"; break;
                 case "share": case "copy": case "external": enabled = webPage; break;
                 case "pistop": show = lastPiTab() != null || sPiStopped; if (title.isEmpty()) title = sPiStopped ? "▶ 允许 Pi 操作浏览器" : "⏹ 停止 Pi 操作浏览器"; break;
@@ -7621,11 +8081,18 @@ public final class FloatingApps {
         String src = vars != null ? vars.get("src") : null;
         String target = link != null && !link.isEmpty() ? link : src;
         switch (id == null ? "" : id) {
-            case "back": if (t != null && t.web != null && t.web.canGoBack()) goBackTab(t); else goBack(); break;
+            case "back":
+                if (activeRemoteTabId != null) goBack();
+                else if (t != null && t.web != null && t.web.canGoBack()) goBackTab(t);
+                else goBack();
+                break;
             case "forward": goForwardTab(t); break;
             case "reload": case "refresh": reload(); break;
             case "stop": if (t != null && t.web != null) t.web.stopLoading(); break;
-            case "home": goHome(t, true); break;
+            case "home":
+                if (activeRemoteTabId != null) sendRemoteHome(activeRemoteTabId);
+                else goHome(t, true);
+                break;
             case "url":
                 // 工具栏里没有地址栏（ui.json 去掉了 url）时用对话框输入；urlField 本身总在 urlPill 里
                 if (urlPill.getParent() == null) { askUrl(); break; }
@@ -8060,7 +8527,8 @@ public final class FloatingApps {
                 icon = p.optString("icon", icon);
             }
         }
-        closePanel();
+        closePanel(false);
+        suspendRemoteSurfaceForOverlay();
         ThemeManager.ThemePalette pal = uiPalette();
         panelLayer = new FrameLayout(vctx);
         panelLayer.setBackgroundColor(Color.parseColor("#66000000"));
@@ -8147,6 +8615,10 @@ public final class FloatingApps {
     }
 
     private void closePanel() {
+        closePanel(true);
+    }
+
+    private void closePanel(boolean resumeRemote) {
         panelTrusted = false;
         if (panelWeb != null) {
             try {
@@ -8158,6 +8630,9 @@ public final class FloatingApps {
         if (panelLayer != null) {
             try { root.removeView(panelLayer); } catch (Throwable ignored) {}
             panelLayer = null;
+        }
+        if (resumeRemote) {
+            resumeRemoteSurfaceIfNeeded();
         }
     }
 
@@ -9290,7 +9765,7 @@ public final class FloatingApps {
         fullscreen = on;
         hideIme();
         bar.setVisibility(on ? View.GONE : View.VISIBLE);
-        progress.setVisibility(on ? View.GONE : (active != null && active.loading ? View.VISIBLE : View.INVISIBLE));
+        updateProgress();
         refreshBall();
         exitFullBtn.bringToFront();
         if (ballWrap != null) ballWrap.bringToFront();
@@ -9364,15 +9839,20 @@ public final class FloatingApps {
             cb.onCustomViewHidden();
             return;
         }
-        if (customView != null) hideCustomView();
+        if (customView != null) hideCustomView(false);
         customView = v;
         customViewCallback = cb;
+        suspendRemoteSurfaceForOverlay();
         v.setBackgroundColor(Color.BLACK);
         root.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         applyImmersive(true);
     }
 
     private void hideCustomView() {
+        hideCustomView(true);
+    }
+
+    private void hideCustomView(boolean resumeRemote) {
         if (customView == null) return;
         try { root.removeView(customView); } catch (Throwable ignored) {}
         customView = null;
@@ -9380,15 +9860,20 @@ public final class FloatingApps {
         customViewCallback = null;
         if (cb != null) try { cb.onCustomViewHidden(); } catch (Throwable ignored) {}
         applyImmersive(fullscreen);
+        if (resumeRemote) {
+            resumeRemoteSurfaceIfNeeded();
+        }
     }
 
     private void dismiss() {
-        stopMirrorPolling();
+        minimized = true;
+        suspendRemoteSurfaceForOverlay();
         activeRemoteTabId = null;
-        closePanel();
+        remoteFallbackActive = false;
+        closePanel(false);
         cancelPendingFileChooser();
         AttachmentPickerActivity.sCallback = null;
-        hideCustomView();
+        hideCustomView(false);
         hideIme();
         Activity a = host;
         if (root.getParent() instanceof ViewGroup) {

@@ -4,20 +4,33 @@ import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.MutableContextWrapper;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
+import android.os.Message;
+import android.os.Messenger;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.ContextThemeWrapper;
+import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.SurfaceControlViewHost;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.JsPromptResult;
@@ -30,7 +43,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
+import androidx.annotation.RequiresApi;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebMessageCompat;
@@ -199,11 +214,24 @@ public final class ProxyWorkerRuntime {
         final LinkedHashMap<String, LinkedHashMap<String, String>> menus = new LinkedHashMap<>();
         final ArrayDeque<JSONObject> console = new ArrayDeque<>();
 
+        MutableContextWrapper tabCtx;
         WebView web;
+        Object surfaceHost;
+        FrameLayout surfaceContainer;
+        volatile boolean surfaceAttached = false;
+        long surfaceAttachSeq = 0L;
+        int surfaceW = 0, surfaceH = 0;
+        float surfaceDensity = 1f;
+        IBinder hostToken;
+        IBinder.DeathRecipient hostDeathRecipient;
         volatile String url = "";
         volatile String title = "";
         volatile boolean loading = false;
-        volatile int progress = 100;
+        volatile int progress = 0;
+        volatile boolean canGoBack = false;
+        volatile boolean canGoForward = false;
+        volatile long lastFocusNotifyAt = 0L;
+        long lastProgressReportAt = 0L;
         volatile boolean closed = false;
         volatile int navSeq = 0;
         volatile int finishedSeq = 0;
@@ -372,6 +400,7 @@ public final class ProxyWorkerRuntime {
                     tabs.clear();
                 }
                 for (WorkerTab t : all) {
+                    detachSurfaceInternal(t, 0L);
                     destroyTabOnMain(t);
                 }
                 offscreenHost.destroy();
@@ -768,6 +797,7 @@ public final class ProxyWorkerRuntime {
                 }
             }
             WorkerTab nt = new WorkerTab(tid, pi, wantDesktop);
+            nt.tabCtx = new MutableContextWrapper(offscreenHost.getHostContext());
             nt.web = createWorkerWebView(nt);
             offscreenHost.mount(nt.web, nt.desktop);
             synchronized (tabTableLock) {
@@ -856,14 +886,17 @@ public final class ProxyWorkerRuntime {
             o.put("url", nz(t.url));
             o.put("title", nz(t.title));
             o.put("loading", t.loading);
-            o.put("desktop", t.desktop);
+            o.put("progress", t.progress);
+            o.put("canGoBack", t.canGoBack);
+            o.put("canGoForward", t.canGoForward);
+            o.put("desktop", effectiveDesktopOf(t));
             o.put("busy", t.opLock.isLocked());
             o.put("container", containerId);
             o.put("containerLabel", label);
             o.put("remote", true);
             o.put("workerSlot", slot);
             o.put("workerPid", getPid());
-            o.put("viewport", viewportStr(t.desktop));
+            o.put("viewport", viewportStr(effectiveDesktopOf(t)));
             o.put("proxyFrozen", false);
             o.put("proxySignature", profile != null ? profile.proxySignature() : "DIRECT");
             o.put("proxySummary", proxyManager.getActiveSummary());
@@ -895,11 +928,12 @@ public final class ProxyWorkerRuntime {
                         one.desktop = on;
                         one.siteUaMode = null;
                         applyTabEnv(one, one.web, false);
-                        offscreenHost.updateViewport(one.web, on);
+                        syncWorkerDesktopViewport(one);
                         String u = one.url;
                         if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
                             one.web.reload();
                         }
+                        reportTabStateToMain(one);
                     }
                     return null;
                 }, 5000L);
@@ -919,11 +953,12 @@ public final class ProxyWorkerRuntime {
                     t.desktop = on;
                     t.siteUaMode = null;
                     applyTabEnv(t, t.web, false);
-                    offscreenHost.updateViewport(t.web, on);
+                    syncWorkerDesktopViewport(t);
                     String u = t.url;
                     if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
                         t.web.reload();
                     }
+                    reportTabStateToMain(t);
                 }
                 return null;
             }, 5000L);
@@ -949,7 +984,7 @@ public final class ProxyWorkerRuntime {
                         one.desktop = false;
                         one.siteUaMode = nextUa;
                         applyTabEnv(one, one.web, false);
-                        offscreenHost.updateViewport(one.web, false);
+                        syncWorkerDesktopViewport(one);
                         String u = one.url;
                         if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
                             one.web.reload();
@@ -973,7 +1008,7 @@ public final class ProxyWorkerRuntime {
                     t.desktop = false;
                     t.siteUaMode = null;
                     applyTabEnv(t, t.web, false);
-                    offscreenHost.updateViewport(t.web, false);
+                    syncWorkerDesktopViewport(t);
                     String u = t.url;
                     if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
                         t.web.reload();
@@ -1197,7 +1232,7 @@ public final class ProxyWorkerRuntime {
                     t.desktop = finalProf.desktop;
                     t.siteUaMode = null;
                     applyTabEnv(t, t.web, true);
-                    offscreenHost.updateViewport(t.web, t.desktop);
+                    syncWorkerDesktopViewport(t);
                     cnt++;
                     if (reload) {
                         String u = t.url;
@@ -1533,7 +1568,7 @@ public final class ProxyWorkerRuntime {
     private JSONObject doScreenshot(WorkerTab tab, JSONObject req, JSONObject out) throws Exception {
         if (tab.web == null || tab.closed) return err("标签已关闭");
         long tmo = Math.max(1000L, Math.min(8000L, hardLeft()));
-        Bitmap bmp = offscreenHost.captureScreenshot(tab.web, tmo);
+        Bitmap bmp = captureTabBitmap(tab, tmo);
         if (bmp == null) return err("离屏截图失败");
 
         File shotDir = new File(appsDir, "screenshots");
@@ -1566,7 +1601,7 @@ public final class ProxyWorkerRuntime {
         if (tab.web == null || tab.closed) return err("标签已关闭");
         int maxSide = clamp(req.optInt("max_side", 720), 240, 1280);
         int quality = clamp(req.optInt("quality", 55), 20, 90);
-        Bitmap bmp = offscreenHost.captureScreenshot(tab.web, 3000L);
+        Bitmap bmp = captureTabBitmap(tab, 3000L);
         if (bmp == null) return err("抓取远程预览帧失败");
 
         int viewW = bmp.getWidth();
@@ -1619,7 +1654,7 @@ public final class ProxyWorkerRuntime {
             px = Math.max(0f, Math.min(vw - 1f, px));
             py = Math.max(0f, Math.min(vh - 1f, py));
 
-            if (!offscreenHost.isOverlayFallback() && w.isAttachedToWindow()) {
+            if ((tab.surfaceAttached || !offscreenHost.isOverlayFallback()) && w.isAttachedToWindow()) {
                 long down = SystemClock.uptimeMillis();
                 MotionEvent d = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, px, py, 0);
                 MotionEvent u = MotionEvent.obtain(down, down + 55, MotionEvent.ACTION_UP, px, py, 0);
@@ -1684,9 +1719,22 @@ public final class ProxyWorkerRuntime {
 
     // ------------------------------------------------------------------ WebView 构建与反检测环境
 
-    @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
+    @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface", "ClickableViewAccessibility"})
     private WebView createWorkerWebView(WorkerTab t) {
-        WebView w = new WebView(offscreenHost.getHostContext());
+        Context webCtx = t.tabCtx != null ? t.tabCtx : offscreenHost.getHostContext();
+        WebView w = new WebView(webCtx) {
+            @Override
+            public boolean dispatchTouchEvent(MotionEvent ev) {
+                if (ev != null && ev.getActionMasked() == MotionEvent.ACTION_DOWN && t.surfaceAttached) {
+                    long now = SystemClock.uptimeMillis();
+                    if (now - t.lastFocusNotifyAt >= 300L) {
+                        t.lastFocusNotifyAt = now;
+                        reportTabFocusToMain(t);
+                    }
+                }
+                return super.dispatchTouchEvent(ev);
+            }
+        };
         WebSettings ws = w.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
@@ -1767,7 +1815,10 @@ public final class ProxyWorkerRuntime {
                 t.errorDesc = "";
                 t.httpStatus = 0;
                 t.loading = true;
+                t.progress = 10;
                 t.url = url != null ? url : "";
+                t.canGoBack = view.canGoBack();
+                t.canGoForward = view.canGoForward();
                 applySiteSettings(t, url, false);
                 for (Iterator<Map.Entry<String, FrameSession>> it = t.frames.entrySet().iterator(); it.hasNext(); ) {
                     Map.Entry<String, FrameSession> e = it.next();
@@ -1776,24 +1827,35 @@ public final class ProxyWorkerRuntime {
                 }
                 synchronized (t.menus) { t.menus.clear(); }
                 clearConsoleLogs(t);
+                reportTabStateToMain(t);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 t.loading = false;
+                t.progress = 100;
                 t.finishedSeq = t.navSeq;
                 t.url = url != null ? url : "";
+                t.canGoBack = view.canGoBack();
+                t.canGoForward = view.canGoForward();
                 String title = view.getTitle();
                 if (title != null) t.title = title;
-                if (t.desktop && (!profile.isIsolated()) && url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                if (t.surfaceAttached) {
+                    syncWorkerDesktopViewport(t);
+                } else if (effectiveDesktopOf(t) && (profile == null || !profile.isIsolated())
+                        && url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
                     view.evaluateJavascript(AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0), null);
                 }
                 injectUiCss(t, view);
                 reportHistoryToMain(t.url, t.title);
+                reportTabStateToMain(t);
             }
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
+                if (t.surfaceAttached) {
+                    syncWorkerDesktopViewport(t);
+                }
                 injectUiCss(t, view);
             }
 
@@ -1804,6 +1866,9 @@ public final class ProxyWorkerRuntime {
                     t.finishedSeq = t.navSeq;
                 }
                 t.url = url != null ? url : "";
+                t.canGoBack = view.canGoBack();
+                t.canGoForward = view.canGoForward();
+                reportTabStateToMain(t);
             }
 
             @Override
@@ -1832,6 +1897,11 @@ public final class ProxyWorkerRuntime {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 t.progress = newProgress;
+                long now = SystemClock.uptimeMillis();
+                if (newProgress == 100 || now - t.lastProgressReportAt >= 120L) {
+                    t.lastProgressReportAt = now;
+                    reportTabStateToMain(t);
+                }
             }
 
             @Override
@@ -1840,6 +1910,7 @@ public final class ProxyWorkerRuntime {
                 if (!t.loading) {
                     reportHistoryToMain(t.url, t.title);
                 }
+                reportTabStateToMain(t);
             }
 
             @Override
@@ -1882,6 +1953,7 @@ public final class ProxyWorkerRuntime {
 
     private void recoverTabOnMain(WorkerTab t, WebView dead) {
         if (t == null || t.closed || t.web != dead) return;
+        detachSurfaceInternal(t, 0L);
         if (t.envDocStartHandler != null) {
             try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
             t.envDocStartHandler = null;
@@ -1895,8 +1967,15 @@ public final class ProxyWorkerRuntime {
         offscreenHost.unmount(dead);
         try { dead.destroy(); } catch (Throwable ignored) {}
         t.loading = false;
+        t.progress = 0;
+        if (t.tabCtx == null) {
+            t.tabCtx = new MutableContextWrapper(offscreenHost.getHostContext());
+        } else {
+            t.tabCtx.setBaseContext(offscreenHost.getHostContext());
+        }
         t.web = createWorkerWebView(t);
-        offscreenHost.mount(t.web, t.desktop);
+        offscreenHost.mount(t.web, effectiveDesktopOf(t));
+        reportTabStateToMain(t);
         String u = t.url;
         if (u != null && !u.isEmpty() && !u.startsWith("about:")) {
             loadUrlWithEnv(t, u);
@@ -1905,6 +1984,7 @@ public final class ProxyWorkerRuntime {
 
     private void destroyTabOnMain(WorkerTab t) {
         if (t == null) return;
+        detachSurfaceInternal(t, 0L);
         t.closed = true;
         if (t.envDocStartHandler != null) {
             try { t.envDocStartHandler.remove(); } catch (Throwable ignored) {}
@@ -1918,6 +1998,9 @@ public final class ProxyWorkerRuntime {
         if (t.web != null) {
             offscreenHost.unmount(t.web);
             try { t.web.stopLoading(); } catch (Throwable ignored) {}
+            if (t.tabCtx != null) {
+                try { t.tabCtx.setBaseContext(appContext); } catch (Throwable ignored) {}
+            }
             try { t.web.destroy(); } catch (Throwable ignored) {}
             t.web = null;
         }
@@ -2427,6 +2510,409 @@ public final class ProxyWorkerRuntime {
         } catch (Throwable ignored) {}
     }
 
+    private void reportTabStateToMain(WorkerTab t) {
+        if (closed.get() || mainCallbackPort <= 0 || t == null || t.closed) return;
+        if (Looper.myLooper() == Looper.getMainLooper() && t.web != null) {
+            try {
+                t.canGoBack = t.web.canGoBack();
+                t.canGoForward = t.web.canGoForward();
+            } catch (Throwable ignored) {}
+        }
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("event", "tab_state");
+            payload.put("slot", slot);
+            payload.put("containerId", containerId);
+            payload.put("tabId", t.id);
+            payload.put("url", nz(t.url));
+            payload.put("title", nz(t.title));
+            payload.put("loading", t.loading);
+            payload.put("progress", t.progress);
+            payload.put("canGoBack", t.canGoBack);
+            payload.put("canGoForward", t.canGoForward);
+            payload.put("desktop", effectiveDesktopOf(t));
+        } catch (Throwable ignored) {
+            return;
+        }
+        postWorkerEventAsync(payload);
+    }
+
+    private void reportTabFocusToMain(WorkerTab t) {
+        if (closed.get() || mainCallbackPort <= 0 || t == null || t.closed) return;
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("event", "tab_focus");
+            payload.put("slot", slot);
+            payload.put("containerId", containerId);
+            payload.put("tabId", t.id);
+        } catch (Throwable ignored) {
+            return;
+        }
+        postWorkerEventAsync(payload);
+    }
+
+    // ------------------------------------------------------------------ SurfaceControlViewHost 原生嵌入（API 30+）与视口/截图
+
+    private boolean effectiveDesktopOf(WorkerTab t) {
+        if (t == null) return false;
+        if (t.siteUaMode != null && !t.siteUaMode.isEmpty()) {
+            if ("desktop".equalsIgnoreCase(t.siteUaMode)) return true;
+            if ("mobile".equalsIgnoreCase(t.siteUaMode)) return false;
+        }
+        return t.desktop;
+    }
+
+    private void syncWorkerDesktopViewport(WorkerTab t) {
+        if (t == null || t.closed || t.web == null) return;
+        boolean effDesktop = effectiveDesktopOf(t);
+        if (t.surfaceAttached) {
+            String u = t.url;
+            if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+            if (effDesktop) {
+                double cssW = (t.surfaceW > 0 ? t.surfaceW : ContainerEnv.DESKTOP_VIEWPORT_W) / Math.max(1.0, t.surfaceDensity);
+                double scale = cssW / (double) ContainerEnv.DESKTOP_VIEWPORT_W;
+                String js = (profile != null && profile.isIsolated())
+                        ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale)
+                        : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale);
+                t.web.evaluateJavascript(js, null);
+            } else {
+                t.web.evaluateJavascript(
+                        "(function(){try{window.__pimetDesktopVp=null;var m=document.getElementById('__pimet_desktop_vp');if(m&&m.parentNode)m.parentNode.removeChild(m);}catch(e){}})()",
+                        null
+                );
+            }
+        } else {
+            offscreenHost.updateViewport(t.web, effDesktop);
+        }
+    }
+
+    private Bitmap captureTabBitmap(WorkerTab tab, long timeoutMs) throws Exception {
+        if (tab == null || tab.web == null || tab.closed) return null;
+        if (!tab.surfaceAttached) {
+            return offscreenHost.captureScreenshot(tab.web, timeoutMs);
+        }
+        Bitmap fgBmp = onMain(() -> {
+            WebView w = tab.web;
+            if (w == null || tab.closed || !tab.surfaceAttached) return null;
+            int vw = w.getWidth();
+            int vh = w.getHeight();
+            if (vw <= 0 || vh <= 0) return null;
+            int maxDim = Math.max(vw, vh);
+            float scale = maxDim > 1440 ? (1440f / maxDim) : 1f;
+            int bw = Math.max(1, Math.round(vw * scale));
+            int bh = Math.max(1, Math.round(vh * scale));
+            Bitmap bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
+            bmp.eraseColor(Color.WHITE);
+            Canvas c = new Canvas(bmp);
+            if (scale < 1f) c.scale(scale, scale);
+            c.translate(-w.getScrollX(), -w.getScrollY());
+            w.draw(c);
+            return bmp;
+        }, Math.max(1000L, Math.min(timeoutMs, 5000L)));
+        if (fgBmp != null) return fgBmp;
+        if (!tab.surfaceAttached) {
+            return offscreenHost.captureScreenshot(tab.web, timeoutMs);
+        }
+        return null;
+    }
+
+    public void handleAttachSurface(Bundle b, Messenger replyTo) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post(() -> handleAttachSurfaceOnMain(b, replyTo));
+        } else {
+            handleAttachSurfaceOnMain(b, replyTo);
+        }
+    }
+
+    private void handleAttachSurfaceOnMain(Bundle b, Messenger replyTo) {
+        String tabId = b != null ? b.getString(ProxyWorkerBridge.KEY_TAB_ID, "") : "";
+        long attachSeq = b != null ? b.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L) : 0L;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "Android API < 30");
+            return;
+        }
+        if (closed.get()) {
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "worker closed");
+            return;
+        }
+        if (b == null || tabId.isEmpty()) {
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "missing tabId");
+            return;
+        }
+        WorkerTab tab = findExactTab(tabId);
+        if (tab == null || tab.closed || tab.web == null) {
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "tab not found: " + tabId);
+            return;
+        }
+        IBinder hostToken = b.getBinder(ProxyWorkerBridge.KEY_HOST_TOKEN);
+        int displayId = b.getInt(ProxyWorkerBridge.KEY_DISPLAY_ID, Display.DEFAULT_DISPLAY);
+        int w = b.getInt(ProxyWorkerBridge.KEY_WIDTH, 0);
+        int h = b.getInt(ProxyWorkerBridge.KEY_HEIGHT, 0);
+        if (hostToken == null || w <= 0 || h <= 0) {
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "invalid hostToken or size");
+            return;
+        }
+
+        // 排他清理：先把同进程内其他已嵌入表面的标签回挂离屏
+        for (WorkerTab other : snapshotTabs()) {
+            if (other != null && other != tab && (other.surfaceAttached || other.surfaceHost != null)) {
+                detachSurfaceInternal(other, 0L);
+            }
+        }
+        if (tab.surfaceHost != null || tab.surfaceAttached) {
+            detachSurfaceInternal(tab, 0L);
+        }
+
+        try {
+            DisplayManager dm = (DisplayManager) appContext.getSystemService(Context.DISPLAY_SERVICE);
+            Display display = dm != null ? dm.getDisplay(displayId) : null;
+            if (display == null && dm != null) {
+                display = dm.getDisplay(Display.DEFAULT_DISPLAY);
+            }
+            if (display == null) {
+                sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "display unavailable");
+                return;
+            }
+            Context displayCtx = appContext.createDisplayContext(display);
+            int themeRes = android.R.style.Theme_DeviceDefault;
+            try {
+                themeRes = ThemeHelper.getThemeResId(ThemeHelper.getTheme(appContext));
+            } catch (Throwable ignored) {}
+            Context themedCtx = new ContextThemeWrapper(displayCtx, themeRes);
+            DisplayMetrics metrics = new DisplayMetrics();
+            display.getRealMetrics(metrics);
+            float density = metrics.density > 0f ? metrics.density : themedCtx.getResources().getDisplayMetrics().density;
+            if (density <= 0f) density = 1f;
+            tab.surfaceDensity = density;
+
+            if (tab.tabCtx == null) {
+                tab.tabCtx = new MutableContextWrapper(themedCtx);
+            } else {
+                tab.tabCtx.setBaseContext(themedCtx);
+            }
+            offscreenHost.unmount(tab.web);
+            ViewParent vp = tab.web.getParent();
+            if (vp instanceof ViewGroup) {
+                ((ViewGroup) vp).removeView(tab.web);
+            }
+
+            FrameLayout box = new FrameLayout(themedCtx);
+            tab.web.setFocusable(true);
+            tab.web.setFocusableInTouchMode(true);
+            tab.web.setVisibility(View.VISIBLE);
+            box.addView(tab.web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+            Object hostObj = SurfaceHostApi30.createAndSetView(themedCtx, display, hostToken, box, w, h);
+            tab.surfaceHost = hostObj;
+            tab.surfaceContainer = box;
+            tab.surfaceAttached = true;
+            tab.surfaceAttachSeq = attachSeq;
+            tab.surfaceW = w;
+            tab.surfaceH = h;
+            tab.hostToken = hostToken;
+
+            IBinder.DeathRecipient dr = () -> main.post(() -> detachSurfaceInternal(tab, attachSeq));
+            tab.hostDeathRecipient = dr;
+            hostToken.linkToDeath(dr, 0);
+
+            try {
+                tab.web.onResume();
+            } catch (Throwable ignored) {}
+            tab.web.requestLayout();
+            syncWorkerDesktopViewport(tab);
+            try {
+                tab.canGoBack = tab.web.canGoBack();
+                tab.canGoForward = tab.web.canGoForward();
+            } catch (Throwable ignored) {}
+
+            Object pkg = SurfaceHostApi30.getSurfacePackage(hostObj);
+            if (pkg == null) {
+                detachSurfaceInternal(tab, attachSeq);
+                sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null, "SurfacePackage is null");
+                return;
+            }
+            boolean sent = sendAttachSurfaceAck(replyTo, true, tabId, attachSeq, tab, pkg, "");
+            if (!sent) {
+                SurfaceHostApi30.releasePackage(pkg);
+                detachSurfaceInternal(tab, attachSeq);
+                return;
+            }
+            reportTabStateToMain(tab);
+        } catch (Throwable t) {
+            Log.w(TAG, "handleAttachSurface failed tab=" + tabId, t);
+            detachSurfaceInternal(tab, attachSeq);
+            sendAttachSurfaceAck(replyTo, false, tabId, attachSeq, null, null,
+                    t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+        }
+    }
+
+    public void handleResizeSurface(Bundle b) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post(() -> handleResizeSurfaceOnMain(b));
+        } else {
+            handleResizeSurfaceOnMain(b);
+        }
+    }
+
+    private void handleResizeSurfaceOnMain(Bundle b) {
+        if (b == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R || closed.get()) return;
+        String tabId = b.getString(ProxyWorkerBridge.KEY_TAB_ID, "");
+        long attachSeq = b.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L);
+        int w = b.getInt(ProxyWorkerBridge.KEY_WIDTH, 0);
+        int h = b.getInt(ProxyWorkerBridge.KEY_HEIGHT, 0);
+        if (tabId.isEmpty() || w <= 0 || h <= 0) return;
+        WorkerTab tab = findExactTab(tabId);
+        if (tab == null || tab.closed || !tab.surfaceAttached || tab.surfaceAttachSeq != attachSeq || tab.surfaceHost == null) {
+            return;
+        }
+        try {
+            SurfaceHostApi30.relayout(tab.surfaceHost, w, h);
+            tab.surfaceW = w;
+            tab.surfaceH = h;
+            syncWorkerDesktopViewport(tab);
+        } catch (Throwable t) {
+            Log.w(TAG, "handleResizeSurface failed tab=" + tabId, t);
+        }
+    }
+
+    public void handleDetachSurface(Bundle b) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post(() -> handleDetachSurfaceOnMain(b));
+        } else {
+            handleDetachSurfaceOnMain(b);
+        }
+    }
+
+    private void handleDetachSurfaceOnMain(Bundle b) {
+        if (b == null) return;
+        String tabId = b.getString(ProxyWorkerBridge.KEY_TAB_ID, "");
+        long expectedSeq = b.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L);
+        if (tabId.isEmpty()) return;
+        WorkerTab tab = findExactTab(tabId);
+        if (tab != null) {
+            detachSurfaceInternal(tab, expectedSeq);
+        }
+    }
+
+    private void detachSurfaceInternal(WorkerTab tab, long expectedSeq) {
+        if (tab == null) return;
+        if (expectedSeq != 0L && tab.surfaceAttachSeq != expectedSeq) return;
+        if (!tab.surfaceAttached && tab.surfaceHost == null) return;
+
+        if (tab.hostToken != null && tab.hostDeathRecipient != null) {
+            try {
+                tab.hostToken.unlinkToDeath(tab.hostDeathRecipient, 0);
+            } catch (Throwable ignored) {}
+        }
+        tab.hostToken = null;
+        tab.hostDeathRecipient = null;
+
+        if (tab.surfaceContainer != null && tab.web != null && tab.web.getParent() == tab.surfaceContainer) {
+            try {
+                tab.surfaceContainer.removeView(tab.web);
+            } catch (Throwable ignored) {}
+        }
+        if (tab.surfaceHost != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            SurfaceHostApi30.releaseHost(tab.surfaceHost);
+        }
+        tab.surfaceHost = null;
+        tab.surfaceContainer = null;
+        tab.surfaceAttached = false;
+        tab.surfaceAttachSeq = 0L;
+        tab.surfaceW = 0;
+        tab.surfaceH = 0;
+
+        if (!tab.closed && tab.web != null) {
+            if (tab.tabCtx != null) {
+                tab.tabCtx.setBaseContext(offscreenHost.getHostContext());
+            }
+            offscreenHost.mount(tab.web, effectiveDesktopOf(tab));
+            syncWorkerDesktopViewport(tab);
+        }
+    }
+
+    private boolean sendAttachSurfaceAck(
+            Messenger replyTo,
+            boolean ok,
+            String tabId,
+            long attachSeq,
+            WorkerTab tab,
+            Object pkg,
+            String error
+    ) {
+        if (replyTo == null) return false;
+        Message ack = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK);
+        Bundle out = new Bundle();
+        out.putBoolean(ProxyWorkerBridge.KEY_OK, ok);
+        out.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId == null ? "" : tabId);
+        out.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+        out.putString(ProxyWorkerBridge.KEY_ERROR, error == null ? "" : error);
+        if (ok && tab != null) {
+            out.putString(ProxyWorkerBridge.KEY_URL, nz(tab.url));
+            out.putString(ProxyWorkerBridge.KEY_TITLE, nz(tab.title));
+            out.putBoolean(ProxyWorkerBridge.KEY_LOADING, tab.loading);
+            out.putInt(ProxyWorkerBridge.KEY_PROGRESS, tab.progress);
+            out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_BACK, tab.canGoBack);
+            out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_FORWARD, tab.canGoForward);
+            out.putBoolean(ProxyWorkerBridge.KEY_DESKTOP, effectiveDesktopOf(tab));
+        }
+        if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            SurfaceHostApi30.putPackage(out, ProxyWorkerBridge.KEY_SURFACE_PACKAGE, pkg);
+        }
+        ack.setData(out);
+        try {
+            replyTo.send(ack);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "sendAttachSurfaceAck failed", t);
+            return false;
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private static final class SurfaceHostApi30 {
+        static Object createAndSetView(Context themedCtx, Display display, IBinder hostToken, View view, int w, int h) {
+            SurfaceControlViewHost host = new SurfaceControlViewHost(themedCtx, display, hostToken);
+            host.setView(view, w, h);
+            return host;
+        }
+
+        static Object getSurfacePackage(Object hostObj) {
+            if (hostObj instanceof SurfaceControlViewHost) {
+                return ((SurfaceControlViewHost) hostObj).getSurfacePackage();
+            }
+            return null;
+        }
+
+        static void relayout(Object hostObj, int w, int h) {
+            if (hostObj instanceof SurfaceControlViewHost) {
+                ((SurfaceControlViewHost) hostObj).relayout(w, h);
+            }
+        }
+
+        static void releaseHost(Object hostObj) {
+            if (hostObj instanceof SurfaceControlViewHost) {
+                try {
+                    ((SurfaceControlViewHost) hostObj).release();
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        static void releasePackage(Object pkg) {
+            if (pkg instanceof SurfaceControlViewHost.SurfacePackage) {
+                try {
+                    ((SurfaceControlViewHost.SurfacePackage) pkg).release();
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        static void putPackage(Bundle b, String key, Object pkg) {
+            if (b != null && pkg instanceof SurfaceControlViewHost.SurfacePackage) {
+                b.putParcelable(key, (SurfaceControlViewHost.SurfacePackage) pkg);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ 导航等待 / 稳定判定
 
     private boolean navWait(WorkerTab tab, int seq, String before, long maxMs) {
@@ -2658,7 +3144,7 @@ public final class ProxyWorkerRuntime {
         boolean nativeOk = false;
         String note = "";
         String coveredBy = loc.optString("coveredBy", "");
-        if (!useJs && !offscreenHost.isOverlayFallback()) {
+        if (!useJs && (tab.surfaceAttached || !offscreenHost.isOverlayFallback())) {
             boolean scrolled = loc.optBoolean("scrolled", true);
             boolean hasCoords = !Double.isNaN(loc.optDouble("x", Double.NaN))
                     && !Double.isNaN(loc.optDouble("y", Double.NaN))
@@ -2710,7 +3196,7 @@ public final class ProxyWorkerRuntime {
 
     private boolean nativeTap(WorkerTab tab, double cssX, double cssY, double vw) {
         WebView w = tab.web;
-        if (w == null || tab.closed || offscreenHost.isOverlayFallback() || !w.isAttachedToWindow()) return false;
+        if (w == null || tab.closed || (!tab.surfaceAttached && offscreenHost.isOverlayFallback()) || !w.isAttachedToWindow()) return false;
         if (w.getWidth() <= 0 || w.getHeight() <= 0 || !(vw > 0)) return false;
         if (Double.isNaN(cssX) || Double.isNaN(cssY)) return false;
         float ratio = (float) (w.getWidth() / vw);
@@ -2735,7 +3221,7 @@ public final class ProxyWorkerRuntime {
     private void pressKey(WorkerTab tab, String key, int code) throws Exception {
         JSONObject r = evalAgent(tab, "A.key(" + JSONObject.quote(key) + ")", 5000L);
         if (r.has("ok") && !r.optBoolean("ok")) {
-            if (!offscreenHost.isOverlayFallback()) {
+            if (tab.surfaceAttached || !offscreenHost.isOverlayFallback()) {
                 onMain(() -> {
                     if (tab.web == null || !tab.web.isAttachedToWindow()) return null;
                     long now = SystemClock.uptimeMillis();
@@ -3246,18 +3732,18 @@ public final class ProxyWorkerRuntime {
                 boolean nextDesktop = "desktop".equalsIgnoreCase(mode) ? true : ("mobile".equalsIgnoreCase(mode) ? false : t.desktop);
                 if (nextDesktop != t.desktop) {
                     t.desktop = nextDesktop;
-                    offscreenHost.updateViewport(t.web, t.desktop);
                 }
                 applyTabEnv(t, t.web, false);
+                syncWorkerDesktopViewport(t);
             }
         } else if (t.siteUaMode != null) {
             t.siteUaMode = null;
             boolean defDesktop = profile != null && profile.desktop;
             if (t.desktop != defDesktop) {
                 t.desktop = defDesktop;
-                offscreenHost.updateViewport(t.web, t.desktop);
             }
             applyTabEnv(t, t.web, false);
+            syncWorkerDesktopViewport(t);
         }
         if (!beforeNav && s.has("zoom")) {
             WebPinchZoom.applyPercent(t.web, WebPinchZoom.clamp(s.optInt("zoom", 100)));

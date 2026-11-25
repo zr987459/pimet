@@ -4,6 +4,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -12,6 +13,9 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
 import android.util.Log;
+import android.view.SurfaceControlViewHost;
+
+import androidx.annotation.RequiresApi;
 
 import com.xm486.pimet.bridge.AppBridgeManager;
 
@@ -116,11 +120,22 @@ public final class ProxyWorkerPool {
         }
     }
 
+    public interface AttachSurfaceCallback {
+        void onResult(boolean ok, Object surfacePackage, Bundle stateBundle, String error);
+    }
+
     private final Context appContext;
     private final File appsDir;
     private final ContainerManager containerManager;
     private volatile String customUa;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ConcurrentHashMap<Long, AttachSurfaceCallback> pendingAttachCallbacks = new ConcurrentHashMap<>();
+    private final Messenger surfaceReplyMessenger = new Messenger(new Handler(Looper.getMainLooper()) {
+        @Override
+        public void handleMessage(Message msg) {
+            handleSurfaceReplyMessage(msg);
+        }
+    });
     private final Object poolLock = new Object();
     private final WorkerSlot[] slots;
     private final ConcurrentHashMap<String, WorkerSlot> tabIndex = new ConcurrentHashMap<>();
@@ -748,6 +763,10 @@ public final class ProxyWorkerPool {
             if (!o.has("kind")) o.put("kind", "pi");
             if (resp.has("url")) o.put("url", resp.optString("url", ""));
             if (resp.has("title")) o.put("title", resp.optString("title", ""));
+            if (resp.has("loading")) o.put("loading", resp.optBoolean("loading", false));
+            if (resp.has("progress")) o.put("progress", resp.optInt("progress", 100));
+            if (resp.has("canGoBack")) o.put("canGoBack", resp.optBoolean("canGoBack", false));
+            if (resp.has("canGoForward")) o.put("canGoForward", resp.optBoolean("canGoForward", false));
             if (resp.has("desktop")) o.put("desktop", resp.optBoolean("desktop", false));
             if (resp.has("viewport")) o.put("viewport", resp.optString("viewport", ""));
             o.put("container", slot.boundContainerId);
@@ -759,6 +778,236 @@ public final class ProxyWorkerPool {
             o.put("proxySummary", slot.proxySummary);
             cachedTabMeta.put(tid, o);
         } catch (Throwable ignored) {}
+    }
+
+    public boolean updateTabStateFromEvent(JSONObject ev) {
+        if (ev == null) return false;
+        String tid = ev.optString("tabId", "").trim();
+        if (tid.isEmpty()) return false;
+        WorkerSlot slot = tabIndex.get(tid);
+        if (slot == null || !slot.isReady()) return false;
+        int evSlot = ev.optInt("slot", -1);
+        if (evSlot > 0 && slot.slot != evSlot) return false;
+        String evCid = ev.optString("containerId", "").trim();
+        if (!evCid.isEmpty() && !evCid.equals(slot.boundContainerId)) return false;
+        try {
+            JSONObject prev = cachedTabMeta.get(tid);
+            JSONObject o = prev != null ? new JSONObject(prev.toString()) : new JSONObject();
+            o.put("id", tid);
+            if (!o.has("kind")) o.put("kind", "pi");
+            if (ev.has("url")) o.put("url", ev.optString("url", ""));
+            if (ev.has("title")) o.put("title", ev.optString("title", ""));
+            if (ev.has("loading")) o.put("loading", ev.optBoolean("loading", false));
+            if (ev.has("progress")) o.put("progress", ev.optInt("progress", 100));
+            if (ev.has("canGoBack")) o.put("canGoBack", ev.optBoolean("canGoBack", false));
+            if (ev.has("canGoForward")) o.put("canGoForward", ev.optBoolean("canGoForward", false));
+            if (ev.has("desktop")) {
+                boolean desk = ev.optBoolean("desktop", false);
+                o.put("desktop", desk);
+                o.put("viewport", ContainerEnv.viewportWidth(desk) + "x" + ContainerEnv.viewportHeight(desk));
+            }
+            o.put("container", slot.boundContainerId);
+            o.put("containerLabel", slot.boundLabel);
+            o.put("remote", true);
+            o.put("workerSlot", slot.slot);
+            o.put("workerPid", slot.pid);
+            o.put("proxyFrozen", false);
+            o.put("proxySummary", slot.proxySummary);
+            cachedTabMeta.put(tid, o);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public JSONObject getCachedTabMeta(String tabId) {
+        if (tabId == null || tabId.isEmpty()) return null;
+        JSONObject o = cachedTabMeta.get(tabId);
+        if (o == null) return null;
+        try {
+            return new JSONObject(o.toString());
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------ SurfaceControlViewHost 跨进程控制信令
+
+    public boolean sendAttachSurface(
+            String tabId,
+            long attachSeq,
+            IBinder hostToken,
+            int displayId,
+            int width,
+            int height,
+            AttachSurfaceCallback cb
+    ) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || shuttingDown.get()) return false;
+        if (tabId == null || tabId.isEmpty() || hostToken == null || width <= 0 || height <= 0) return false;
+        WorkerSlot slot = tabIndex.get(tabId);
+        if (slot == null || !slot.isReady()) return false;
+        Messenger m = slot.messenger;
+        if (m == null) return false;
+
+        if (cb != null) {
+            pendingAttachCallbacks.put(attachSeq, cb);
+        }
+        Message msg = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE);
+        msg.replyTo = surfaceReplyMessenger;
+        Bundle b = new Bundle();
+        b.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId);
+        b.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+        b.putBinder(ProxyWorkerBridge.KEY_HOST_TOKEN, hostToken);
+        b.putInt(ProxyWorkerBridge.KEY_DISPLAY_ID, displayId);
+        b.putInt(ProxyWorkerBridge.KEY_WIDTH, width);
+        b.putInt(ProxyWorkerBridge.KEY_HEIGHT, height);
+        msg.setData(b);
+        try {
+            m.send(msg);
+            return true;
+        } catch (Throwable t) {
+            pendingAttachCallbacks.remove(attachSeq);
+            Log.w(TAG, "sendAttachSurface failed slot=#" + slot.slot + " tab=" + tabId, t);
+            return false;
+        }
+    }
+
+    public void cancelPendingAttach(long attachSeq) {
+        if (attachSeq > 0L) {
+            pendingAttachCallbacks.remove(attachSeq);
+        }
+    }
+
+    public void sendResizeSurface(String tabId, long attachSeq, int width, int height) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || shuttingDown.get()) return;
+        if (tabId == null || tabId.isEmpty() || width <= 0 || height <= 0) return;
+        WorkerSlot slot = tabIndex.get(tabId);
+        if (slot == null || !slot.isReady()) return;
+        Messenger m = slot.messenger;
+        if (m == null) return;
+        Message msg = Message.obtain(null, ProxyWorkerBridge.MSG_RESIZE_SURFACE);
+        Bundle b = new Bundle();
+        b.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId);
+        b.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+        b.putInt(ProxyWorkerBridge.KEY_WIDTH, width);
+        b.putInt(ProxyWorkerBridge.KEY_HEIGHT, height);
+        msg.setData(b);
+        try {
+            m.send(msg);
+        } catch (Throwable t) {
+            Log.w(TAG, "sendResizeSurface failed slot=#" + slot.slot + " tab=" + tabId, t);
+        }
+    }
+
+    public void sendDetachSurface(String tabId, long attachSeq) {
+        if (tabId == null || tabId.isEmpty()) return;
+        sendDetachSurface(tabIndex.get(tabId), tabId, attachSeq);
+    }
+
+    public void sendDetachSurface(WorkerSlot slot, String tabId, long attachSeq) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || slot == null || !slot.isReady()) return;
+        if (tabId == null || tabId.isEmpty()) return;
+        Messenger m = slot.messenger;
+        if (m == null) return;
+        Message msg = Message.obtain(null, ProxyWorkerBridge.MSG_DETACH_SURFACE);
+        Bundle b = new Bundle();
+        b.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId);
+        b.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+        msg.setData(b);
+        try {
+            m.send(msg);
+        } catch (Throwable t) {
+            Log.w(TAG, "sendDetachSurface failed slot=#" + slot.slot + " tab=" + tabId, t);
+        }
+    }
+
+    private void handleSurfaceReplyMessage(Message msg) {
+        if (msg == null || msg.what != ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK) return;
+        Bundle b = msg.getData();
+        if (b != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            SurfacePkgApi30.setClassLoader(b);
+        }
+        long seq = b != null ? b.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L) : 0L;
+        String tabId = b != null ? b.getString(ProxyWorkerBridge.KEY_TAB_ID, "") : "";
+        boolean ok = b != null && b.getBoolean(ProxyWorkerBridge.KEY_OK, false);
+        String error = b != null ? b.getString(ProxyWorkerBridge.KEY_ERROR, "") : "ACK 缺少 Bundle";
+        Object pkg = (b != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                ? SurfacePkgApi30.getPackage(b, ProxyWorkerBridge.KEY_SURFACE_PACKAGE)
+                : null;
+
+        AttachSurfaceCallback cb = pendingAttachCallbacks.remove(seq);
+        if (cb == null) {
+            if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                SurfacePkgApi30.release(pkg);
+            }
+            if (!tabId.isEmpty() && seq > 0L) {
+                sendDetachSurface(tabId, seq);
+            }
+            return;
+        }
+        if (ok && pkg != null) {
+            updateCachedTabFromAck(tabId, b);
+            cb.onResult(true, pkg, b, "");
+        } else {
+            if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                SurfacePkgApi30.release(pkg);
+            }
+            String errMsg = (error != null && !error.isEmpty()) ? error : (ok ? "SurfacePackage 为空" : "远程嵌入失败");
+            cb.onResult(false, null, b, errMsg);
+        }
+    }
+
+    private void updateCachedTabFromAck(String tabId, Bundle b) {
+        if (tabId == null || tabId.isEmpty() || b == null) return;
+        WorkerSlot slot = tabIndex.get(tabId);
+        if (slot == null || !slot.isReady()) return;
+        try {
+            JSONObject prev = cachedTabMeta.get(tabId);
+            JSONObject o = prev != null ? new JSONObject(prev.toString()) : new JSONObject();
+            o.put("id", tabId);
+            if (!o.has("kind")) o.put("kind", "pi");
+            if (b.containsKey(ProxyWorkerBridge.KEY_URL)) o.put("url", b.getString(ProxyWorkerBridge.KEY_URL, ""));
+            if (b.containsKey(ProxyWorkerBridge.KEY_TITLE)) o.put("title", b.getString(ProxyWorkerBridge.KEY_TITLE, ""));
+            if (b.containsKey(ProxyWorkerBridge.KEY_LOADING)) o.put("loading", b.getBoolean(ProxyWorkerBridge.KEY_LOADING, false));
+            if (b.containsKey(ProxyWorkerBridge.KEY_PROGRESS)) o.put("progress", b.getInt(ProxyWorkerBridge.KEY_PROGRESS, 100));
+            if (b.containsKey(ProxyWorkerBridge.KEY_CAN_GO_BACK)) o.put("canGoBack", b.getBoolean(ProxyWorkerBridge.KEY_CAN_GO_BACK, false));
+            if (b.containsKey(ProxyWorkerBridge.KEY_CAN_GO_FORWARD)) o.put("canGoForward", b.getBoolean(ProxyWorkerBridge.KEY_CAN_GO_FORWARD, false));
+            if (b.containsKey(ProxyWorkerBridge.KEY_DESKTOP)) {
+                boolean desk = b.getBoolean(ProxyWorkerBridge.KEY_DESKTOP, false);
+                o.put("desktop", desk);
+                o.put("viewport", ContainerEnv.viewportWidth(desk) + "x" + ContainerEnv.viewportHeight(desk));
+            }
+            o.put("container", slot.boundContainerId);
+            o.put("containerLabel", slot.boundLabel);
+            o.put("remote", true);
+            o.put("workerSlot", slot.slot);
+            o.put("workerPid", slot.pid);
+            o.put("proxyFrozen", false);
+            o.put("proxySummary", slot.proxySummary);
+            cachedTabMeta.put(tabId, o);
+        } catch (Throwable ignored) {}
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private static final class SurfacePkgApi30 {
+        static void setClassLoader(Bundle b) {
+            if (b != null) {
+                b.setClassLoader(SurfaceControlViewHost.SurfacePackage.class.getClassLoader());
+            }
+        }
+
+        static Object getPackage(Bundle b, String key) {
+            if (b == null) return null;
+            return b.getParcelable(key);
+        }
+
+        static void release(Object pkg) {
+            if (pkg instanceof SurfaceControlViewHost.SurfacePackage) {
+                try {
+                    ((SurfaceControlViewHost.SurfacePackage) pkg).release();
+                } catch (Throwable ignored) {}
+            }
+        }
     }
 
     private static byte[] readAllBytes(InputStream in) throws IOException {
