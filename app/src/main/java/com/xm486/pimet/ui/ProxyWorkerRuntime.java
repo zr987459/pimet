@@ -224,6 +224,10 @@ public final class ProxyWorkerRuntime {
         float surfaceDensity = 1f;
         IBinder hostToken;
         IBinder.DeathRecipient hostDeathRecipient;
+        View.OnLayoutChangeListener surfaceLayoutListener;
+        int lastViewportSyncW = 0, lastViewportSyncH = 0;
+        boolean lastViewportSyncDesktop = false;
+        boolean lastViewportSyncAttached = false;
         volatile String url = "";
         volatile String title = "";
         volatile boolean loading = false;
@@ -1868,6 +1872,9 @@ public final class ProxyWorkerRuntime {
                 t.url = url != null ? url : "";
                 t.canGoBack = view.canGoBack();
                 t.canGoForward = view.canGoForward();
+                if (t.surfaceAttached) {
+                    syncWorkerDesktopViewport(t);
+                }
                 reportTabStateToMain(t);
             }
 
@@ -2566,23 +2573,39 @@ public final class ProxyWorkerRuntime {
         if (t == null || t.closed || t.web == null) return;
         boolean effDesktop = effectiveDesktopOf(t);
         if (t.surfaceAttached) {
+            int wPx = t.web.getWidth() > 0 ? t.web.getWidth() : t.surfaceW;
+            int hPx = t.web.getHeight() > 0 ? t.web.getHeight() : t.surfaceH;
+            t.lastViewportSyncW = wPx;
+            t.lastViewportSyncH = hPx;
+            t.lastViewportSyncDesktop = effDesktop;
+            t.lastViewportSyncAttached = true;
             String u = t.url;
             if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+            double cssW = (wPx > 0 ? wPx : ContainerEnv.DESKTOP_VIEWPORT_W) / Math.max(1.0, t.surfaceDensity);
             if (effDesktop) {
-                double cssW = (t.surfaceW > 0 ? t.surfaceW : ContainerEnv.DESKTOP_VIEWPORT_W) / Math.max(1.0, t.surfaceDensity);
                 double scale = cssW / (double) ContainerEnv.DESKTOP_VIEWPORT_W;
                 String js = (profile != null && profile.isIsolated())
-                        ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale)
-                        : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale);
+                        ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale, true)
+                        : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale, true);
                 t.web.evaluateJavascript(js, null);
             } else {
-                t.web.evaluateJavascript(
-                        "(function(){try{window.__pimetDesktopVp=null;var m=document.getElementById('__pimet_desktop_vp');if(m&&m.parentNode)m.parentNode.removeChild(m);}catch(e){}})()",
-                        null
-                );
+                t.web.evaluateJavascript(AntiDetectJs.buildForegroundMobileViewportScript(cssW), null);
             }
         } else {
+            t.lastViewportSyncW = 0;
+            t.lastViewportSyncH = 0;
+            t.lastViewportSyncDesktop = effDesktop;
+            t.lastViewportSyncAttached = false;
             offscreenHost.updateViewport(t.web, effDesktop);
+            String u = t.url;
+            if (u != null && (u.startsWith("http://") || u.startsWith("https://"))) {
+                if (effDesktop && (profile == null || !profile.isIsolated())) {
+                    t.web.evaluateJavascript(
+                            AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0, false), null);
+                } else {
+                    t.web.evaluateJavascript(AntiDetectJs.buildClearViewportOverrideScript(), null);
+                }
+            }
         }
     }
 
@@ -2715,6 +2738,27 @@ public final class ProxyWorkerRuntime {
             tab.hostDeathRecipient = dr;
             hostToken.linkToDeath(dr, 0);
 
+            if (tab.surfaceLayoutListener != null) {
+                try {
+                    tab.web.removeOnLayoutChangeListener(tab.surfaceLayoutListener);
+                } catch (Throwable ignored) {}
+            }
+            View.OnLayoutChangeListener layoutListener = (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (tab.closed || !tab.surfaceAttached || tab.web != v) return;
+                int nw = right - left;
+                int nh = bottom - top;
+                if (nw <= 0 || nh <= 0) return;
+                boolean effD = effectiveDesktopOf(tab);
+                if (nw != tab.lastViewportSyncW || nh != tab.lastViewportSyncH
+                        || effD != tab.lastViewportSyncDesktop || !tab.lastViewportSyncAttached) {
+                    tab.surfaceW = nw;
+                    tab.surfaceH = nh;
+                    syncWorkerDesktopViewport(tab);
+                }
+            };
+            tab.surfaceLayoutListener = layoutListener;
+            tab.web.addOnLayoutChangeListener(layoutListener);
+
             try {
                 tab.web.onResume();
             } catch (Throwable ignored) {}
@@ -2768,6 +2812,7 @@ public final class ProxyWorkerRuntime {
             SurfaceHostApi30.relayout(tab.surfaceHost, w, h);
             tab.surfaceW = w;
             tab.surfaceH = h;
+            if (tab.web != null) tab.web.requestLayout();
             syncWorkerDesktopViewport(tab);
         } catch (Throwable t) {
             Log.w(TAG, "handleResizeSurface failed tab=" + tabId, t);
@@ -2805,6 +2850,16 @@ public final class ProxyWorkerRuntime {
         }
         tab.hostToken = null;
         tab.hostDeathRecipient = null;
+
+        if (tab.web != null && tab.surfaceLayoutListener != null) {
+            try {
+                tab.web.removeOnLayoutChangeListener(tab.surfaceLayoutListener);
+            } catch (Throwable ignored) {}
+        }
+        tab.surfaceLayoutListener = null;
+        tab.lastViewportSyncW = 0;
+        tab.lastViewportSyncH = 0;
+        tab.lastViewportSyncAttached = false;
 
         if (tab.surfaceContainer != null && tab.web != null && tab.web.getParent() == tab.surfaceContainer) {
             try {

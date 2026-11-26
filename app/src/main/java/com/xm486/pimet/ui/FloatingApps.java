@@ -2236,6 +2236,15 @@ public final class FloatingApps {
         if (t == null || t.closed || t.web == null) return;
         if (isTabOnOffscreenHost(t)) {
             offscreenHost().updateViewport(t.web, effectiveDesktop);
+            String u = t.url;
+            if (u != null && (u.startsWith("http://") || u.startsWith("https://"))) {
+                if (effectiveDesktop && !t.isIsolated()) {
+                    t.web.evaluateJavascript(
+                            AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0, false), null);
+                } else {
+                    t.web.evaluateJavascript(AntiDetectJs.buildClearViewportOverrideScript(), null);
+                }
+            }
             return;
         }
         if (!injectOnPage) return;
@@ -2247,14 +2256,11 @@ public final class FloatingApps {
             double cssW = wPx / Math.max(1f, density);
             double scale = cssW / ContainerEnv.DESKTOP_VIEWPORT_W;
             String js = t.isIsolated()
-                    ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale)
-                    : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale);
+                    ? AntiDetectJs.buildDesktopViewportMetaScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale, true)
+                    : AntiDetectJs.buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, scale, true);
             t.web.evaluateJavascript(js, null);
         } else {
-            t.web.evaluateJavascript(
-                    "(function(){try{window.__pimetDesktopVp=null;var m=document.getElementById('__pimet_desktop_vp');if(m&&m.parentNode)m.parentNode.removeChild(m);}catch(e){}})()",
-                    null
-            );
+            t.web.evaluateJavascript(AntiDetectJs.buildClearViewportOverrideScript(), null);
         }
     }
 

@@ -1208,79 +1208,188 @@ public final class AntiDetectJs {
     }
 
     /**
-     * 强制桌面视口 meta 注入脚本：供主进程前台可见标签（及 NATIVE 容器桌面模式）将页面布局宽度锁定为 targetWidth（如 1280）
+     * 强制桌面视口 meta 注入脚本：供前台可见标签（及 NATIVE 容器桌面模式）将页面布局宽度锁定为 targetWidth（如 1280）
      * 与缩放比 scale（如 cssW / 1280.0），防止响应式网站回退到手机排版。
      */
     public static String buildDesktopViewportMetaScript(int targetWidth, double scale) {
+        return buildDesktopViewportMetaScript(targetWidth, scale, false);
+    }
+
+    public static String buildDesktopViewportMetaScript(int targetWidth, double fallbackScale, boolean autoFitDip) {
         int w = targetWidth > 0 ? targetWidth : ContainerEnv.DESKTOP_VIEWPORT_W;
-        double s = (Double.isNaN(scale) || Double.isInfinite(scale) || scale <= 0)
+        double s = (Double.isNaN(fallbackScale) || Double.isInfinite(fallbackScale) || fallbackScale <= 0)
                 ? 1.0
-                : Math.max(0.1, Math.min(5.0, scale));
-        String content = "width=" + w + ", initial-scale=" + String.format(Locale.US, "%.4f", s);
-        String qContent = JSONObject.quote(content);
+                : Math.max(0.1, Math.min(5.0, fallbackScale));
+        return buildViewportControllerScript("desktop", w, s, 0.0, autoFitDip);
+    }
+
+    /** 前台预览手机模式自校准视口脚本：修复低 DPI 离屏 WebView 切入高 DPI 前台时的缩放错配并解锁双指缩放 */
+    public static String buildForegroundMobileViewportScript(double fallbackCssW) {
+        double cssW = (Double.isNaN(fallbackCssW) || Double.isInfinite(fallbackCssW) || fallbackCssW <= 0)
+                ? ContainerEnv.MOBILE_VIEWPORT_W
+                : Math.max(240.0, Math.min(2048.0, fallbackCssW));
+        return buildViewportControllerScript("mobile", ContainerEnv.MOBILE_VIEWPORT_W, 1.0, cssW, true);
+    }
+
+    /** 切回后台 OffscreenWebHost 时清理前台注入的视口覆盖标签，保持真实后台视口（390x844 / 1280x800） */
+    public static String buildClearViewportOverrideScript() {
+        return buildViewportControllerScript("off", ContainerEnv.DESKTOP_VIEWPORT_W, 1.0, 0.0, false);
+    }
+
+    private static String buildViewportControllerScript(
+            String mode,
+            int targetWidth,
+            double fallbackScale,
+            double fallbackCssW,
+            boolean autoFitDip
+    ) {
+        String qMode = JSONObject.quote(mode == null ? "off" : mode);
+        String fbScaleStr = String.format(Locale.US, "%.4f", fallbackScale);
+        String fbCssStr = String.format(Locale.US, "%.2f", fallbackCssW);
         return String.join("\n",
-                "(function(VP){",
+                "(function(MODE, TARGET_W, FB_SCALE, FB_CSS_W, AUTO_FIT){",
                 "  'use strict';",
                 "  try {",
                 "    var W = typeof window !== 'undefined' ? window : globalThis;",
                 "    var D = W.document;",
                 "    if (!D) return;",
-                "    W.__pimetDesktopVp = VP;",
+                "    var prevCfg = W.__pimetVpCfg;",
+                "    W.__pimetVpCfg = {",
+                "      mode: MODE,",
+                "      targetW: TARGET_W,",
+                "      fbScale: FB_SCALE,",
+                "      fbCssW: FB_CSS_W,",
+                "      autoFit: !!AUTO_FIT",
+                "    };",
+                "    function getDipW() {",
+                "      if (W.visualViewport && W.visualViewport.width > 0 && W.visualViewport.scale > 0) {",
+                "        var dw = W.visualViewport.width * W.visualViewport.scale;",
+                "        if (isFinite(dw) && dw >= 120 && dw <= 8192) return dw;",
+                "      }",
+                "      return 0;",
+                "    }",
+                "    function buildContent(cfg, oc) {",
+                "      if (!cfg || cfg.mode === 'off') return null;",
+                "      var keep = [];",
+                "      if (oc) {",
+                "        var parts = String(oc).split(',');",
+                "        for (var i = 0; i < parts.length; i++) {",
+                "          var x = parts[i].trim();",
+                "          if (!x) continue;",
+                "          var k = x.split('=')[0].trim().toLowerCase();",
+                "          if (k === 'viewport-fit' || k === 'interactive-widget') keep.push(x);",
+                "        }",
+                "      }",
+                "      var base = null;",
+                "      if (cfg.mode === 'desktop') {",
+                "        var s = cfg.fbScale;",
+                "        if (cfg.autoFit) {",
+                "          var dw = getDipW();",
+                "          if (dw > 0) s = dw / cfg.targetW;",
+                "        }",
+                "        if (!isFinite(s) || s <= 0) s = cfg.fbScale;",
+                "        s = Math.max(0.1, Math.min(5.0, Math.floor(s * 10000) / 10000));",
+                "        var minS = Math.min(0.1, s);",
+                "        base = 'width=' + cfg.targetW + ', initial-scale=' + s.toFixed(4)",
+                "          + ', minimum-scale=' + minS.toFixed(4) + ', maximum-scale=5.0000, user-scalable=yes';",
+                "      } else if (cfg.mode === 'mobile') {",
+                "        var dw2 = getDipW();",
+                "        var cssW = cfg.fbCssW > 0 ? cfg.fbCssW : 360;",
+                "        if (dw2 > 0 && dw2 > cssW * 1.35) {",
+                "          var targetCss = Math.max(320, Math.round(cssW));",
+                "          var ms2 = Math.max(1.0, Math.min(5.0, Math.floor((dw2 / targetCss) * 10000) / 10000));",
+                "          base = 'width=' + targetCss + ', initial-scale=' + ms2.toFixed(4)",
+                "            + ', minimum-scale=1.0000, maximum-scale=5.0000, user-scalable=yes';",
+                "        } else {",
+                "          var ocLow = oc ? String(oc).toLowerCase() : '';",
+                "          var noZoom = /\\buser-scalable\\s*=\\s*(no|0)\\b/.test(ocLow)",
+                "            || /\\bmaximum-scale\\s*=\\s*1(\\.0*)?(\\s|,|$)/.test(ocLow);",
+                "          if (!noZoom) return null;",
+                "          base = 'width=device-width, initial-scale=1.0000, minimum-scale=0.5000, maximum-scale=5.0000, user-scalable=yes';",
+                "        }",
+                "      }",
+                "      if (!base) return null;",
+                "      if (keep.length) base += ', ' + keep.join(', ');",
+                "      return base;",
+                "    }",
                 "    function applyVp(force) {",
                 "      var h = D.head || D.documentElement;",
                 "      if (!h) return false;",
+                "      var cfg = W.__pimetVpCfg;",
                 "      var mine = D.getElementById ? D.getElementById('__pimet_desktop_vp') : null;",
+                "      if (!cfg || cfg.mode === 'off') {",
+                "        W.__pimetDesktopVp = null;",
+                "        if (mine && mine.parentNode) mine.parentNode.removeChild(mine);",
+                "        return true;",
+                "      }",
                 "      var ms = h.querySelectorAll ? h.querySelectorAll('meta[name=\"viewport\"]') : [];",
                 "      var orig = null;",
                 "      for (var i = 0; i < ms.length; i++) { if (ms[i] !== mine) orig = ms[i]; }",
                 "      var oc = orig ? (orig.getAttribute('content') || '') : '';",
-                "      var C = W.__pimetDesktopVp || VP;",
-                "      if (oc) {",
-                "        var keep = oc.split(',').map(function(x) { return x.trim(); }).filter(function(x) {",
-                "          var k = x.split('=')[0].trim().toLowerCase();",
-                "          return k === 'viewport-fit' || k === 'interactive-widget';",
-                "        });",
-                "        if (keep.length) C = C + ', ' + keep.join(', ');",
+                "      var C = buildContent(cfg, oc);",
+                "      if (!C) {",
+                "        W.__pimetDesktopVp = null;",
+                "        if (mine && mine.parentNode) mine.parentNode.removeChild(mine);",
+                "        return true;",
                 "      }",
+                "      W.__pimetDesktopVp = C;",
                 "      if (!mine && D.createElement) {",
                 "        mine = D.createElement('meta');",
                 "        mine.id = '__pimet_desktop_vp';",
                 "        mine.setAttribute('name', 'viewport');",
                 "      }",
                 "      if (!mine) return false;",
-                "      if (mine.getAttribute('content') !== C) mine.setAttribute('content', C);",
-                "      if (!mine.parentNode || (ms.length && ms[ms.length - 1] !== mine) || force) {",
+                "      var alreadyLast = mine.parentNode === h && ms.length && ms[ms.length - 1] === mine;",
+                "      var sameContent = mine.getAttribute('content') === C;",
+                "      if (!sameContent) mine.setAttribute('content', C);",
+                "      if (!alreadyLast || force) {",
                 "        if (mine.parentNode) mine.parentNode.removeChild(mine);",
                 "        h.appendChild(mine);",
                 "      }",
                 "      return true;",
                 "    }",
-                "    if (!W.__pimetDesktopVpInstalled) {",
-                "      W.__pimetDesktopVpInstalled = true;",
-                "      var hookObserver = function() {",
-                "        var h = D.head;",
-                "        if (!h || h.__pimetDesktopVpObs || typeof MutationObserver === 'undefined') return;",
-                "        h.__pimetDesktopVpObs = true;",
-                "        var n = 0, t0 = Date.now();",
-                "        new MutationObserver(function(list) {",
-                "          var hit = false;",
-                "          for (var i = 0; i < list.length; i++) {",
-                "            var m = list[i];",
-                "            if (m.type === 'attributes') {",
-                "              if (m.target && m.target.id !== '__pimet_desktop_vp' && m.target.getAttribute && m.target.getAttribute('name') === 'viewport') hit = true;",
-                "            } else if (m.addedNodes) {",
-                "              for (var j = 0; j < m.addedNodes.length; j++) {",
-                "                var a = m.addedNodes[j];",
-                "                if (a && a.id !== '__pimet_desktop_vp' && a.nodeName === 'META' && a.getAttribute && a.getAttribute('name') === 'viewport') hit = true;",
-                "              }",
+                "    var hookObserver = function() {",
+                "      var h = D.head;",
+                "      if (!h || h.__pimetDesktopVpObs || typeof MutationObserver === 'undefined') return;",
+                "      h.__pimetDesktopVpObs = true;",
+                "      var n = 0, t0 = Date.now();",
+                "      new MutationObserver(function(list) {",
+                "        var cfg = W.__pimetVpCfg;",
+                "        if (!cfg || cfg.mode === 'off') return;",
+                "        var hit = false;",
+                "        for (var i = 0; i < list.length; i++) {",
+                "          var m = list[i];",
+                "          if (m.type === 'attributes') {",
+                "            if (m.target && m.target.id !== '__pimet_desktop_vp' && m.target.getAttribute && m.target.getAttribute('name') === 'viewport') hit = true;",
+                "          } else if (m.addedNodes) {",
+                "            for (var j = 0; j < m.addedNodes.length; j++) {",
+                "              var a = m.addedNodes[j];",
+                "              if (a && a.id !== '__pimet_desktop_vp' && a.nodeName === 'META' && a.getAttribute && a.getAttribute('name') === 'viewport') hit = true;",
                 "            }",
                 "          }",
-                "          if (!hit) return;",
-                "          var now = Date.now(); if (now - t0 > 1000) { t0 = now; n = 0; }",
-                "          if (++n > 20) return;",
+                "        }",
+                "        if (!hit) return;",
+                "        var now = Date.now(); if (now - t0 > 1000) { t0 = now; n = 0; }",
+                "        if (++n > 20) return;",
+                "        applyVp(true);",
+                "      }).observe(h, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] });",
+                "    };",
+                "    W.__pimetVpLastDip = Math.round(getDipW());",
+                "    if (!W.__pimetDesktopVpInstalled) {",
+                "      W.__pimetDesktopVpInstalled = true;",
+                "      var onResize = function() {",
+                "        var cfg = W.__pimetVpCfg;",
+                "        if (!cfg || cfg.mode === 'off' || !cfg.autoFit) return;",
+                "        var dk = Math.round(getDipW());",
+                "        if (dk > 0 && dk !== W.__pimetVpLastDip) {",
+                "          W.__pimetVpLastDip = dk;",
                 "          applyVp(true);",
-                "        }).observe(h, { childList: true, subtree: true, attributes: true, attributeFilter: ['content'] });",
+                "        }",
                 "      };",
+                "      if (W.addEventListener) W.addEventListener('resize', onResize, { passive: true });",
+                "      if (W.visualViewport && W.visualViewport.addEventListener) {",
+                "        W.visualViewport.addEventListener('resize', onResize, { passive: true });",
+                "      }",
                 "      if (!applyVp(false)) {",
                 "        if (D.addEventListener) {",
                 "          D.addEventListener('DOMContentLoaded', function() { applyVp(true); hookObserver(); }, { once: true });",
@@ -1289,22 +1398,28 @@ public final class AntiDetectJs {
                 "        hookObserver();",
                 "      }",
                 "    } else {",
-                "      applyVp(true);",
+                "      hookObserver();",
+                "      var modeChanged = !prevCfg || prevCfg.mode !== MODE || !!prevCfg.autoFit !== !!AUTO_FIT;",
+                "      applyVp(modeChanged);",
                 "    }",
                 "  } catch (e) {}",
-                "})(" + qContent + ");"
+                "})(" + qMode + ", " + targetWidth + ", " + fbScaleStr + ", " + fbCssStr + ", " + (autoFitDip ? "true" : "false") + ");"
         );
     }
 
     public static String buildNativeDesktopScript() {
-        return buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0);
+        return buildNativeDesktopScript(ContainerEnv.DESKTOP_VIEWPORT_W, 1.0, false);
+    }
+
+    public static String buildNativeDesktopScript(int targetWidth, double scale) {
+        return buildNativeDesktopScript(targetWidth, scale, false);
     }
 
     /** NATIVE 容器桌面模式视口与 screen/outerWidth 对齐脚本 */
-    public static String buildNativeDesktopScript(int targetWidth, double scale) {
+    public static String buildNativeDesktopScript(int targetWidth, double scale, boolean autoFitDip) {
         int w = targetWidth > 0 ? targetWidth : ContainerEnv.DESKTOP_VIEWPORT_W;
         int h = ContainerEnv.DESKTOP_VIEWPORT_H;
-        String vpScript = buildDesktopViewportMetaScript(w, scale);
+        String vpScript = buildDesktopViewportMetaScript(w, scale, autoFitDip);
         String alignScript = String.join("\n",
                 "(function(W_DEF, H_DEF){",
                 "  'use strict';",
