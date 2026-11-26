@@ -25,7 +25,7 @@ const TRACE_KEEP = 5;
 const MAX_SHOTS = 3;
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 /** 变更类动作：单步时默认只回 interactive 快照 */
-const MUTATING = new Set(["click", "tap", "type", "fill", "select", "press", "key", "scroll", "back", "forward", "reload", "hover", "scroll_into_view"]);
+const MUTATING = new Set(["click", "tap", "drag", "type", "native_type", "fill", "select", "press", "key", "scroll", "back", "forward", "reload", "hover", "scroll_into_view"]);
 /** 接受统一目标（@N / CSS / text=文字 / [x,y]）的动作 */
 const TARGETED = new Set(["click", "tap", "type", "fill", "select", "hover", "scroll_into_view", "scroll"]);
 /** beta.23 新动作名 → 旧宿主上的同义动作（旧宿主回「未知操作」时自动改用） */
@@ -201,6 +201,12 @@ function clientTimeout(action: string, p: Record<string, any>): number {
   let extra = 0;
   if (action === "wait") extra = Math.min(Number(p.ms) || 0, 60000);
   if (action === "wait_for") extra = Math.min(Number(p.timeout_ms) || 0, 30000);
+  if (action === "drag") extra = Math.min(4000, (Number(p.duration) || 1000) + (Number(p.hold_ms) || 100) + 1000);
+  if (action === "native_type") {
+    const txt = String(p.text ?? p.value ?? "");
+    const maxD = Math.min(Math.max(55, Number(p.max_delay_ms) || 145), 5000);
+    extra = Math.min(120000, txt.length * (maxD + 45) + 5000);
+  }
   if (SLOW.has(action)) extra = Math.max(extra, 90000);
   if (action === "batch") extra = Math.min(120000, (Array.isArray(p.steps) ? p.steps.length : 1) * 12000);
   return t + extra + 30000;
@@ -1309,9 +1315,21 @@ function makeB(st: RunState, tab?: string): any {
       }
     },
     /** 目标：@N / CSS 选择器 / text=文字 / [x,y]；其它字符串按包含的文字找 */
-    async click(target: any, opts: { js?: boolean; timeout?: number; settle?: boolean } = {}) {
+    async click(target: any, opts: { js?: boolean; timeout?: number; settle?: boolean; x?: number; y?: number } = {}) {
+      if (target && typeof target === "object" && !Array.isArray(target)) {
+        const j = await go("click", target);
+        return String(j.result ?? "");
+      }
       const j = await go("click", isRef(target) ? { target: tgt(target), ...opts } : { text: String(target), ...opts });
       return String(j.result ?? "");
+    },
+    /** 原生硬件级拟人贝塞尔拖拽（isTrusted: true） */
+    async drag(fromX: number, fromY: number, toX: number, toY: number, opts: { duration?: number; steps?: number; hold_ms?: number; settle?: boolean; snapshot?: boolean } = {}) {
+      return await go("drag", { from_x: fromX, from_y: fromY, to_x: toX, to_y: toY, ...opts });
+    },
+    /** 原生硬件级逐字按键 / IME 输入（isTrusted: true） */
+    async nativeType(text: string, opts: { clear?: boolean; min_delay_ms?: number; max_delay_ms?: number; submit?: boolean; settle?: boolean; snapshot?: boolean } = {}) {
+      return await go("native_type", { text: String(text ?? ""), ...opts });
     },
     async fill(target: any, text: string, opts: { submit?: boolean; clear?: boolean; timeout?: number; settle?: boolean } = {}) {
       const j = await go("fill", { target: tgt(target), text: String(text ?? ""), ...opts });
@@ -1841,8 +1859,8 @@ export default function (pi: ExtensionAPI) {
       "查网页/GitHub 先 action=tools 复用站点工具；连续填表用 batch（中间步设 settle:false）或 b.fillForm；" +
       "单步探索先 tab_new(url, container:\"new\") 拿 tab id，再用 snapshot(scope:\"viewport\") 看当前屏。ref 失效（unknown_ref）就重新 snapshot。\n" +
       "【目标 target】@N（快照 ref）| CSS 选择器（跨层用 >>>）| text=文字 | [x,y] 坐标。\n" +
-      "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
-      "【单步】tools | read | open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
+      "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / drag / nativeType / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
+      "【单步】tools | read | open | snapshot(scope=full|viewport) | click | drag | native_type | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
       "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（多进程并行代理架构：主进程固定直连 t1 永不冻结，最多 6 个独立代理子进程并行，frozenTabs: 0，后台保持真实 390x844 / 桌面 1280x800 视口；需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
       "【油猴与定制】scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject；" +
       "ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panel_* | action_run | site_* | rule_* | rules（定制细节按需读 customize.md）。\n" +
@@ -1850,7 +1868,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       action: Type.String({
         description:
-          "run | batch | tools | read | open | snapshot | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
+          "run | batch | tools | read | open | snapshot | click | drag | native_type | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | home | wait | eval | screenshot | show | hide | close | reload_ui | status | downloads" +
           " | tab_new | tabs | tab_switch | tab_close | create_container | containers | container_keep | container_profile | set_container_profile | history | history_delete | history_clear" +
           " | scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject" +
           " | config_get | config_set | ua | desktop | zoom | cookies | clear_data" +
@@ -1931,6 +1949,17 @@ export default function (pi: ExtensionAPI) {
       script: Type.Optional(Type.String({ description: "eval 执行的 JS：表达式或带 return 的语句体，可用 await；inject 要注入当前页的 JS" })),
       ms: Type.Optional(Type.Number({ description: "wait 的毫秒数" })),
       js: Type.Optional(Type.Boolean({ description: "click 时用 JS 点击而不是模拟真实触摸（被遮挡或真实点击无效时用）" })),
+      x: Type.Optional(Type.Number({ description: "click 坐标模式：CSS 视口 X 坐标（配合 y 使用）" })),
+      y: Type.Optional(Type.Number({ description: "click 坐标模式：CSS 视口 Y 坐标（配合 x 使用）" })),
+      from_x: Type.Optional(Type.Number({ description: "drag：起点 CSS 视口 X 坐标" })),
+      from_y: Type.Optional(Type.Number({ description: "drag：起点 CSS 视口 Y 坐标" })),
+      to_x: Type.Optional(Type.Number({ description: "drag：终点 CSS 视口 X 坐标" })),
+      to_y: Type.Optional(Type.Number({ description: "drag：终点 CSS 视口 Y 坐标" })),
+      duration: Type.Optional(Type.Number({ description: "drag：总拖拽时长 ms（150..2500）" })),
+      steps: Type.Optional(Type.Number({ description: "drag：插值步数" })),
+      hold_ms: Type.Optional(Type.Number({ description: "drag：按下后起拖前停顿 ms（默认 55..95 随机）" })),
+      min_delay_ms: Type.Optional(Type.Number({ description: "native_type：单字最小间隔 ms（默认 55）" })),
+      max_delay_ms: Type.Optional(Type.Number({ description: "native_type：单字最大间隔 ms（默认 145）" })),
       mode: Type.Optional(Type.String({ description: "旧快照模式：interactive = 只列可交互元素（单步变更操作后附带的快照默认用它）" })),
       snapshot: Type.Optional(Type.Boolean({ description: "单步操作后是否返回快照，默认 true" })),
       settle: Type.Optional(Type.Boolean({ description: "操作后是否等待页面稳定，默认 true；连续填表/高速连点可设 false 提速" })),

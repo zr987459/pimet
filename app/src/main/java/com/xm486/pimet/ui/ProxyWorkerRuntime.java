@@ -673,9 +673,11 @@ public final class ProxyWorkerRuntime {
         long extra = "wait".equals(action) && req.optString("text", "").isEmpty()
                 ? clamp(req.optInt("ms", 1000), 0, 60000)
                 : ("wait_for".equals(action) ? clamp(req.optInt("timeout_ms", 10000), 0, 30000)
+                : ("drag".equals(action) ? clamp(req.optInt("duration", 1000), 150, 2500) + clamp(req.optInt("hold_ms", 100), 0, 1000) + 1000L
+                : ("native_type".equals(action) ? estimateNativeTypeExtraMs(req)
                 : ("batch".equals(action)
                 ? Math.min(120000L, Math.max(1, req.optJSONArray("steps") == null ? 1 : req.optJSONArray("steps").length()) * 12000L)
-                : 0L));
+                : 0L))));
         Req r = new Req(reqId, timeout, extra);
         r.tabSpec = req.optString("tab", "");
         if (preCancelled.remove(reqId) != null) r.cancelled = true;
@@ -1402,7 +1404,41 @@ public final class ProxyWorkerRuntime {
             case "tap": {
                 int seq = tab.navSeq;
                 String before = tab.url;
-                result = click(tab, req);
+                result = click(tab, req, out);
+                if (wantSettle) settle(tab, seq, out);
+                markChanged(out, tab, seq, before);
+                break;
+            }
+            case "drag": {
+                int seq = tab.navSeq;
+                String before = tab.url;
+                NativeInputHelper.DragResult dr = NativeInputHelper.drag(hostBridge(tab), tab.web, req);
+                out.put("ok", true)
+                        .put("action", "drag")
+                        .put("trusted", true)
+                        .put("from", new JSONArray().put(dr.fromX).put(dr.fromY))
+                        .put("to", new JSONArray().put(dr.toX).put(dr.toY))
+                        .put("steps", dr.steps)
+                        .put("duration_ms", dr.durationMs);
+                result = "已原生拖拽 [" + fmtCoord(dr.fromX) + ", " + fmtCoord(dr.fromY) + "] → ["
+                        + fmtCoord(dr.toX) + ", " + fmtCoord(dr.toY) + "]（" + dr.steps + " 步，" + dr.durationMs + "ms）";
+                if (wantSettle) settle(tab, seq, out);
+                markChanged(out, tab, seq, before);
+                break;
+            }
+            case "native_type": {
+                int seq = tab.navSeq;
+                String before = tab.url;
+                NativeInputHelper.TypeResult tr = NativeInputHelper.nativeType(hostBridge(tab), tab.web, req);
+                out.put("ok", true)
+                        .put("action", "native_type")
+                        .put("trusted", true)
+                        .put("typed", tr.typed)
+                        .put("key_events", tr.keyEvents)
+                        .put("ime_commits", tr.imeCommits)
+                        .put("duration_ms", tr.durationMs);
+                result = "已原生逐字输入 " + tr.typed + " 字符（key_events=" + tr.keyEvents
+                        + ", ime_commits=" + tr.imeCommits + ", " + tr.durationMs + "ms）";
                 if (wantSettle) settle(tab, seq, out);
                 markChanged(out, tab, seq, before);
                 break;
@@ -3261,9 +3297,86 @@ public final class ProxyWorkerRuntime {
         return r;
     }
 
-    private String click(WorkerTab tab, JSONObject req) throws Exception {
+    private static long estimateNativeTypeExtraMs(JSONObject req) {
+        String text = req.has("text") ? req.optString("text", "") : req.optString("value", "");
+        int maxDelay = clamp(req.optInt("max_delay_ms", 145), 0, 5000);
+        long est = (long) text.length() * (Math.max(55, maxDelay) + 45L) + 5000L;
+        return Math.min(120000L, Math.max(0L, est));
+    }
+
+    private static String fmtCoord(double v) {
+        if (Math.abs(v - Math.rint(v)) < 1e-6) return String.valueOf((long) Math.rint(v));
+        return String.format(Locale.ROOT, "%.1f", v);
+    }
+
+    private NativeInputHelper.HostBridge hostBridge(WorkerTab tab) {
+        return new NativeInputHelper.HostBridge() {
+            @Override
+            public <T> T onMain(java.util.concurrent.Callable<T> task, long timeoutMs) throws Exception {
+                return ProxyWorkerRuntime.this.onMain(task::call, timeoutMs);
+            }
+
+            @Override
+            public void sleep(long ms) throws Exception {
+                sleepAbortable(ms);
+            }
+
+            @Override
+            public void checkBeforeStep() throws Exception {
+                checkStop();
+            }
+
+            @Override
+            public boolean isWebViewReady(WebView w) {
+                return w != null && !tab.closed && tab.web == w
+                        && (tab.surfaceAttached || !offscreenHost.isOverlayFallback())
+                        && w.isAttachedToWindow();
+            }
+
+            @Override
+            public void setAgentDispatching(boolean dispatching) {
+                // 子进程无主进程 userInputAt 取舍，surface 仅发 focus 通知
+            }
+
+            @Override
+            public String evalRawSafe(String js, long timeoutMs) {
+                return ProxyWorkerRuntime.this.evalRawSafe(tab, js, timeoutMs);
+            }
+
+            @Override
+            public boolean isDesktop() {
+                return effectiveDesktopOf(tab);
+            }
+        };
+    }
+
+    private String click(WorkerTab tab, JSONObject req, JSONObject out) throws Exception {
+        double[] directCoords = NativeInputHelper.parseClickCoords(req);
+        if (directCoords != null) {
+            boolean useJs = req.optBoolean("js", false);
+            boolean nativeOk = false;
+            if (!useJs && (tab.surfaceAttached || !offscreenHost.isOverlayFallback())) {
+                double vw = NativeInputHelper.queryViewportWidth(hostBridge(tab), tab.web);
+                nativeOk = Boolean.TRUE.equals(onMain(() -> nativeTap(tab, directCoords[0], directCoords[1], vw), 4000L));
+            }
+            if (!nativeOk) {
+                String coordStr = "[" + directCoords[0] + "," + directCoords[1] + "]";
+                JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(coordStr) + ",\"\")", 5000L);
+                if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
+                JSONObject jr = evalAgent(tab, "A.jsClick()", 5000L);
+                if (jr.has("ok") && !jr.optBoolean("ok")) {
+                    throw new IllegalStateException(jr.optString("error", "JS 点击失败"));
+                }
+            }
+            if (out != null) {
+                try { out.put("trusted", nativeOk); } catch (Throwable ignored) {}
+            }
+            return "已点击坐标 [" + fmtCoord(directCoords[0]) + ", " + fmtCoord(directCoords[1]) + "]"
+                    + (nativeOk ? "" : (useJs ? "（JS 点击）" : "（用 JS 点击）"));
+        }
+
         String tgt = targetOf(req);
-        if (tgt.isEmpty()) throw new IllegalArgumentException("click 需要 target / ref / text");
+        if (tgt.isEmpty()) throw new IllegalArgumentException("click 需要 target / ref / text 或 x/y");
         JSONObject loc = evalAgent(tab, "A.locate(" + JSONObject.quote(tgt) + ",\"\")", 5000L);
         if (!loc.optBoolean("ok")) throw new IllegalStateException(agentErr(loc, "定位失败"));
         String labelStr = loc.optString("label");
@@ -3317,6 +3430,9 @@ public final class ProxyWorkerRuntime {
                 throw new IllegalStateException(jr.optString("error", "JS 点击失败"));
             }
         }
+        if (out != null) {
+            try { out.put("trusted", nativeOk); } catch (Throwable ignored) {}
+        }
         return "已点击 " + tgt + (labelStr.isEmpty() ? "" : "（" + labelStr + "）")
                 + (!nativeOk && !useJs && note.isEmpty() ? "（用 JS 点击）" : "") + note;
     }
@@ -3324,25 +3440,7 @@ public final class ProxyWorkerRuntime {
     private boolean nativeTap(WorkerTab tab, double cssX, double cssY, double vw) {
         WebView w = tab.web;
         if (w == null || tab.closed || (!tab.surfaceAttached && offscreenHost.isOverlayFallback()) || !w.isAttachedToWindow()) return false;
-        if (w.getWidth() <= 0 || w.getHeight() <= 0 || !(vw > 0)) return false;
-        if (Double.isNaN(cssX) || Double.isNaN(cssY)) return false;
-        float ratio = (float) (w.getWidth() / vw);
-        float x = (float) (cssX * ratio), y = (float) (cssY * ratio);
-        if (x < 0 || y < 0 || x > w.getWidth() || y > w.getHeight()) return false;
-        long down = SystemClock.uptimeMillis();
-        MotionEvent d = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, x, y, 0);
-        MotionEvent u = MotionEvent.obtain(down, down + 60, MotionEvent.ACTION_UP, x, y, 0);
-        d.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        u.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        boolean a, b;
-        try {
-            a = w.dispatchTouchEvent(d);
-            b = w.dispatchTouchEvent(u);
-        } finally {
-            d.recycle();
-            u.recycle();
-        }
-        return a || b;
+        return NativeInputHelper.nativeTapOnMain(w, cssX, cssY, vw);
     }
 
     private void pressKey(WorkerTab tab, String key, int code) throws Exception {
@@ -3419,10 +3517,39 @@ public final class ProxyWorkerRuntime {
                 switch (act) {
                     case "click":
                     case "tap":
-                        sr.put("result", click(tab, st));
+                        sr.put("result", click(tab, st, sr));
                         if (stepSettle) settle(tab, seq, sr);
                         markChanged(sr, tab, seq, before);
                         break;
+                    case "drag": {
+                        NativeInputHelper.DragResult dr = NativeInputHelper.drag(hostBridge(tab), tab.web, st);
+                        sr.put("trusted", true)
+                                .put("from", new JSONArray().put(dr.fromX).put(dr.fromY))
+                                .put("to", new JSONArray().put(dr.toX).put(dr.toY))
+                                .put("steps", dr.steps)
+                                .put("duration_ms", dr.durationMs)
+                                .put("result", "已原生拖拽 [" + fmtCoord(dr.fromX) + ", " + fmtCoord(dr.fromY) + "] → ["
+                                        + fmtCoord(dr.toX) + ", " + fmtCoord(dr.toY) + "]（" + dr.steps + " 步，" + dr.durationMs + "ms）");
+                        if (stepSettle) settle(tab, seq, sr);
+                        markChanged(sr, tab, seq, before);
+                        break;
+                    }
+                    case "native_type": {
+                        NativeInputHelper.TypeResult tr = NativeInputHelper.nativeType(hostBridge(tab), tab.web, st);
+                        sr.put("trusted", true)
+                                .put("typed", tr.typed)
+                                .put("key_events", tr.keyEvents)
+                                .put("ime_commits", tr.imeCommits)
+                                .put("duration_ms", tr.durationMs)
+                                .put("result", "已原生逐字输入 " + tr.typed + " 字符（key_events=" + tr.keyEvents
+                                        + ", ime_commits=" + tr.imeCommits + ", " + tr.durationMs + "ms）");
+                        if (stepSettle) {
+                            if (!st.has("settle") && !isLast && !st.optBoolean("submit", false)) settleLight(tab, seq, sr);
+                            else settle(tab, seq, sr);
+                        }
+                        markChanged(sr, tab, seq, before);
+                        break;
+                    }
                     case "type":
                     case "fill":
                         sr.put("result", type(tab, st));
