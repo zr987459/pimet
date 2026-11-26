@@ -8,6 +8,7 @@ import android.content.MutableContextWrapper;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
 import android.os.Build;
@@ -2836,6 +2837,74 @@ public final class ProxyWorkerRuntime {
         if (tab != null) {
             detachSurfaceInternal(tab, expectedSeq);
         }
+    }
+
+    public void handleDispatchTouch(Bundle b) {
+        if (b == null) return;
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            if (!main.post(() -> handleDispatchTouchOnMain(b))) {
+                try {
+                    b.setClassLoader(MotionEvent.class.getClassLoader());
+                    MotionEvent ev = b.getParcelable(ProxyWorkerBridge.KEY_MOTION_EVENT);
+                    if (ev != null) ev.recycle();
+                } catch (Throwable ignored) {}
+            }
+        } else {
+            handleDispatchTouchOnMain(b);
+        }
+    }
+
+    private void handleDispatchTouchOnMain(Bundle b) {
+        if (b == null || closed.get()) return;
+        MotionEvent ev = null;
+        try {
+            b.setClassLoader(MotionEvent.class.getClassLoader());
+            ev = b.getParcelable(ProxyWorkerBridge.KEY_MOTION_EVENT);
+            if (ev == null) return;
+
+            String tabId = b.getString(ProxyWorkerBridge.KEY_TAB_ID, "");
+            long attachSeq = b.getLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, 0L);
+            int hostW = b.getInt(ProxyWorkerBridge.KEY_WIDTH, 0);
+            int hostH = b.getInt(ProxyWorkerBridge.KEY_HEIGHT, 0);
+
+            WorkerTab tab = !tabId.isEmpty() ? findExactTab(tabId) : findAttachedSurfaceTab();
+            if (tab == null || tab.closed || tab.web == null || !tab.surfaceAttached) {
+                return;
+            }
+            if (attachSeq > 0L && tab.surfaceAttachSeq != attachSeq) {
+                return;
+            }
+
+            int webW = tab.web.getWidth() > 0 ? tab.web.getWidth() : tab.surfaceW;
+            int webH = tab.web.getHeight() > 0 ? tab.web.getHeight() : tab.surfaceH;
+            if (hostW > 0 && hostH > 0 && webW > 0 && webH > 0 && (hostW != webW || hostH != webH)) {
+                Matrix m = new Matrix();
+                m.setScale((float) webW / (float) hostW, (float) webH / (float) hostH);
+                ev.transform(m);
+            }
+
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && !tab.web.hasFocus()) {
+                tab.web.requestFocus();
+            }
+            tab.web.dispatchTouchEvent(ev);
+        } catch (Throwable t) {
+            Log.w(TAG, "handleDispatchTouchOnMain failed", t);
+        } finally {
+            if (ev != null) {
+                try {
+                    ev.recycle();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private WorkerTab findAttachedSurfaceTab() {
+        synchronized (tabTableLock) {
+            for (WorkerTab t : tabs.values()) {
+                if (!t.closed && t.surfaceAttached) return t;
+            }
+        }
+        return null;
     }
 
     private void detachSurfaceInternal(WorkerTab tab, long expectedSeq) {

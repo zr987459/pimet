@@ -12,7 +12,9 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.SurfaceControlViewHost;
 
 import androidx.annotation.RequiresApi;
@@ -156,6 +158,7 @@ public final class ProxyWorkerPool {
         return t;
     });
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private volatile long lastTouchForwardWarnMs = 0L;
 
     public ProxyWorkerPool(Context ctx, File appsDir, ContainerManager containerManager) {
         if (ctx == null) throw new IllegalArgumentException("ctx == null");
@@ -927,6 +930,43 @@ public final class ProxyWorkerPool {
             m.send(msg);
         } catch (Throwable t) {
             Log.w(TAG, "sendDetachSurface failed slot=#" + slot.slot + " tab=" + tabId, t);
+        }
+    }
+
+    public boolean sendDispatchTouch(String tabId, long attachSeq, MotionEvent ev, int hostWidth, int hostHeight) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || shuttingDown.get()) return false;
+        if (tabId == null || tabId.isEmpty() || attachSeq <= 0L || ev == null) return false;
+        WorkerSlot slot = tabIndex.get(tabId);
+        if (slot == null || !slot.isReady()) return false;
+        Messenger m = slot.messenger;
+        if (m == null) return false;
+
+        MotionEvent copy = null;
+        try {
+            copy = MotionEvent.obtain(ev);
+            Message msg = Message.obtain(null, ProxyWorkerBridge.MSG_DISPATCH_TOUCH);
+            Bundle b = new Bundle();
+            b.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId);
+            b.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+            b.putInt(ProxyWorkerBridge.KEY_WIDTH, hostWidth);
+            b.putInt(ProxyWorkerBridge.KEY_HEIGHT, hostHeight);
+            b.putParcelable(ProxyWorkerBridge.KEY_MOTION_EVENT, copy);
+            msg.setData(b);
+            m.send(msg);
+            return true;
+        } catch (Throwable t) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastTouchForwardWarnMs >= 2000L) {
+                lastTouchForwardWarnMs = now;
+                Log.w(TAG, "sendDispatchTouch failed slot=#" + slot.slot + " tab=" + tabId, t);
+            }
+            return false;
+        } finally {
+            if (copy != null) {
+                try {
+                    copy.recycle();
+                } catch (Throwable ignored) {}
+            }
         }
     }
 

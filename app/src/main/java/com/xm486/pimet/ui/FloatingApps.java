@@ -3932,6 +3932,7 @@ public final class FloatingApps {
         return (switcher != null && switcher.getVisibility() == View.VISIBLE)
                 || panelOpen()
                 || customView != null
+                || (ballMenu != null && ballMenu.getVisibility() == View.VISIBLE)
                 || minimized
                 || host == null;
     }
@@ -4013,9 +4014,39 @@ public final class FloatingApps {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             remoteSurfaceView = new SurfaceView(vctx);
-            remoteSurfaceView.setZOrderOnTop(false);
+            // 第一层保险：置于宿主窗口之上，使标准 Android 11-15 InputDispatcher 直接把触摸投递给子进程 SurfaceControlViewHost
+            remoteSurfaceView.setZOrderOnTop(true);
             remoteSurfaceView.setFocusable(true);
             remoteSurfaceView.setFocusableInTouchMode(true);
+            // 第二层保险：仅当某些国产 ROM 仍将触摸路由给宿主 SurfaceView 时触发，与第一层 100% 互斥、零双触发
+            remoteSurfaceView.setOnTouchListener((v, ev) -> {
+                if (ev == null) return false;
+                final String tid = activeRemoteTabId;
+                final long seq = activeRemoteAttachSeq;
+                final ProxyWorkerPool pool = workerPool;
+                if (tid == null || pool == null || !remoteSurfaceReady || remoteFallbackActive
+                        || seq <= 0L || isRemoteSurfaceObscured()) {
+                    return false;
+                }
+                if (ev.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
+                    return false;
+                }
+                if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    if (urlField != null && urlField.hasFocus()) {
+                        hideIme();
+                    }
+                    if (!v.hasFocus()) {
+                        v.requestFocus();
+                    }
+                    Activity h = host;
+                    if (h != null && h.getWindow() != null) {
+                        try {
+                            h.getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                return pool.sendDispatchTouch(tid, seq, ev, v.getWidth(), v.getHeight());
+            });
             remoteSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
                 @Override
                 public void surfaceCreated(SurfaceHolder holder) {
@@ -9418,6 +9449,7 @@ public final class FloatingApps {
         boolean wasOpen = ballMenu.getVisibility() == View.VISIBLE;
         ballMenu.setVisibility(View.GONE);
         if (!wasOpen) return;
+        resumeRemoteSurfaceIfNeeded();
         final float fromX = ballWrap.getX();
         afterBallLayout(() -> slideBallFrom(fromX));
     }
@@ -9453,6 +9485,11 @@ public final class FloatingApps {
         if (open) refreshBall();
         ballMenu.setVisibility(open ? View.VISIBLE : View.GONE);
         ballWrap.bringToFront();
+        if (open) {
+            suspendRemoteSurfaceForOverlay();
+        } else {
+            resumeRemoteSurfaceIfNeeded();
+        }
         final float fromX = ballWrap.getX();
         afterBallLayout(() -> slideBallFrom(fromX));
     }

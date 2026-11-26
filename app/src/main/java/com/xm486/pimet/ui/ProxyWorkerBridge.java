@@ -22,6 +22,8 @@ public final class ProxyWorkerBridge {
     public static final int MSG_RESIZE_SURFACE = 6;
     /** 主进程 → 子进程：解除 SurfaceControlViewHost 嵌入并回挂 OffscreenWebHost */
     public static final int MSG_DETACH_SURFACE = 7;
+    /** 主进程 → 子进程：兜底转发宿主 SurfaceView 收到的触摸事件（仅当原生输入路由未直达子进程时触发） */
+    public static final int MSG_DISPATCH_TOUCH = 8;
 
     // ---- MSG_INIT Bundle Keys
     public static final String KEY_SLOT = "slot";
@@ -52,6 +54,7 @@ public final class ProxyWorkerBridge {
     public static final String KEY_WIDTH = "width";
     public static final String KEY_HEIGHT = "height";
     public static final String KEY_SURFACE_PACKAGE = "surfacePackage";
+    public static final String KEY_MOTION_EVENT = "motionEvent";
 
     // ---- 实时状态同步 Bundle Keys
     public static final String KEY_URL = "url";

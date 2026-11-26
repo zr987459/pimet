@@ -10,6 +10,7 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
 import android.util.Log;
+import android.view.MotionEvent;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -224,6 +225,20 @@ public abstract class ProxyWorkerService extends Service {
         }
     }
 
+    private void handleDispatchTouchMsg(Message msg) {
+        Bundle data = msg.getData();
+        ProxyWorkerRuntime rt = runtime;
+        if (rt != null && !shuttingDown) {
+            rt.handleDispatchTouch(data);
+        } else if (data != null) {
+            try {
+                data.setClassLoader(MotionEvent.class.getClassLoader());
+                MotionEvent ev = data.getParcelable(ProxyWorkerBridge.KEY_MOTION_EVENT);
+                if (ev != null) ev.recycle();
+            } catch (Throwable ignored) {}
+        }
+    }
+
     private static void sendAttachSurfaceErrorAck(Messenger replyTo, Bundle req, String error) {
         if (replyTo == null) return;
         Message ack = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK);
@@ -295,6 +310,9 @@ public abstract class ProxyWorkerService extends Service {
                     break;
                 case ProxyWorkerBridge.MSG_DETACH_SURFACE:
                     handleDetachSurfaceMsg(msg);
+                    break;
+                case ProxyWorkerBridge.MSG_DISPATCH_TOUCH:
+                    handleDispatchTouchMsg(msg);
                     break;
                 default:
                     super.handleMessage(msg);
