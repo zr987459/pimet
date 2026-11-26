@@ -433,6 +433,7 @@ public final class BrowserAgent {
                 if (remoteTarget != null) {
                     ProxyWorkerPool.WorkerSlot slot = pool.slotForTab(remoteTarget);
                     if (slot == null) return err("没有标签 " + remoteTarget);
+                    final String cid = slot.boundContainerId;
                     ReentrantLock rlk = remoteLockOf(remoteTarget);
                     acquireRemote(rlk, remoteTarget);
                     try {
@@ -443,6 +444,16 @@ public final class BrowserAgent {
                         JSONObject resp = pool.callRpc(slot, rpcReq, CUR.get().id, Math.max(5000L, hardLeft()));
                         pool.unregisterRemoteTab(remoteTarget);
                         REMOTE_LOCKS.remove(remoteTarget);
+                        if (cid != null && !cid.isEmpty() && !ContainerManager.DEFAULT.equals(cid)) {
+                            Integer localCntObj = onMain(() -> win.mainTabCountForContainer(cid), 2000);
+                            int localCnt = localCntObj != null ? localCntObj : 0;
+                            int remoteCnt = pool.remoteTabCountForContainer(cid);
+                            if (localCnt == 0 && remoteCnt == 0) {
+                                MAIN.post(() -> {
+                                    try { win.containers().release(cid); } catch (Throwable ignored) {}
+                                });
+                            }
+                        }
                         if (remoteTarget.equals(win.activeRemoteTabId())) {
                             MAIN.post(win::exitRemoteMirror);
                         } else {
@@ -2137,6 +2148,11 @@ public final class BrowserAgent {
 
     private static void putProxyStatus(FloatingApps win, JSONObject out, boolean proxySwitched) {
         try {
+            if (!out.has("lastProxyError")) {
+                JSONObject prevAp = out.optJSONObject("activeProxy");
+                String prevErr = prevAp != null ? prevAp.optString("lastProxyError", "") : "";
+                if (!prevErr.isEmpty()) out.put("lastProxyError", prevErr);
+            }
             JSONObject st = onMain(win::proxyStatusJson, 3000);
             if (st != null) {
                 out.put("proxySupported", st.optBoolean("proxySupported", false));

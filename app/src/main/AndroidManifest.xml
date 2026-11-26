@@ -78,7 +78,7 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Pi 浏览器独立代理子进程槽位 1..4 -->
+        <!-- Pi 浏览器独立代理子进程槽位 1..6 -->
         <service
             android:name=".ui.ProxyWorkerService1"
             android:exported="false"
@@ -95,6 +95,14 @@
             android:name=".ui.ProxyWorkerService4"
             android:exported="false"
             android:process=":proxy_worker_4" />
+        <service
+            android:name=".ui.ProxyWorkerService5"
+            android:exported="false"
+            android:process=":proxy_worker_5" />
+        <service
+            android:name=".ui.ProxyWorkerService6"
+            android:exported="false"
+            android:process=":proxy_worker_6" />
 
         <!-- Pi 浏览器：独立全屏窗口（单独任务，可分屏/小窗；标签由 FloatingApps 单例持有） -->
         <activity

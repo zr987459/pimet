@@ -201,9 +201,15 @@ public final class ContainerEnv {
         public final String username;
         public final String password;
         public final ProxyEndpoint upstream;
+        public final boolean socks5RemoteDns;
 
         public ProxySpec(boolean enabled, String type, String host, int port,
                          String username, String password, ProxyEndpoint upstream) {
+            this(enabled, type, host, port, username, password, upstream, true);
+        }
+
+        public ProxySpec(boolean enabled, String type, String host, int port,
+                         String username, String password, ProxyEndpoint upstream, boolean socks5RemoteDns) {
             this.enabled = enabled;
             this.type = normalizeProxyType(type);
             this.host = host == null ? "" : host.trim();
@@ -211,6 +217,7 @@ public final class ContainerEnv {
             this.username = username == null ? "" : username;
             this.password = password == null ? "" : password;
             this.upstream = upstream;
+            this.socks5RemoteDns = socks5RemoteDns;
         }
 
         public boolean hasAuth() {
@@ -228,7 +235,8 @@ public final class ContainerEnv {
         public String signature() {
             if (!isActive()) return "DIRECT";
             String canonical = type + "|" + host.toLowerCase(Locale.ROOT) + "|" + port + "|"
-                    + credentialHash() + "|" + (upstream != null ? upstream.canonicalString() : "");
+                    + credentialHash() + "|" + (upstream != null ? upstream.canonicalString() : "")
+                    + "|rdns=" + socks5RemoteDns;
             return "PROXY:" + sha256Hex(canonical);
         }
 
@@ -249,6 +257,7 @@ public final class ContainerEnv {
                 o.put("host", host);
                 o.put("port", port);
                 o.put("hasAuth", hasAuth());
+                o.put("socks5RemoteDns", socks5RemoteDns);
                 o.put("summary", summary());
                 o.put("signature", signature());
                 if (upstream != null) {
@@ -265,6 +274,7 @@ public final class ContainerEnv {
                 o.put("type", type);
                 o.put("host", host);
                 o.put("port", port);
+                o.put("socks5RemoteDns", socks5RemoteDns);
                 if (!username.isEmpty()) o.put("username", username);
                 if (!password.isEmpty()) o.put("password", password);
                 if (upstream != null) {
@@ -574,7 +584,22 @@ public final class ContainerEnv {
         return new String(out, 0, o, StandardCharsets.UTF_8);
     }
 
+    private static final class ParsedProxyUrl {
+        final ProxyEndpoint endpoint;
+        final boolean socks5RemoteDns;
+
+        ParsedProxyUrl(ProxyEndpoint endpoint, boolean socks5RemoteDns) {
+            this.endpoint = endpoint;
+            this.socks5RemoteDns = socks5RemoteDns;
+        }
+    }
+
     private static ProxyEndpoint parseProxyString(String raw) {
+        ParsedProxyUrl parsed = parseProxyStringWithOptions(raw);
+        return parsed != null ? parsed.endpoint : null;
+    }
+
+    private static ParsedProxyUrl parseProxyStringWithOptions(String raw) {
         String s = raw == null ? "" : raw.trim();
         if (s.isEmpty() || "direct".equalsIgnoreCase(s) || "none".equalsIgnoreCase(s)) return null;
         String safeRaw = sanitizeProxyInput(s);
@@ -600,6 +625,22 @@ public final class ContainerEnv {
                 pass = percentDecodeLenient(userInfo.substring(colonIdx + 1));
             } else {
                 user = percentDecodeLenient(userInfo);
+            }
+        }
+        boolean socks5RemoteDns = true;
+        int qIdx = hostPort.indexOf('?');
+        if (qIdx >= 0) {
+            String query = hostPort.substring(qIdx + 1);
+            hostPort = hostPort.substring(0, qIdx);
+            for (String param : query.split("&")) {
+                if (param.isEmpty()) continue;
+                int eq = param.indexOf('=');
+                if (eq <= 0) continue;
+                String k = param.substring(0, eq).trim().toLowerCase(Locale.ROOT);
+                String v = param.substring(eq + 1).trim();
+                if ("socks5remotedns".equals(k) || "remotedns".equals(k) || "rdns".equals(k)) {
+                    socks5RemoteDns = parseBooleanOption(v, true);
+                }
             }
         }
         while (hostPort.endsWith("/")) {
@@ -635,7 +676,17 @@ public final class ContainerEnv {
             port = parseProxyPort(hostPort.substring(lastColon + 1).trim(), safeRaw);
         }
         validateProxyHost(host, safeRaw);
-        return new ProxyEndpoint(type, host, port, user, pass);
+        return new ParsedProxyUrl(new ProxyEndpoint(type, host, port, user, pass), socks5RemoteDns);
+    }
+
+    private static boolean parseBooleanOption(Object val, boolean def) {
+        if (val == null || val == JSONObject.NULL) return def;
+        if (val instanceof Boolean) return ((Boolean) val).booleanValue();
+        if (val instanceof Number) return ((Number) val).intValue() != 0;
+        String s = String.valueOf(val).trim().toLowerCase(Locale.ROOT);
+        if ("false".equals(s) || "0".equals(s) || "no".equals(s)) return false;
+        if ("true".equals(s) || "1".equals(s) || "yes".equals(s)) return true;
+        return def;
     }
 
     private static int parseProxyPort(String s, String safeRaw) {
@@ -690,9 +741,10 @@ public final class ContainerEnv {
     public static ProxySpec parseProxySpec(Object spec) {
         if (spec == null || spec == JSONObject.NULL) return null;
         if (spec instanceof String) {
-            ProxyEndpoint ep = parseProxyString((String) spec);
-            if (ep == null) return null;
-            return new ProxySpec(true, ep.type, ep.host, ep.port, ep.username, ep.password, null);
+            ParsedProxyUrl parsed = parseProxyStringWithOptions((String) spec);
+            if (parsed == null || parsed.endpoint == null) return null;
+            ProxyEndpoint ep = parsed.endpoint;
+            return new ProxySpec(true, ep.type, ep.host, ep.port, ep.username, ep.password, null, parsed.socks5RemoteDns);
         }
         if (!(spec instanceof JSONObject)) {
             throw new IllegalArgumentException("proxy 必须是代理字符串、null 或 JSON 对象");
@@ -724,7 +776,8 @@ public final class ContainerEnv {
         ProxyEndpoint upstream = o.has("upstream") && !o.isNull("upstream")
                 ? parseProxyEndpoint(o.opt("upstream"))
                 : null;
-        return new ProxySpec(enabled, type, host, port, user, pass, upstream);
+        boolean socks5RemoteDns = parseBooleanOption(o.opt("socks5RemoteDns"), true);
+        return new ProxySpec(enabled, type, host, port, user, pass, upstream, socks5RemoteDns);
     }
 
     /** 解析外部输入（预设名字符串 或 JSONObject） */

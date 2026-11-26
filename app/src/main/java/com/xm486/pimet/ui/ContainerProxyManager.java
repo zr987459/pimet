@@ -528,6 +528,13 @@ public final class ContainerProxyManager {
             }
             ap.put("frozenTabs", frozen);
             if (!lastError.isEmpty()) ap.put("lastError", lastError);
+            ContainerProxyTunnel tun = activeTunnel;
+            String tunnelErr = tun != null ? tun.getLastHandshakeError() : "";
+            String proxyErr = !lastError.isEmpty() ? lastError : tunnelErr;
+            if (!proxyErr.isEmpty()) {
+                ap.put("lastProxyError", proxyErr);
+                out.put("lastProxyError", proxyErr);
+            }
             out.put("activeProxy", ap);
         } catch (Exception ignored) {}
         return out;

@@ -57,27 +57,32 @@ public final class ContainerManager {
         return "pw_" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
+    /** 同步删除子进程 WebView 隔离数据目录（仅在目标子进程已确认退出且位于后台线程时调用）。 */
+    public static void deleteWorkerDataDirSync(Context ctx, String containerId) {
+        if (ctx == null || containerId == null || containerId.trim().isEmpty()) return;
+        final Context app = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+        final String suffix = workerDataDirSuffix(containerId);
+        try {
+            java.util.LinkedHashSet<File> roots = new java.util.LinkedHashSet<>();
+            File d1 = app.getDataDir();
+            if (d1 != null) roots.add(d1);
+            android.content.pm.ApplicationInfo ai = app.getApplicationInfo();
+            if (ai != null && ai.dataDir != null && !ai.dataDir.isEmpty()) {
+                roots.add(new File(ai.dataDir));
+            }
+            for (File root : roots) {
+                deleteRecursively(new File(root, "app_webview_" + suffix));
+            }
+        } catch (Throwable ex) {
+            Log.w(TAG, "deleteWorkerDataDirSync failed: " + containerId, ex);
+        }
+    }
+
     /** 安全异步删除子进程 WebView 隔离数据目录（仅在目标子进程已确认退出后调用）。 */
     public static void deleteWorkerDataDir(Context ctx, String containerId) {
         if (ctx == null || containerId == null || containerId.trim().isEmpty()) return;
         final Context app = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
-        final String suffix = workerDataDirSuffix(containerId);
-        Thread t = new Thread(() -> {
-            try {
-                java.util.LinkedHashSet<File> roots = new java.util.LinkedHashSet<>();
-                File d1 = app.getDataDir();
-                if (d1 != null) roots.add(d1);
-                android.content.pm.ApplicationInfo ai = app.getApplicationInfo();
-                if (ai != null && ai.dataDir != null && !ai.dataDir.isEmpty()) {
-                    roots.add(new File(ai.dataDir));
-                }
-                for (File root : roots) {
-                    deleteRecursively(new File(root, "app_webview_" + suffix));
-                }
-            } catch (Throwable ex) {
-                Log.w(TAG, "deleteWorkerDataDir failed: " + containerId, ex);
-            }
-        }, "pimet-del-worker-dir");
+        Thread t = new Thread(() -> deleteWorkerDataDirSync(app, containerId), "pimet-del-worker-dir");
         t.setDaemon(true);
         t.start();
     }
@@ -97,6 +102,9 @@ public final class ContainerManager {
     }
 
     private final File metaFile;
+    private volatile Context appContext;
+    private volatile java.util.function.Predicate<String> externalInUseCheck;
+    private volatile java.util.function.Consumer<String> onReleasedListener;
     private final Object lock = new Object();
     private final Map<String, JSONObject> meta = new HashMap<>();
     /** 容器 → 已 apply 到该容器的 WebView（弱引用，WebView 销毁后自动消失） */
@@ -125,6 +133,11 @@ public final class ContainerManager {
     }
 
     public ContainerManager(File appsDir) {
+        this(null, appsDir);
+    }
+
+    public ContainerManager(Context ctx, File appsDir) {
+        setAppContext(ctx);
         this.metaFile = new File(appsDir, "containers.json");
         // 文件很小，构造时同步读一次（之后只写）
         try {
@@ -141,6 +154,21 @@ public final class ContainerManager {
             Log.w(TAG, "读取 containers.json 失败", t);
         }
         if (!meta.containsKey(DEFAULT)) meta.put(DEFAULT, makeMeta("共享容器", "#9E9E9E", true));
+    }
+
+    public void setAppContext(Context ctx) {
+        if (ctx != null) {
+            Context app = ctx.getApplicationContext();
+            this.appContext = app != null ? app : ctx;
+        }
+    }
+
+    public void setExternalInUseCheck(java.util.function.Predicate<String> check) {
+        this.externalInUseCheck = check;
+    }
+
+    public void setOnReleasedListener(java.util.function.Consumer<String> listener) {
+        this.onReleasedListener = listener;
     }
 
     /** 生成 "c&lt;递增数字&gt;"，分配颜色、中文标签与默认 auto 环境，返回 name。 */
@@ -291,18 +319,34 @@ public final class ContainerManager {
     /** 标签关闭时调：keep==false 且没有其他标签在用 → 删除 Profile 与元数据；DEFAULT 永不删除。 */
     public void release(String name) {
         if (name == null || name.isEmpty() || DEFAULT.equals(name)) return;
+        boolean shouldTryDelete = false;
         synchronized (lock) {
             int c = refCount(name) - 1;
             if (c > 0) { refs.put(name, c); return; }
             refs.remove(name);
             JSONObject m = meta.get(name);
-            if (m != null && m.optBoolean("keep", false)) return;
+            if (m == null || !m.optBoolean("keep", false)) {
+                shouldTryDelete = true;
+            }
+        }
+        if (!shouldTryDelete) return;
+        java.util.function.Predicate<String> extCheck = this.externalInUseCheck;
+        if (extCheck != null) {
+            try {
+                if (extCheck.test(name)) return;
+            } catch (Throwable ignored) {}
         }
         // 关闭标签时 WebView 往往还没 destroy，稍后再删；被占用时重试几次
         main.postDelayed(() -> tryDelete(name, 0), 500);
     }
 
     private void tryDelete(String name, int attempt) {
+        java.util.function.Predicate<String> extCheck = this.externalInUseCheck;
+        if (extCheck != null) {
+            try {
+                if (extCheck.test(name)) return;
+            } catch (Throwable ignored) {}
+        }
         synchronized (lock) {
             if (refCount(name) > 0) return;          // 期间又被别的标签用上了
             JSONObject m = meta.get(name);
@@ -328,34 +372,119 @@ public final class ContainerManager {
             if (attempt < 5) main.postDelayed(() -> tryDelete(name, attempt + 1), 2000L * (attempt + 1));
             return;   // 仍删不掉就保留元数据，下次启动由 cleanupOrphans 处理
         }
+        if (extCheck != null) {
+            try {
+                if (extCheck.test(name)) return;
+            } catch (Throwable ignored) {}
+        }
+        boolean removed;
         synchronized (lock) {
             if (refCount(name) > 0) return;
-            if (meta.remove(name) != null) saveLocked();
+            JSONObject m = meta.get(name);
+            if (m != null && m.optBoolean("keep", false)) return;
+            removed = meta.remove(name) != null;
+            if (removed) saveLocked();
+        }
+        java.util.function.Consumer<String> listener = this.onReleasedListener;
+        if (listener != null) {
+            try {
+                listener.accept(name);
+            } catch (Throwable ignored) {}
         }
     }
 
     /**
-     * 可选：启动时（还没有任何标签前）在主线程调用，删除上次异常退出遗留的、未保留的自动容器。
+     * 可选：启动时（还没有任何标签前）在主线程调用，删除上次异常退出遗留的、未保留的自动容器与孤儿子进程目录。
      * openNames 为当前恢复的标签正在用的容器，可为 null。
      */
     public void cleanupOrphans(java.util.Collection<String> openNames) {
+        cleanupOrphans(this.appContext, openNames);
+    }
+
+    public void cleanupOrphans(Context ctx, java.util.Collection<String> openNames) {
+        Context targetCtx = ctx != null ? ctx : this.appContext;
         List<String> victims = new ArrayList<>();
+        List<String> extCheckCandidates = new ArrayList<>();
+        java.util.Set<String> protectedWorkerDirs = new java.util.HashSet<>();
+        protectedWorkerDirs.add("app_webview_" + workerDataDirSuffix(DEFAULT));
+        java.util.function.Predicate<String> extCheck = this.externalInUseCheck;
         synchronized (lock) {
-            List<String> names = new ArrayList<>(meta.keySet());
+            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>(meta.keySet());
             if (supported()) {
                 try { names.addAll(ProfileStore.getInstance().getAllProfileNames()); } catch (Throwable ignored) {}
             }
             for (String n : names) {
-                if (DEFAULT.equals(n) || victims.contains(n)) continue;
-                if (!AUTO_NAME.matcher(n).matches()) continue;
-                if (openNames != null && openNames.contains(n)) continue;
-                if (refCount(n) > 0) continue;
+                if (DEFAULT.equals(n)) continue;
+                boolean isOpen = openNames != null && openNames.contains(n);
+                boolean inUse = refCount(n) > 0;
                 JSONObject m = meta.get(n);
-                if (m != null && m.optBoolean("keep", false)) continue;
-                victims.add(n);
+                boolean kept = m != null && m.optBoolean("keep", false);
+                if (isOpen || inUse || kept) {
+                    protectedWorkerDirs.add("app_webview_" + workerDataDirSuffix(n));
+                    continue;
+                }
+                extCheckCandidates.add(n);
+            }
+            if (openNames != null) {
+                for (String n : openNames) {
+                    if (n != null && !n.trim().isEmpty()) {
+                        protectedWorkerDirs.add("app_webview_" + workerDataDirSuffix(n));
+                    }
+                }
             }
         }
+        for (String n : extCheckCandidates) {
+            boolean inUse = false;
+            if (extCheck != null) {
+                try { inUse = extCheck.test(n); } catch (Throwable ignored) {}
+            }
+            if (inUse) {
+                protectedWorkerDirs.add("app_webview_" + workerDataDirSuffix(n));
+                continue;
+            }
+            if (!AUTO_NAME.matcher(n).matches()) continue;
+            victims.add(n);
+        }
         for (String n : victims) tryDelete(n, 5);
+
+        if (targetCtx != null) {
+            java.util.LinkedHashSet<File> roots = new java.util.LinkedHashSet<>();
+            try {
+                File d1 = targetCtx.getDataDir();
+                if (d1 != null) roots.add(d1);
+            } catch (Throwable ignored) {}
+            try {
+                android.content.pm.ApplicationInfo ai = targetCtx.getApplicationInfo();
+                if (ai != null && ai.dataDir != null && !ai.dataDir.isEmpty()) {
+                    roots.add(new File(ai.dataDir));
+                }
+            } catch (Throwable ignored) {}
+            final List<File> orphanDirs = new ArrayList<>();
+            for (File root : roots) {
+                if (root == null || !root.isDirectory()) continue;
+                File[] children = root.listFiles();
+                if (children == null) continue;
+                for (File child : children) {
+                    if (child == null || !child.isDirectory()) continue;
+                    String dn = child.getName();
+                    if (dn.startsWith("app_webview_pw_") && !protectedWorkerDirs.contains(dn)) {
+                        orphanDirs.add(child);
+                    }
+                }
+            }
+            if (!orphanDirs.isEmpty()) {
+                io.execute(() -> {
+                    for (File dir : orphanDirs) {
+                        try {
+                            Log.i(TAG, "cleanupOrphans 删除孤儿代理目录: " + dir.getAbsolutePath());
+                            deleteRecursively(dir);
+                        } catch (Throwable t) {
+                            Log.w(TAG, "cleanupOrphans 删除孤儿代理目录失败: " + dir.getAbsolutePath(), t);
+                        }
+                    }
+                });
+            }
+        }
     }
 
     public void setKeep(String name, boolean keep) {

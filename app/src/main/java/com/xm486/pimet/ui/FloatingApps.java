@@ -626,7 +626,7 @@ public final class FloatingApps {
         proxyBannerText.setSingleLine(true);
         proxyBannerText.setEllipsize(TextUtils.TruncateAt.END);
         proxyBanner.addView(proxyBannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        proxyBannerBtn = barBtn("切回直连", "退出远程代理预览，回到主进程直连标签", 12);
+        proxyBannerBtn = barBtn("返回主标签", "退出远程代理预览，返回主进程标签", 12);
         proxyBannerBtn.setPadding(dp(8), 0, dp(8), 0);
         proxyBannerBtn.setOnClickListener(v -> exitRemoteMirror());
         proxyBanner.addView(proxyBannerBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)));
@@ -714,7 +714,7 @@ public final class FloatingApps {
 
         // 上次进程留下的未保留容器（这时还没有任何标签）
         try {
-            if (ContainerManager.supported()) containers().cleanupOrphans(Collections.<String>emptyList());
+            containers().cleanupOrphans(Collections.<String>emptyList());
         } catch (Throwable e) {
             Log.w(TAG, "cleanup containers failed", e);
         }
@@ -1574,6 +1574,7 @@ public final class FloatingApps {
     private void closeRemoteTabFromUi(String tabId) {
         if (tabId == null || tabId.isEmpty() || workerPool == null) return;
         final ProxyWorkerPool.WorkerSlot slot = workerPool.slotForTab(tabId);
+        final String cid = slot != null ? slot.boundContainerId : null;
         if (tabId.equals(activeRemoteTabId)) {
             exitRemoteMirror();
         } else if (tabId.equals(attachedRemoteTabId) || tabId.equals(attachingRemoteTabId)) {
@@ -1587,6 +1588,11 @@ public final class FloatingApps {
                     workerPool.callRpc(slot, new JSONObject().put("action", "tab_close").put("tab", tabId), "ui-close-" + tabId, 5000L);
                 } catch (Throwable ignored) {}
                 MAIN.post(() -> {
+                    if (cid != null && !cid.isEmpty() && !ContainerManager.DEFAULT.equals(cid)) {
+                        if (mainTabCountForContainer(cid) == 0 && workerPool.remoteTabCountForContainer(cid) == 0) {
+                            releaseContainer(cid);
+                        }
+                    }
                     refreshTabs();
                     if (switcher.getVisibility() == View.VISIBLE) rebuildSwitcher();
                 });
@@ -3168,7 +3174,7 @@ public final class FloatingApps {
             if (remoteCanGoBack()) {
                 sendRemoteBack(activeRemoteTabId);
             } else {
-                exitRemoteMirror();
+                openSwitcher();
             }
             return;
         }
@@ -3912,7 +3918,6 @@ public final class FloatingApps {
         MAIN.post(() -> {
             if (tabId.equals(activeRemoteTabId) && urlField != null && urlField.hasFocus()) {
                 urlField.clearFocus();
-                hideIme();
             }
         });
     }
@@ -3989,7 +3994,7 @@ public final class FloatingApps {
         mirrorRefreshBtn.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? View.GONE : View.VISIBLE);
         header.addView(mirrorRefreshBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
 
-        TextView backBtn = barBtn("切回直连", "切回主进程直连标签", 12);
+        TextView backBtn = barBtn("返回主标签", "返回主进程标签", 12);
         backBtn.setTextColor(cAccent);
         backBtn.setPadding(dp(8), 0, dp(4), 0);
         backBtn.setOnClickListener(v -> exitRemoteMirror());
@@ -6707,7 +6712,15 @@ public final class FloatingApps {
 
     /** 容器管理（M1 实现）。BrowserAgent 也用它 */
     synchronized ContainerManager containers() {
-        if (containerMgr == null) containerMgr = new ContainerManager(appsDir);
+        if (containerMgr == null) {
+            containerMgr = new ContainerManager(ctx, appsDir);
+            containerMgr.setExternalInUseCheck(cid ->
+                    mainTabCountForContainer(cid) > 0
+                            || (workerPool != null && workerPool.isContainerBusy(cid)));
+            containerMgr.setOnReleasedListener(cid -> {
+                if (workerPool != null) workerPool.releaseIdleTempSlotAsync(cid);
+            });
+        }
         return containerMgr;
     }
 

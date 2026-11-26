@@ -50,11 +50,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 4 槽位独立代理子进程池（{@code :proxy_worker_1..4}）：
+ * 6 槽位独立代理子进程池（{@code :proxy_worker_1..6}）：
  * <ul>
  *   <li>每个槽位绑定一个容器及其独立 {@code WebView.setDataDirectorySuffix("pw_" + containerId)} 与 {@code ProxyController}；</li>
- *   <li>4 槽位状态机：{@code DEAD → INITIALIZING → READY_IDLE ⇄ READY_BUSY → RECYCLING → DEAD}；</li>
- *   <li>绝不跨容器混用运行中槽位；4 槽全被活跃标签占用时明确拒绝并报错；</li>
+ *   <li>6 槽位状态机：{@code DEAD → INITIALIZING → READY_IDLE ⇄ READY_BUSY → RECYCLING → DEAD}；</li>
+ *   <li>绝不跨容器混用运行中槽位；6 槽全被活跃标签占用时明确拒绝并报错；</li>
  *   <li>所有回环 HTTP RPC（{@code 127.0.0.1:port}）强制使用 {@link Proxy#NO_PROXY}，并支持 &gt;1MB 大报文与 {@code /cancel} 毫秒级打断。</li>
  * </ul>
  */
@@ -62,7 +62,15 @@ public final class ProxyWorkerPool {
 
     private static final String TAG = "ProxyWorkerPool";
     private static final SecureRandom RNG = new SecureRandom();
-    private static final int SLOT_COUNT = 4;
+    @SuppressWarnings("unchecked")
+    static final Class<? extends ProxyWorkerService>[] SERVICE_CLASSES = new Class[]{
+            ProxyWorkerService1.class,
+            ProxyWorkerService2.class,
+            ProxyWorkerService3.class,
+            ProxyWorkerService4.class,
+            ProxyWorkerService5.class,
+            ProxyWorkerService6.class
+    };
 
     public enum SlotState {
         DEAD,
@@ -155,12 +163,10 @@ public final class ProxyWorkerPool {
         this.appContext = app != null ? app : ctx;
         this.appsDir = appsDir != null ? appsDir : new File(this.appContext.getFilesDir(), "rootfs/root/pimet-browser");
         this.containerManager = containerManager;
-        this.slots = new WorkerSlot[]{
-                new WorkerSlot(1, ProxyWorkerService1.class),
-                new WorkerSlot(2, ProxyWorkerService2.class),
-                new WorkerSlot(3, ProxyWorkerService3.class),
-                new WorkerSlot(4, ProxyWorkerService4.class)
-        };
+        this.slots = new WorkerSlot[SERVICE_CLASSES.length];
+        for (int i = 0; i < SERVICE_CLASSES.length; i++) {
+            this.slots[i] = new WorkerSlot(i + 1, SERVICE_CLASSES[i]);
+        }
     }
 
     public void setCustomUa(String customUa) {
@@ -198,6 +204,7 @@ public final class ProxyWorkerPool {
             WorkerSlot deadSlot = null;
             WorkerSlot lruIdleSlot = null;
             boolean waitTransient = false;
+            final boolean kept = isContainerKept(cid);
 
             synchronized (poolLock) {
                 // 1) 优先复用同容器运行中槽位
@@ -214,7 +221,7 @@ public final class ProxyWorkerPool {
                 if (reuseSlot != null) {
                     reuseSlot.lastUsedAt = System.currentTimeMillis();
                     reuseSlot.boundLabel = lbl;
-                    reuseSlot.boundKeep = isContainerKept(cid);
+                    reuseSlot.boundKeep = kept;
                     reuseSlot.pendingAcquires++;
                 } else if (!waitTransient) {
                     // 2) 优先占用 DEAD 槽位
@@ -225,7 +232,7 @@ public final class ProxyWorkerPool {
                             s.boundContainerId = cid;
                             s.boundLabel = lbl;
                             s.boundProfile = prof;
-                            s.boundKeep = isContainerKept(cid);
+                            s.boundKeep = kept;
                             s.lastUsedAt = System.currentTimeMillis();
                             s.pendingAcquires++;
                             break;
@@ -246,7 +253,7 @@ public final class ProxyWorkerPool {
                         if (lruIdleSlot != null) {
                             lruIdleSlot.state = SlotState.RECYCLING;
                         } else {
-                            // 4) 若有其他槽正在 INITIALIZING / RECYCLING，可短暂等待；否则 4 槽全满（READY_BUSY）
+                            // 4) 若有其他槽正在 INITIALIZING / RECYCLING，可短暂等待；否则全槽已满（READY_BUSY）
                             boolean anyBusyTransient = false;
                             for (WorkerSlot s : slots) {
                                 if (s.state == SlotState.INITIALIZING || s.state == SlotState.RECYCLING) {
@@ -481,7 +488,7 @@ public final class ProxyWorkerPool {
 
     private void recycleSlot(WorkerSlot s) {
         final String oldContainerId;
-        final boolean oldKeep;
+        final boolean slotBoundKeep;
         final int oldPid;
         final ServiceConnection conn;
         final IBinder binder;
@@ -491,7 +498,7 @@ public final class ProxyWorkerPool {
 
         synchronized (poolLock) {
             oldContainerId = s.boundContainerId;
-            oldKeep = isContainerKept(oldContainerId) || s.boundKeep;
+            slotBoundKeep = s.boundKeep;
             oldPid = s.pid;
             conn = s.serviceConnection;
             binder = s.rawBinder;
@@ -500,6 +507,7 @@ public final class ProxyWorkerPool {
             msgr = s.messenger;
             s.state = SlotState.RECYCLING;
         }
+        final boolean oldKeep = slotBoundKeep || isContainerKept(oldContainerId);
 
         clearTabIndexForSlot(s);
 
@@ -544,10 +552,10 @@ public final class ProxyWorkerPool {
             try { binder.unlinkToDeath(dr, 0); } catch (Throwable ignored) {}
         }
 
-        // 4) 若原容器 keep == false，清理该容器隔离目录
+        // 4) 若原容器 keep == false，同步清理该容器隔离目录，彻底删净后再将槽位置为 DEAD
         if (!oldKeep && oldContainerId != null && !oldContainerId.isEmpty()
                 && !ContainerManager.DEFAULT.equalsIgnoreCase(oldContainerId)) {
-            ContainerManager.deleteWorkerDataDir(appContext, oldContainerId);
+            ContainerManager.deleteWorkerDataDirSync(appContext, oldContainerId);
         }
 
         // 5) 归位 DEAD
@@ -567,7 +575,7 @@ public final class ProxyWorkerPool {
 
     private void forceResetToDead(WorkerSlot s, boolean keepData) {
         final String oldContainerId;
-        final boolean oldKeep;
+        final boolean slotBoundKeep;
         final int oldPid;
         final ServiceConnection conn;
         final IBinder binder;
@@ -575,7 +583,7 @@ public final class ProxyWorkerPool {
         final Messenger msgr;
         synchronized (poolLock) {
             oldContainerId = s.boundContainerId;
-            oldKeep = keepData || isContainerKept(oldContainerId) || s.boundKeep;
+            slotBoundKeep = s.boundKeep;
             oldPid = s.pid;
             conn = s.serviceConnection;
             binder = s.rawBinder;
@@ -583,6 +591,7 @@ public final class ProxyWorkerPool {
             msgr = s.messenger;
             s.state = SlotState.RECYCLING;
         }
+        final boolean oldKeep = keepData || slotBoundKeep || isContainerKept(oldContainerId);
         clearTabIndexForSlot(s);
         if (msgr != null) {
             try {
@@ -664,7 +673,7 @@ public final class ProxyWorkerPool {
                     .append(s.boundContainerId.isEmpty() ? "-" : s.boundContainerId)
                     .append("(").append(s.tabs.size()).append("个标签)");
         }
-        return "4 个独立代理进程槽位已全被活跃容器占用（" + sb + "），请先用 tab_close 关闭闲置代理标签，绝不混用容器数据";
+        return SERVICE_CLASSES.length + " 个独立代理进程槽位已全被活跃容器占用（" + sb + "），请先用 tab_close 关闭闲置代理标签，绝不混用容器数据";
     }
 
     private boolean isContainerKept(String containerId) {
@@ -1281,6 +1290,50 @@ public final class ProxyWorkerPool {
             }
             return sum;
         }
+    }
+
+    public boolean isContainerBusy(String containerId) {
+        if (containerId == null || containerId.isEmpty()) return false;
+        synchronized (poolLock) {
+            for (WorkerSlot s : slots) {
+                if (containerId.equals(s.boundContainerId) && s.state != SlotState.DEAD) {
+                    if (!s.tabs.isEmpty() || s.pendingAcquires > 0 || s.state == SlotState.INITIALIZING) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
+    /** 当 keep==false 的临时容器释放后，若对应槽位空闲则先优雅退出进程再删目录，绝不在进程运行时硬删文件 */
+    public void releaseIdleTempSlotAsync(String containerId) {
+        if (shuttingDown.get() || containerId == null || containerId.trim().isEmpty()) return;
+        final String cid = containerId.trim();
+        if (ContainerManager.DEFAULT.equalsIgnoreCase(cid) || isContainerKept(cid)) return;
+        try {
+            asyncPool.execute(() -> {
+                WorkerSlot idleTarget = null;
+                boolean anySlotUsingCid = false;
+                synchronized (poolLock) {
+                    for (WorkerSlot s : slots) {
+                        if (cid.equals(s.boundContainerId) && s.state != SlotState.DEAD) {
+                            anySlotUsingCid = true;
+                            if (s.state == SlotState.READY_IDLE && s.tabs.isEmpty() && s.pendingAcquires == 0) {
+                                s.state = SlotState.RECYCLING;
+                                idleTarget = s;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (idleTarget != null) {
+                    recycleSlot(idleTarget);
+                } else if (!anySlotUsingCid) {
+                    ContainerManager.deleteWorkerDataDirSync(appContext, cid);
+                }
+            });
+        } catch (Throwable ignored) {}
     }
 
     public void broadcastConfigSync() {

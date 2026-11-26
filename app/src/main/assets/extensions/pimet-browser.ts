@@ -1843,7 +1843,7 @@ export default function (pi: ExtensionAPI) {
       "【目标 target】@N（快照 ref）| CSS 选择器（跨层用 >>>）| text=文字 | [x,y] 坐标。\n" +
       "【run】code 为 async 函数体，b 提供：open / read / openAndRead / dismissPopups / snapshot / click / clickAny / fill / fillForm / select / press / hover / scroll / scrollIntoView / scrollUntil / waitFor / waitGone / waitIdle / extract / batch / js / screenshot / log / tool / newTab / tab / closeTab / call / find / console / scripts / ui / runAction / inject。\n" +
       "【单步】tools | read | open | snapshot(scope=full|viewport) | click | fill | type | select | hover | scroll_into_view | press | scroll | back | forward | reload | wait | eval | screenshot | status | downloads | show | hide | home | close | reload_ui。\n" +
-      "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（多进程并行代理架构：主进程固定直连 t1 永不冻结，最多 4 个独立代理子进程并行，frozenTabs: 0，后台保持真实 390x844 / 桌面 1280x800 视口；需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
+      "【标签/容器/代理/历史】tab_new(url,container:new|same|Default|容器名,profile?,proxy?,background) | tabs | tab_switch | tab_close | create_container(profile?,proxy?,label?,keep?) | containers | container_keep | container_profile / set_container_profile(name?,profile?,proxy?,randomize?,reload?) | history | history_delete | history_clear（多进程并行代理架构：主进程固定直连 t1 永不冻结，最多 6 个独立代理子进程并行，frozenTabs: 0，后台保持真实 390x844 / 桌面 1280x800 视口；需用户登录态用 container:\"same\"；防风控/多地区用 tab_new(profile:\"ca-en\", proxy:\"socks5://...\")）。\n" +
       "【油猴与定制】scripts | script_get | script_install | script_enable | script_remove | script_update | script_values | menu_commands | menu_run | console | find | wait_for | inject；" +
       "ui_schema | ui_get | ui_set | ui_patch | ui_remove | ui_reset | ui_backups | ui_restore | panel_* | action_run | site_* | rule_* | rules（定制细节按需读 customize.md）。\n" +
       "【红线】script_remove、clear_data、history_clear、ui_reset 先征得用户同意；不擅自 show / tab_switch；遇到「用户已叫停」或 user_takeover 立即停下汇报；验证码/支付/登录确认交由用户完成。",
@@ -1880,7 +1880,7 @@ export default function (pi: ExtensionAPI) {
       proxy: Type.Optional(
         Type.Union([Type.String(), Type.Null(), Type.Object({}, { additionalProperties: true })], {
           description:
-            "tab_new / create_container / container_profile / set_container_profile 的容器代理：字符串 shorthand（如 \"http://127.0.0.1:7890\"、\"socks5://user:pass@host:port\"、\"direct\"）或对象 {enabled?, type?, host, port, username?, password?, upstream?}，传 null 或 \"direct\" 清除代理",
+            "tab_new / create_container / container_profile / set_container_profile 的容器代理：字符串 shorthand（如 \"http://127.0.0.1:7890\"、\"socks5://user:pass@host:port\"、\"direct\"）或对象 {enabled?, type?, host, port, username?, password?, upstream?, socks5RemoteDns?}，传 null 或 \"direct\" 清除代理",
         })
       ),
       label: Type.Optional(Type.String({ description: "create_container 的容器显示名称（可选）" })),

@@ -2733,7 +2733,6 @@ public final class ProxyWorkerRuntime {
             }
             boolean sent = sendAttachSurfaceAck(replyTo, true, tabId, attachSeq, tab, pkg, "");
             if (!sent) {
-                SurfaceHostApi30.releasePackage(pkg);
                 detachSurfaceInternal(tab, attachSeq);
                 return;
             }
@@ -2840,32 +2839,36 @@ public final class ProxyWorkerRuntime {
             Object pkg,
             String error
     ) {
-        if (replyTo == null) return false;
-        Message ack = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK);
-        Bundle out = new Bundle();
-        out.putBoolean(ProxyWorkerBridge.KEY_OK, ok);
-        out.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId == null ? "" : tabId);
-        out.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
-        out.putString(ProxyWorkerBridge.KEY_ERROR, error == null ? "" : error);
-        if (ok && tab != null) {
-            out.putString(ProxyWorkerBridge.KEY_URL, nz(tab.url));
-            out.putString(ProxyWorkerBridge.KEY_TITLE, nz(tab.title));
-            out.putBoolean(ProxyWorkerBridge.KEY_LOADING, tab.loading);
-            out.putInt(ProxyWorkerBridge.KEY_PROGRESS, tab.progress);
-            out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_BACK, tab.canGoBack);
-            out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_FORWARD, tab.canGoForward);
-            out.putBoolean(ProxyWorkerBridge.KEY_DESKTOP, effectiveDesktopOf(tab));
-        }
-        if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            SurfaceHostApi30.putPackage(out, ProxyWorkerBridge.KEY_SURFACE_PACKAGE, pkg);
-        }
-        ack.setData(out);
         try {
+            if (replyTo == null) return false;
+            Message ack = Message.obtain(null, ProxyWorkerBridge.MSG_ATTACH_SURFACE_ACK);
+            Bundle out = new Bundle();
+            out.putBoolean(ProxyWorkerBridge.KEY_OK, ok);
+            out.putString(ProxyWorkerBridge.KEY_TAB_ID, tabId == null ? "" : tabId);
+            out.putLong(ProxyWorkerBridge.KEY_ATTACH_SEQ, attachSeq);
+            out.putString(ProxyWorkerBridge.KEY_ERROR, error == null ? "" : error);
+            if (ok && tab != null) {
+                out.putString(ProxyWorkerBridge.KEY_URL, nz(tab.url));
+                out.putString(ProxyWorkerBridge.KEY_TITLE, nz(tab.title));
+                out.putBoolean(ProxyWorkerBridge.KEY_LOADING, tab.loading);
+                out.putInt(ProxyWorkerBridge.KEY_PROGRESS, tab.progress);
+                out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_BACK, tab.canGoBack);
+                out.putBoolean(ProxyWorkerBridge.KEY_CAN_GO_FORWARD, tab.canGoForward);
+                out.putBoolean(ProxyWorkerBridge.KEY_DESKTOP, effectiveDesktopOf(tab));
+            }
+            if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                SurfaceHostApi30.putPackage(out, ProxyWorkerBridge.KEY_SURFACE_PACKAGE, pkg);
+            }
+            ack.setData(out);
             replyTo.send(ack);
             return true;
         } catch (Throwable t) {
             Log.w(TAG, "sendAttachSurfaceAck failed", t);
             return false;
+        } finally {
+            if (pkg != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                SurfaceHostApi30.releasePackage(pkg);
+            }
         }
     }
 
@@ -3860,6 +3863,10 @@ public final class ProxyWorkerRuntime {
         try {
             JSONObject st = proxyManager.statusJson(null);
             out.put("proxySupported", st.optBoolean("proxySupported", false));
+            String lastProxyError = st.optString("lastProxyError", "");
+            if (!lastProxyError.isEmpty()) {
+                out.put("lastProxyError", lastProxyError);
+            }
             JSONObject ap = st.optJSONObject("activeProxy");
             if (ap != null) {
                 out.put("activeProxy", ap);

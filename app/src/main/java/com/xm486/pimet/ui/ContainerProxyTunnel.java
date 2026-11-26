@@ -9,7 +9,9 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -49,6 +51,7 @@ public final class ContainerProxyTunnel implements AutoCloseable {
     private final Thread acceptThread;
     private final AtomicBoolean open = new AtomicBoolean(true);
     private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
+    private volatile String lastHandshakeError = "";
 
     public ContainerProxyTunnel(ContainerEnv.ProxySpec spec) throws IOException {
         if (spec == null || !spec.isActive()) {
@@ -96,6 +99,10 @@ public final class ContainerProxyTunnel implements AutoCloseable {
 
     public int activeSocketCount() {
         return activeSockets.size();
+    }
+
+    public String getLastHandshakeError() {
+        return lastHandshakeError;
     }
 
     @Override
@@ -179,12 +186,7 @@ public final class ContainerProxyTunnel implements AutoCloseable {
 
             if ("CONNECT".equals(method)) {
                 HostPort hp = parseConnectTarget(rawTarget);
-                remote = openChainedToTargetProxy();
-                if ("http".equals(spec.type)) {
-                    sendHttpConnect(remote, hp.host, hp.port, spec.username, spec.password);
-                } else {
-                    socks5Connect(remote, spec.username, spec.password, hp.host, hp.port);
-                }
+                remote = openTargetViaProxy(hp.host, hp.port);
                 cout.write("HTTP/1.1 200 Connection Established\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
                 cout.flush();
                 responseStarted = true;
@@ -194,10 +196,10 @@ public final class ContainerProxyTunnel implements AutoCloseable {
                 relay(client, remote, true);
             } else {
                 ParsedHttpTarget target = parseHttpRequestTarget(rawTarget, rawHeaders);
-                remote = openChainedToTargetProxy();
 
                 if (spec.upstream == null && "http".equals(spec.type)) {
                     // 无 upstream 且目标是 HTTP 代理：保留绝对 URI 转发给目标 HTTP 代理
+                    remote = openChainedToTargetProxyWithError(target.host, target.port);
                     String reqLine = method + " http://" + formatHostPort(target.host, target.port) + target.pathAndQuery + " HTTP/1.1\r\n";
                     byte[] outHdr = buildForwardHeaders(reqLine, rawHeaders, target, true, spec.hasAuth() ? basicAuthHeader(spec.username, spec.password) : null);
                     OutputStream rout = remote.getOutputStream();
@@ -205,11 +207,7 @@ public final class ContainerProxyTunnel implements AutoCloseable {
                     rout.flush();
                 } else {
                     // 目标是 SOCKS5 或带 upstream 链式：先通过链式隧道连到目标站点 host:port，再发相对路径请求
-                    if ("socks5".equals(spec.type)) {
-                        socks5Connect(remote, spec.username, spec.password, target.host, target.port);
-                    } else {
-                        sendHttpConnect(remote, target.host, target.port, spec.username, spec.password);
-                    }
+                    remote = openTargetViaProxy(target.host, target.port);
                     String reqLine = method + " " + target.pathAndQuery + " HTTP/1.1\r\n";
                     byte[] outHdr = buildForwardHeaders(reqLine, rawHeaders, target, false, null);
                     OutputStream rout = remote.getOutputStream();
@@ -234,6 +232,61 @@ public final class ContainerProxyTunnel implements AutoCloseable {
         }
     }
 
+    private Socket openChainedToTargetProxyWithError(String targetHost, int targetPort) throws IOException {
+        try {
+            return openChainedToTargetProxy();
+        } catch (Throwable t) {
+            recordHandshakeError(targetHost, targetPort, describeError(t));
+            throw asIOException(t);
+        }
+    }
+
+    private Socket openTargetViaProxy(String targetHost, int targetPort) throws IOException {
+        if ("http".equals(spec.type)) {
+            Socket remote = openChainedToTargetProxyWithError(targetHost, targetPort);
+            try {
+                sendHttpConnect(remote, targetHost, targetPort, spec.username, spec.password);
+                return remote;
+            } catch (Throwable t) {
+                closeAndUntrack(remote);
+                recordHandshakeError(targetHost, targetPort, describeError(t));
+                throw asIOException(t);
+            }
+        }
+
+        Socket remote = openChainedToTargetProxyWithError(targetHost, targetPort);
+        try {
+            socks5ConnectInternal(remote, spec.username, spec.password, targetHost, targetPort, spec.socks5RemoteDns);
+            return remote;
+        } catch (Throwable firstErr) {
+            closeAndUntrack(remote);
+            boolean isDomain = parseIpLiteral(unwrapBrackets(targetHost)) == null;
+            boolean canFallback = (spec.upstream == null)
+                    && spec.socks5RemoteDns
+                    && isDomain
+                    && (firstErr instanceof Socks5Atyp03FallbackException);
+            if (!canFallback) {
+                recordHandshakeError(targetHost, targetPort, describeError(firstErr));
+                throw asIOException(firstErr);
+            }
+
+            Socket retry = null;
+            try {
+                retry = openChainedToTargetProxy();
+                byte usedAtyp = socks5ConnectInternal(retry, spec.username, spec.password, targetHost, targetPort, false);
+                String atypStr = usedAtyp == 0x04 ? "ATYP=0x04" : "ATYP=0x01";
+                recordHandshakeError(targetHost, targetPort,
+                        describeError(firstErr) + " -> fallback " + atypStr + " ok");
+                return retry;
+            } catch (Throwable retryErr) {
+                closeAndUntrack(retry);
+                recordHandshakeError(targetHost, targetPort,
+                        describeError(firstErr) + " -> fallback failed: " + describeError(retryErr));
+                throw asIOException(retryErr);
+            }
+        }
+    }
+
     /** 建立到目标代理（spec.host:spec.port）的 TCP 连接；若有 upstream，先经由 upstream 链式打通 */
     private Socket openChainedToTargetProxy() throws IOException {
         if (spec.upstream == null) {
@@ -245,7 +298,7 @@ public final class ContainerProxyTunnel implements AutoCloseable {
             if ("http".equals(up.type)) {
                 sendHttpConnect(s, spec.host, spec.port, up.username, up.password);
             } else {
-                socks5Connect(s, up.username, up.password, spec.host, spec.port);
+                socks5Connect(s, up.username, up.password, spec.host, spec.port, true);
             }
             return s;
         } catch (Throwable t) {
@@ -306,18 +359,59 @@ public final class ContainerProxyTunnel implements AutoCloseable {
         }
     }
 
+    private static final class Socks5Atyp03FallbackException extends IOException {
+        Socks5Atyp03FallbackException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     /**
      * RFC 1928 / RFC 1929 SOCKS5 握手：
-     * 强制使用 ATYP=0x03 发送域名字节，严禁本地对目标网站域名调 InetAddress.getByName。
+     * - IP 字面量直发 ATYP=0x01 (IPv4) / ATYP=0x04 (IPv6)，绝不对普通域名误调 InetAddress.getByName；
+     * - 域名默认使用 ATYP=0x03（remoteDns=true）；若 remoteDns=false 则本地解析并发送 ATYP=0x01/0x04。
      */
     static void socks5Connect(Socket s, String user, String pass, String targetHost, int targetPort) throws IOException {
+        socks5ConnectInternal(s, user, pass, targetHost, targetPort, true);
+    }
+
+    static void socks5Connect(Socket s, String user, String pass, String targetHost, int targetPort, boolean remoteDns) throws IOException {
+        socks5ConnectInternal(s, user, pass, targetHost, targetPort, remoteDns);
+    }
+
+    private static byte socks5ConnectInternal(Socket s, String user, String pass, String targetHost, int targetPort,
+                                              boolean remoteDns) throws IOException {
         if (targetHost == null || targetHost.isEmpty()) {
             throw new IOException("SOCKS5 目标主机为空");
         }
-        byte[] hostBytes = targetHost.getBytes(StandardCharsets.UTF_8);
-        if (hostBytes.length < 1 || hostBytes.length > 255) {
-            throw new IOException("SOCKS5 域名长度不合法: " + hostBytes.length);
+        String cleanHost = unwrapBrackets(targetHost);
+        if (cleanHost.isEmpty()) {
+            throw new IOException("SOCKS5 目标主机为空");
         }
+
+        byte atypByte;
+        byte[] addrPayload;
+        boolean sentDomainAtyp03 = false;
+        byte[] literalIp = parseIpLiteral(cleanHost);
+        if (literalIp != null) {
+            atypByte = (literalIp.length == 16) ? (byte) 0x04 : (byte) 0x01;
+            addrPayload = literalIp;
+        } else if (!remoteDns) {
+            InetAddress resolved = InetAddress.getByName(cleanHost);
+            byte[] ipBytes = resolved.getAddress();
+            atypByte = (ipBytes.length == 16) ? (byte) 0x04 : (byte) 0x01;
+            addrPayload = ipBytes;
+        } else {
+            byte[] hostBytes = cleanHost.getBytes(StandardCharsets.UTF_8);
+            if (hostBytes.length < 1 || hostBytes.length > 255) {
+                throw new IOException("SOCKS5 域名长度不合法: " + hostBytes.length);
+            }
+            atypByte = 0x03;
+            addrPayload = new byte[1 + hostBytes.length];
+            addrPayload[0] = (byte) hostBytes.length;
+            System.arraycopy(hostBytes, 0, addrPayload, 1, hostBytes.length);
+            sentDomainAtyp03 = true;
+        }
+
         boolean hasAuth = (user != null && !user.isEmpty()) || (pass != null && !pass.isEmpty());
         InputStream in = s.getInputStream();
         OutputStream out = s.getOutputStream();
@@ -358,24 +452,39 @@ public final class ContainerProxyTunnel implements AutoCloseable {
             throw new IOException("SOCKS5 不支持的认证方式: " + chosen);
         }
 
-        byte[] req = new byte[4 + 1 + hostBytes.length + 2];
+        byte[] req = new byte[4 + addrPayload.length + 2];
         req[0] = 0x05;
         req[1] = 0x01; // CONNECT
         req[2] = 0x00; // RSV
-        req[3] = 0x03; // DOMAINNAME
-        req[4] = (byte) hostBytes.length;
-        System.arraycopy(hostBytes, 0, req, 5, hostBytes.length);
-        req[5 + hostBytes.length] = (byte) ((targetPort >> 8) & 0xFF);
-        req[6 + hostBytes.length] = (byte) (targetPort & 0xFF);
-        out.write(req);
-        out.flush();
-
-        byte[] repHdr = readFully(in, 4);
+        req[3] = atypByte;
+        System.arraycopy(addrPayload, 0, req, 4, addrPayload.length);
+        req[4 + addrPayload.length] = (byte) ((targetPort >> 8) & 0xFF);
+        req[5 + addrPayload.length] = (byte) (targetPort & 0xFF);
+        byte[] repHdr;
+        try {
+            out.write(req);
+            out.flush();
+            repHdr = readFully(in, 4);
+        } catch (EOFException eof) {
+            if (sentDomainAtyp03) {
+                throw new Socks5Atyp03FallbackException("SOCKS5 ATYP=0x03 EOF", eof);
+            }
+            throw eof;
+        } catch (SocketException se) {
+            if (sentDomainAtyp03) {
+                throw new Socks5Atyp03FallbackException("SOCKS5 ATYP=0x03 SocketException: " + se.getMessage(), se);
+            }
+            throw se;
+        }
         if ((repHdr[0] & 0xFF) != 0x05) {
             throw new IOException("SOCKS5 响应版本异常: " + (repHdr[0] & 0xFF));
         }
         int rep = repHdr[1] & 0xFF;
         if (rep != 0x00) {
+            if (sentDomainAtyp03 && (rep == 0x08 || rep == 0x01)) {
+                throw new Socks5Atyp03FallbackException(
+                        String.format(Locale.ROOT, "SOCKS5 ATYP=0x03 REP=0x%02x", rep), null);
+            }
             throw new IOException("SOCKS5 CONNECT 失败: rep=" + rep);
         }
         int atyp = repHdr[3] & 0xFF;
@@ -389,6 +498,197 @@ public final class ContainerProxyTunnel implements AutoCloseable {
         } else {
             throw new IOException("SOCKS5 无效 ATYP: " + atyp);
         }
+        return atypByte;
+    }
+
+    private static String unwrapBrackets(String host) {
+        if (host == null) return "";
+        String h = host.trim();
+        if (h.startsWith("[") && h.endsWith("]") && h.length() > 2) {
+            return h.substring(1, h.length() - 1).trim();
+        }
+        return h;
+    }
+
+    /** 纯字符串解析 IPv4 / IPv6 字面量，绝不对普通域名调用 InetAddress.getByName */
+    static byte[] parseIpLiteral(String host) {
+        if (host == null || host.isEmpty()) return null;
+        String clean = unwrapBrackets(host);
+        byte[] v4 = parseIpv4Literal(clean);
+        if (v4 != null) return v4;
+        if (clean.indexOf(':') >= 0) {
+            return parseIpv6Literal(clean);
+        }
+        return null;
+    }
+
+    static byte[] parseIpv4Literal(String s) {
+        if (s == null || s.isEmpty() || s.length() > 15) return null;
+        byte[] out = new byte[4];
+        int part = 0;
+        int val = 0;
+        int digits = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '0' && c <= '9') {
+                if (digits == 1 && val == 0) return null;
+                val = val * 10 + (c - '0');
+                if (val > 255) return null;
+                digits++;
+            } else if (c == '.') {
+                if (digits == 0 || part >= 3) return null;
+                out[part++] = (byte) val;
+                val = 0;
+                digits = 0;
+            } else {
+                return null;
+            }
+        }
+        if (part != 3 || digits == 0) return null;
+        out[3] = (byte) val;
+        return out;
+    }
+
+    static byte[] parseIpv6Literal(String s) {
+        if (s == null || s.length() < 2 || s.length() > 45) return null;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            boolean ok = (c >= '0' && c <= '9')
+                    || (c >= 'a' && c <= 'f')
+                    || (c >= 'A' && c <= 'F')
+                    || c == ':' || c == '.';
+            if (!ok) return null;
+        }
+        int dbl = s.indexOf("::");
+        if (dbl >= 0 && s.indexOf("::", dbl + 2) >= 0) return null;
+
+        List<Integer> left = new ArrayList<>();
+        List<Integer> right = new ArrayList<>();
+        byte[] v4 = null;
+
+        if (dbl < 0) {
+            String[] parts = s.split(":", -1);
+            for (int i = 0; i < parts.length; i++) {
+                String p = parts[i];
+                if (p.indexOf('.') >= 0) {
+                    if (i != parts.length - 1) return null;
+                    v4 = parseIpv4Literal(p);
+                    if (v4 == null) return null;
+                } else {
+                    Integer g = parseHexGroup(p);
+                    if (g == null) return null;
+                    left.add(g);
+                }
+            }
+        } else {
+            String lStr = s.substring(0, dbl);
+            String rStr = s.substring(dbl + 2);
+            if (!lStr.isEmpty()) {
+                if (lStr.indexOf('.') >= 0) return null;
+                String[] parts = lStr.split(":", -1);
+                for (String p : parts) {
+                    Integer g = parseHexGroup(p);
+                    if (g == null) return null;
+                    left.add(g);
+                }
+            }
+            if (!rStr.isEmpty()) {
+                String[] parts = rStr.split(":", -1);
+                for (int i = 0; i < parts.length; i++) {
+                    String p = parts[i];
+                    if (p.indexOf('.') >= 0) {
+                        if (i != parts.length - 1) return null;
+                        v4 = parseIpv4Literal(p);
+                        if (v4 == null) return null;
+                    } else {
+                        Integer g = parseHexGroup(p);
+                        if (g == null) return null;
+                        right.add(g);
+                    }
+                }
+            }
+        }
+
+        int v4Groups = v4 != null ? 2 : 0;
+        int total = left.size() + right.size() + v4Groups;
+        if (dbl < 0) {
+            if (total != 8) return null;
+        } else {
+            if (total >= 8) return null;
+        }
+
+        byte[] out = new byte[16];
+        int idx = 0;
+        for (int g : left) {
+            out[idx++] = (byte) ((g >> 8) & 0xFF);
+            out[idx++] = (byte) (g & 0xFF);
+        }
+        int zeros = 8 - total;
+        for (int z = 0; z < zeros; z++) {
+            out[idx++] = 0;
+            out[idx++] = 0;
+        }
+        for (int g : right) {
+            out[idx++] = (byte) ((g >> 8) & 0xFF);
+            out[idx++] = (byte) (g & 0xFF);
+        }
+        if (v4 != null) {
+            out[idx++] = v4[0];
+            out[idx++] = v4[1];
+            out[idx++] = v4[2];
+            out[idx++] = v4[3];
+        }
+        return out;
+    }
+
+    private static Integer parseHexGroup(String p) {
+        if (p == null || p.isEmpty() || p.length() > 4) return null;
+        int val = 0;
+        for (int i = 0; i < p.length(); i++) {
+            int d = Character.digit(p.charAt(i), 16);
+            if (d < 0) return null;
+            val = (val << 4) | d;
+        }
+        return val;
+    }
+
+    private void recordHandshakeError(String targetHost, int targetPort, String detail) {
+        String ts = Instant.now().toString();
+        String cleanHost = targetHost == null ? "" : sanitizeSecrets(targetHost);
+        String cleanDetail = detail == null ? "" : sanitizeSecrets(detail);
+        String target = cleanHost.isEmpty() ? "" : (formatHostPort(cleanHost, targetPort) + " ");
+        lastHandshakeError = "[" + ts + "] " + target + cleanDetail;
+    }
+
+    private String sanitizeSecrets(String s) {
+        if (s == null || s.isEmpty()) return "";
+        String out = s.replaceAll("(://)[^/@\\s]+@", "$1***@");
+        out = scrubSecret(out, spec.password, 2);
+        out = scrubSecret(out, spec.username, 3);
+        if (spec.upstream != null) {
+            out = scrubSecret(out, spec.upstream.password, 2);
+            out = scrubSecret(out, spec.upstream.username, 3);
+        }
+        return out;
+    }
+
+    private static String scrubSecret(String text, String secret, int minLen) {
+        if (text == null || secret == null || secret.length() < minLen) return text;
+        return text.replace(secret, "***");
+    }
+
+    private static String describeError(Throwable t) {
+        if (t == null) return "unknown error";
+        String msg = t.getMessage();
+        if (msg == null || msg.trim().isEmpty()) {
+            return t.getClass().getSimpleName();
+        }
+        return msg.trim();
+    }
+
+    private static IOException asIOException(Throwable t) {
+        if (t instanceof IOException) return (IOException) t;
+        return new IOException(t == null ? "代理握手失败" : t.getMessage(), t);
     }
 
     /** 逐字节读取 HTTP 头部块到 \r\n\r\n，绝不使用 BufferedReader 预读吞掉后续数据 */

@@ -105,13 +105,13 @@ return await b.extract(".result-item", { title: "h3", url: "a@href" }, { limit: 
 
 - **容器登录态、指纹隔离与多进程并行代理（防风控防串线）**：
   - `tab_new` 默认 `container: "new"`（独立 Cookie/Storage 与独立 `auto` 设备指纹，自动去除 `; wv`、`X-Requested-With` 与全局 `window.PiMet*` 桥暴露）。
-  - 主进程固定保持 `DIRECT` 直连（用户前台 `t1` 及所有直连标签永不冻结，`frozenTabs: 0`）；带 `proxy` 的容器自动调度至独立代理子进程（最多 4 个槽位并发运行，完全隔离 `dataDirectorySuffix` 与 `ProxyController`，可同时开多条不同代理链路互不干扰！）。
+  - 主进程固定保持 `DIRECT` 直连（用户前台 `t1` 及所有直连标签永不冻结，`frozenTabs: 0`）；带 `proxy` 的容器自动调度至独立代理子进程（最多 6 个槽位并发运行，完全隔离 `dataDirectorySuffix` 与 `ProxyController`，可同时开多条不同代理链路互不干扰！）。
   - 需要特定国家/地区环境与代理时，建议建容器/建标签时一次性配好：
-    - 例：`tab_new(url, container: "new", profile: "ca-en", proxy: "socks5://user:pass@1.2.3.4:1080")` 或对象 `{type:"socks5", host, port, username, password, upstream:"http://127.0.0.1:7890"}`（传 `null` 或 `"direct"` 清除代理）。
+    - 例：`tab_new(url, container: "new", profile: "ca-en", proxy: "socks5://user:pass@1.2.3.4:1080")` 或对象 `{type:"socks5", host, port, username, password, upstream:"http://127.0.0.1:7890", socks5RemoteDns?: true}`（传 `null` 或 `"direct"` 清除代理）。
     - 也可先 `create_container {profile, proxy, label?, keep?}` 创建容器，再在其中 `tab_new(url, container: name)`。
     - `run` 里可用 `await b.newTab(url, { profile: "ca-en", proxy: "http://127.0.0.1:7890" })`、`await b.createContainer(...)`、`await b.setContainerProfile(...)`。
   - 查询/修改现有容器环境或代理用 `container_profile` / `set_container_profile {name?, profile?, proxy?, randomize?, reload?}`（或 `b.containerProfile(...)`）：若容器已在代理子进程运行支持热更新；若容器在主进程仍有活跃直连标签则严禁切换代理（需先关闭直连标签或新建容器）。
-  - 4 个独立代理进程槽位全被活跃代理标签占用时，需先 `tab_close` 关闭闲置代理标签；绝不跨容器混用。
+  - 6 个独立代理进程槽位全被活跃代理标签占用时，需先 `tab_close` 关闭闲置代理标签；绝不跨容器混用。
   - `desktop` / `ua` / `zoom` 支持显式传 `tab` 单独作用于该标签并立即同步 `1280x800` ↔ `390x844` 视口。
   - `Default` 容器始终为 `native` + 直连（禁止设置隔离或代理）；需要复用用户当前标签登录态时用 `container: "same"`；用 `container_keep {name, keep: true}` 保留容器（先征得用户同意）。
 - **不打断用户**：不传 `tab` 时只操作 Pi 标签；仅当用户明确要求操作当前页才传 `tab: "user"`；不要擅自 `show` / `tab_switch`。
